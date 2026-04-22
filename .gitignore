@@ -1,0 +1,25 @@
+# 仮想環境
+.venv/
+venv/
+env/
+
+# 環境変数（APIキーが含まれるため必須）
+.env
+
+# スクレイピング結果（大容量のため除外）
+リサーチ結果/
+
+# Pythonキャッシュ
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# デバッグ用ファイル
+page_source.html
+
+# macOS
+.DS_Store
+
+# VSCode
+.vscode/

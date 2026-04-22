@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AucFan リサーチツール</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ヘッダー -->
+<header class="header">
+  <div class="header-inner">
+    <h1 class="logo">🔍 AucFan リサーチツール</h1>
+    <div class="header-status" id="headerStatus">待機中</div>
+  </div>
+</header>
+
+<!-- コントロールパネル -->
+<section class="control-panel">
+  <div class="control-inner">
+
+    <!-- スクレイピング開始フォーム -->
+    <div class="start-form" id="startForm">
+      <div class="form-row">
+        <label>キーワード（現在の検索を引き継ぐ場合は空白OK）</label>
+        <input type="text" id="inputKeyword" placeholder="例: LEDライト" class="input-text">
+      </div>
+      <div class="form-row-buttons">
+        <button class="btn btn-primary" id="btnStart" onclick="startScraping()">
+          ▶ スクレイピング開始
+        </button>
+        <button class="btn btn-warning" id="btnStop" onclick="stopScraping()" disabled>
+          ■ 停止
+        </button>
+        <button class="btn btn-secondary" id="btnSessions" onclick="showSessions()">
+          📂 過去セッション
+        </button>
+      </div>
+    </div>
+
+    <!-- 進捗バー -->
+    <div class="progress-section" id="progressSection" style="display:none">
+      <div class="progress-header">
+        <span id="progressLabel">準備中...</span>
+        <span id="progressCount">0件 / 0件</span>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="progressBar" style="width:0%"></div>
+      </div>
+      <div class="progress-sub" id="progressSub"></div>
+    </div>
+
+    <!-- 統計 -->
+    <div class="stats-row" id="statsRow" style="display:none">
+      <div class="stat-card">
+        <div class="stat-num" id="statTotal">0</div>
+        <div class="stat-label">取得件数</div>
+      </div>
+      <div class="stat-card stat-candidate">
+        <div class="stat-num" id="statCandidate">0</div>
+        <div class="stat-label">仕入れ候補</div>
+      </div>
+      <div class="stat-card stat-review">
+        <div class="stat-num" id="statReview">0</div>
+        <div class="stat-label">要確認</div>
+      </div>
+      <div class="stat-card stat-ok">
+        <div class="stat-num" id="statOk">0</div>
+        <div class="stat-label">OK</div>
+      </div>
+      <div class="stat-card stat-ng">
+        <div class="stat-num" id="statNg">0</div>
+        <div class="stat-label">NG</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- フィルター -->
+<section class="filter-section">
+  <div class="filter-inner">
+    <div class="filter-row">
+      <div class="filter-group">
+        <label>ステータス</label>
+        <select id="filterStatus" onchange="applyFilter()">
+          <option value="">すべて</option>
+          <option value="candidate">仕入れ候補</option>
+          <option value="waiting">確認待ち</option>
+          <option value="review">要確認</option>
+          <option value="ok">OK</option>
+          <option value="ng">NG</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>価格（合計）</label>
+        <div class="price-range">
+          <input type="number" id="filterMinPrice" placeholder="0" value="0" onchange="applyFilter()">
+          <span>〜</span>
+          <input type="number" id="filterMaxPrice" placeholder="99999" value="99999" onchange="applyFilter()">
+          <span>円</span>
+        </div>
+      </div>
+      <div class="filter-group">
+        <label>最小グループ数</label>
+        <input type="number" id="filterMinGroup" placeholder="1" value="1" min="1" onchange="applyFilter()">
+      </div>
+      <div class="filter-group">
+        <label>キーワード</label>
+        <input type="text" id="filterKeyword" placeholder="タイトル検索..." oninput="applyFilter()">
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="resetFilter()">リセット</button>
+      <button class="btn btn-success btn-sm" id="btnExport" onclick="exportCsv()">
+        📊 CSVエクスポート
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btnReport" onclick="showReport()">
+        📈 分析レポート
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- メインコンテンツ：商品グループカード -->
+<main class="main-content">
+  <div class="groups-header">
+    <div id="groupsCount" class="groups-count">グループ: 0件</div>
+    <div class="pagination" id="pagination"></div>
+  </div>
+  <div class="groups-grid" id="groupsGrid">
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon">📦</div>
+      <p>スクレイピングを開始すると商品が表示されます</p>
+    </div>
+  </div>
+  <div class="pagination-bottom" id="paginationBottom"></div>
+</main>
+
+<!-- 過去セッション モーダル -->
+<div class="modal-overlay" id="sessionsModal" style="display:none" onclick="hideModal('sessionsModal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>過去のセッション</h2>
+      <button class="modal-close" onclick="hideModal('sessionsModal')">✕</button>
+    </div>
+    <div class="modal-body" id="sessionsBody">
+      <div class="loading">読み込み中...</div>
+    </div>
+  </div>
+</div>
+
+<!-- 商品詳細 モーダル -->
+<div class="modal-overlay" id="itemModal" style="display:none" onclick="hideModal('itemModal')">
+  <div class="modal modal-large" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2 id="itemModalTitle">商品詳細</h2>
+      <button class="modal-close" onclick="hideModal('itemModal')">✕</button>
+    </div>
+    <div class="modal-body" id="itemModalBody"></div>
+  </div>
+</div>
+
+<!-- 分析レポート モーダル -->
+<div class="modal-overlay" id="reportModal" style="display:none" onclick="hideModal('reportModal')">
+  <div class="modal modal-large" onclick="event.stopPropagation()" style="max-width:900px;max-height:90vh;overflow-y:auto">
+    <div class="modal-header">
+      <h2>📈 分析レポート</h2>
+      <button class="modal-close" onclick="hideModal('reportModal')">✕</button>
+    </div>
+    <div class="modal-body" id="reportBody">
+      <div class="loading">読み込み中...</div>
+    </div>
+  </div>
+</div>
+
+<!-- トースト通知 -->
+<div class="toast" id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
