@@ -525,7 +525,7 @@ function renderReport(data) {
   data.seller_ranking.forEach((s, i) => {
     sellerRows += `<tr>
       <td style="text-align:center">${i + 1}</td>
-      <td><a href="https://aucfan.com/seller/${encodeURIComponent(s.seller_id)}/" target="_blank" style="color:#2563eb">${esc(s.seller_id)}</a></td>
+      <td><a href="https://aucfan.com/seller/${encodeURIComponent(s.seller_id)}/" target="_blank" style="color:#2563eb">${escHtml(s.seller_id)}</a></td>
       <td style="text-align:center">${s.item_count}</td>
       <td style="text-align:center">${s.group_count}</td>
       <td style="text-align:center">${fmt(s.min_price)} 〜 ${fmt(s.max_price)}</td>
@@ -539,9 +539,9 @@ function renderReport(data) {
   } else {
     data.suspicious.forEach(s => {
       suspiciousRows += `<tr>
-        <td>${esc(s.title)}</td>
+        <td>${escHtml(s.title)}</td>
         <td style="text-align:center">${s.item_count}</td>
-        <td>${s.dup_sellers.map(x => esc(x)).join(', ')}</td>
+        <td>${s.dup_sellers.map(x => escHtml(x)).join(', ')}</td>
       </tr>`;
     });
   }
@@ -551,12 +551,14 @@ function renderReport(data) {
   data.group_report.forEach(g => {
     const dupBadge = g.dup_sellers.length > 0
       ? `<span style="color:#dc2626;font-size:11px">⚠️自演疑い</span>` : '';
-    groupRows += `<tr>
-      <td>${esc(g.title)}</td>
+    const largeBadge = g.too_large
+      ? `<span style="color:#d97706;font-size:11px">⚠️グループ大きすぎ(誤検知の可能性)</span>` : '';
+    groupRows += `<tr style="${g.too_large ? 'opacity:0.5' : ''}">
+      <td>${escHtml(g.title)} ${largeBadge}</td>
       <td style="text-align:center">${g.item_count}</td>
       <td style="text-align:center">${g.seller_count}</td>
       <td style="text-align:center">${fmt(g.min_price)} 〜 ${fmt(g.max_price)}</td>
-      <td style="font-size:12px">${g.sellers.map(x => esc(x)).join(', ')} ${dupBadge}</td>
+      <td style="font-size:12px">${g.sellers.map(x => escHtml(x)).join(', ')} ${dupBadge}</td>
     </tr>`;
   });
 

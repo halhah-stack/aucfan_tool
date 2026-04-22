@@ -477,6 +477,9 @@ def api_report():
         thumb = gitems[0].get("thumbnail_local", "")
         thumb_name = Path(thumb).name if thumb else ""
 
+        # グループが大きすぎる場合はpHashの誤グループ化の可能性あり
+        too_large = len(gitems) > 50
+
         group_report.append({
             "group_id": gid,
             "title": title,
@@ -488,6 +491,7 @@ def api_report():
             "max_price": max(prices) if prices else 0,
             "status": gitems[0].get("status", ""),
             "thumbnail": thumb_name,
+            "too_large": too_large,
         })
     group_report.sort(key=lambda x: x["item_count"], reverse=True)
 

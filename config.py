@@ -36,7 +36,7 @@ MAX_BOX_H = int(os.getenv("MAX_BOX_H", "20"))
 # 画像・同一商品グループ設定
 # ─────────────────────────────────────────────
 MIN_GROUP_SIZE = int(os.getenv("MIN_GROUP_SIZE", "5"))   # 仕入れ候補とする最小グループ件数
-PHASH_THRESHOLD = int(os.getenv("PHASH_THRESHOLD", "10"))  # pHash同一判定閾値(0=完全一致, 大きいほど緩い)
+PHASH_THRESHOLD = int(os.getenv("PHASH_THRESHOLD", "5"))   # pHash同一判定閾値(0=完全一致, 大きいほど緩い)
 IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "10"))  # 画像DLタイムアウト(秒)
 
 # ─────────────────────────────────────────────
