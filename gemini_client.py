@@ -8,6 +8,7 @@ gemini_client.py - Gemini API による画像・テキスト判定
 import logging
 import time
 import threading
+import yaml
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -36,10 +37,33 @@ else:
 
 
 # ─────────────────────────────────────────────
-# 除外カテゴリ定義
+# プロンプト読み込み（prompts.yaml から外部ロード）
 # ─────────────────────────────────────────────
 
-EXCLUDE_ABSOLUTE_PROMPT = """
+def _load_prompts() -> dict:
+    """prompts.yaml を読み込む。ファイルがなければデフォルト値を返す"""
+    yaml_path = Path(__file__).parent / "prompts.yaml"
+    try:
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        logger.info(f"prompts.yaml を読み込みました: {yaml_path}")
+        return data or {}
+    except FileNotFoundError:
+        logger.warning("prompts.yaml が見つかりません。デフォルトプロンプトを使用します。")
+        return {}
+    except Exception as e:
+        logger.warning(f"prompts.yaml 読み込みエラー: {e}。デフォルトプロンプトを使用します。")
+        return {}
+
+_PROMPTS = _load_prompts()
+
+def _get_prompt(key: str) -> str:
+    """指定キーのプロンプトを返す（yamlになければデフォルト）"""
+    return _PROMPTS.get(key, _DEFAULT_PROMPTS.get(key, ""))
+
+# デフォルトプロンプト（prompts.yaml が壊れた場合のフォールバック）
+_DEFAULT_PROMPTS = {
+    "exclude_absolute": """
 以下の商品が「絶対除外カテゴリ」に該当するか判定してください。
 
 絶対除外カテゴリ:
@@ -56,17 +80,13 @@ EXCLUDE_ABSOLUTE_PROMPT = """
   "reason": "除外理由（excluded=trueの場合のみ）",
   "category": "food" または "fashion" または "ac100v" または "none"
 }}
-"""
-
-REVIEW_FLAG_PROMPT = """
+""",
+    "review_flag": """
 以下の商品が「安全リスク要確認カテゴリ」に該当するか判定してください。
 
 要確認カテゴリ（フラグを立てるだけ、除外はしない）:
 1. 車・バイクの重要保安部品（ブレーキ・ステアリング・サスペンション等、破損が事故直結）
 2. 乗り物の構造部品で破損が怪我に直結するもの
-※ 車内用品（シートカバー・カーマット・収納等）はOK
-※ 車用アクセサリー・装飾品はOK
-※ USB給電・シガーソケット・電池の商品はOK
 
 商品タイトル: {title}
 
@@ -75,25 +95,8 @@ REVIEW_FLAG_PROMPT = """
   "needs_review": true または false,
   "reason": "要確認理由（needs_review=trueの場合のみ）"
 }}
-"""
-
-SAME_PRODUCT_PROMPT = """
-以下の商品画像を見て、これらが「同一商品（個数違い・色違い・セット内容違いを含む）」かどうか判定してください。
-
-判定基準:
-- 同じ製品カテゴリで見た目が明らかに同じ → 同一
-- 個数だけ違う（1個入り/5個入り等）→ 同一
-- 色違い → 同一
-- 全く別の商品 → 異なる
-
-以下のJSON形式で回答してください（説明不要）:
-{{
-  "same_product": true または false,
-  "confidence": "high" または "medium" または "low"
-}}
-"""
-
-BRAND_CHECK_PROMPT = """
+""",
+    "brand_check": """
 以下の商品タイトルから、「有名ブランド品」かどうか判定してください。
 
 判定基準:
@@ -107,15 +110,9 @@ BRAND_CHECK_PROMPT = """
   "is_branded": true または false,
   "brand_name": "ブランド名（is_branded=trueの場合）"
 }}
-"""
-
-SIZE_CHECK_PROMPT = """
+""",
+    "size_check": """
 以下の商品情報から、「大型サイズ（梱包サイズが45×35×20cmを超える）」かどうか判定してください。
-
-判定基準:
-- サイズ情報に明確に大型と書かれている → true
-- 家電の大型商品・家具・自転車等明らかに大型 → true
-- 不明・小型〜中型の商品 → false
 
 商品タイトル: {title}
 サイズ情報: {size_info}
@@ -125,7 +122,17 @@ SIZE_CHECK_PROMPT = """
   "is_oversized": true または false,
   "reason": "判定理由"
 }}
-"""
+""",
+    "same_product": """
+以下の商品画像を見て、「同一商品（個数違い・色違い含む）」かどうか判定してください。
+
+以下のJSON形式で回答してください（説明不要）:
+{{
+  "same_product": true または false,
+  "confidence": "high" または "medium" または "low"
+}}
+""",
+}
 
 
 class GeminiClient:
@@ -223,7 +230,7 @@ class GeminiClient:
         if not self.available:
             return False, ""
 
-        prompt = EXCLUDE_ABSOLUTE_PROMPT.format(title=title)
+        prompt = _get_prompt("exclude_absolute").format(title=title)
         result = self._parse_json(self._call_text(prompt))
 
         if result is None:
@@ -243,7 +250,7 @@ class GeminiClient:
         if not self.available:
             return False, ""
 
-        prompt = REVIEW_FLAG_PROMPT.format(title=title)
+        prompt = _get_prompt("review_flag").format(title=title)
         result = self._parse_json(self._call_text(prompt))
 
         if result is None:
@@ -263,7 +270,7 @@ class GeminiClient:
         if not self.available:
             return False, ""
 
-        prompt = BRAND_CHECK_PROMPT.format(title=title)
+        prompt = _get_prompt("brand_check").format(title=title)
         result = self._parse_json(self._call_text(prompt))
 
         if result is None:
@@ -281,7 +288,7 @@ class GeminiClient:
         if not self.available:
             return False, ""
 
-        prompt = SIZE_CHECK_PROMPT.format(title=title, size_info=size_info or "不明")
+        prompt = _get_prompt("size_check").format(title=title, size_info=size_info or "不明")
         result = self._parse_json(self._call_text(prompt))
 
         if result is None:
@@ -305,7 +312,7 @@ class GeminiClient:
         if len(valid_paths) < 2:
             return False, "low"
 
-        result = self._parse_json(self._call_vision(SAME_PRODUCT_PROMPT, valid_paths))
+        result = self._parse_json(self._call_vision(_get_prompt("same_product"), valid_paths))
 
         if result is None:
             return False, "low"
