@@ -344,13 +344,17 @@ class AucFanScraper:
         if img_el:
             thumbnail_url = (
                 img_el.get("data-src-original")
-                or img_el.get("src")
+                or img_el.get("data-original")
                 or img_el.get("data-src")
                 or img_el.get("data-lazy-src")
+                or img_el.get("src")
                 or ""
             )
             if thumbnail_url and not thumbnail_url.startswith("http"):
                 thumbnail_url = urljoin(base_url, thumbnail_url)
+            # noimage プレースホルダーは除外
+            if thumbnail_url and "noimage" in thumbnail_url:
+                thumbnail_url = ""
 
         # 商品URL（hdLinkから取得）
         url_el = self._find_element_soup(card, config.SELECTORS["list"]["url"])
