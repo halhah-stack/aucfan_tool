@@ -297,15 +297,39 @@ body {
 .card-status-bar.ok { background: var(--success); }
 .card-status-bar.ng { background: var(--danger); }
 
-/* サムネール一覧 */
+/* サムネール一覧（横スライド対応） */
 .card-images {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   padding: 10px;
   overflow-x: auto;
+  overflow-y: hidden;
   background: var(--gray-50);
-  min-height: 90px;
+  min-height: 96px;
+  /* スムーズスクロール */
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch; /* iOS慣性スクロール */
+  scroll-snap-type: x mandatory;
+  /* スクロールバー非表示（見た目をすっきり） */
+  scrollbar-width: none;       /* Firefox */
+  -ms-overflow-style: none;    /* IE/Edge */
 }
+.card-images::-webkit-scrollbar { display: none; } /* Chrome/Safari */
+
+/* 5枚超のときにスライド可能なことをほのめかすグラデーション */
+.card-images-wrap {
+  position: relative;
+  overflow: hidden;
+}
+.card-images-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 28px; height: 100%;
+  background: linear-gradient(to right, transparent, var(--gray-50));
+  pointer-events: none;
+}
+
 .card-thumb {
   width: 80px;
   height: 80px;
@@ -315,6 +339,7 @@ body {
   cursor: pointer;
   border: 2px solid transparent;
   transition: border-color .15s;
+  scroll-snap-align: start;
 }
 .card-thumb:hover { border-color: var(--primary); }
 .card-thumb-placeholder {
@@ -328,6 +353,7 @@ body {
   color: var(--gray-600);
   font-size: 24px;
   flex-shrink: 0;
+  scroll-snap-align: start;
 }
 
 /* カード本文 */

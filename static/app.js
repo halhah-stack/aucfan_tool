@@ -255,18 +255,25 @@ function renderGroupCard(group) {
     candidate: '仕入れ候補', waiting: '確認待ち', review: '要確認', ok: '✅ OK', ng: '❌ NG'
   }[statusClass] || statusClass;
 
-  const countLabel = group.count > 1 ? `同一商品 <span class="group-badge">${group.count}件</span>` : '単品';
+  // 【現在】サムネイルがある件数だけ表示（最大20枚）し、件数バッジと一致させる（2025-05-03 変更）
+  // 【元に戻す場合】以下の4行をこのブロックと差し替える:
+  //   const countLabel = group.count > 1 ? `同一商品 <span class="group-badge">${group.count}件</span>` : '単品';
+  //   const thumbs = group.items.slice(0, 5).map(item => {
+  //     const thumb = item.thumbnail_local ? `/images/${getFilename(item.thumbnail_local)}` : '';
+  //     return thumb ? `<img class="card-thumb" ...>` : `<div class="card-thumb-placeholder">📦</div>`;
+  //   }).join('');
+  const thumbItems = group.items.filter(item => item.thumbnail_local).slice(0, 20);
+  const thumbCount = thumbItems.length;
+  const countLabel = thumbCount > 1
+    ? `同一商品 <span class="group-badge">${thumbCount}件</span>`
+    : '単品';
 
-  // 画像HTML（最大5枚）
-  const thumbs = group.items.slice(0, 5).map(item => {
-    const thumb = item.thumbnail_local ? `/images/${getFilename(item.thumbnail_local)}` : '';
-    if (thumb) {
-      return `<img class="card-thumb" src="${thumb}" alt=""
-                   onerror="this.outerHTML='<div class=card-thumb-placeholder>📦</div>'"
-                   onclick="openItemDetail('${item.item_id}')">`;
-    }
-    return `<div class="card-thumb-placeholder">📦</div>`;
-  }).join('');
+  const thumbs = thumbItems.map(item => {
+    const thumb = `/images/${getFilename(item.thumbnail_local)}`;
+    return `<img class="card-thumb" src="${thumb}" alt=""
+                 onerror="this.outerHTML='<div class=card-thumb-placeholder>📦</div>'"
+                 onclick="openItemDetail('${item.item_id}')">`;
+  }).join('') || '<div class="card-thumb-placeholder">📦</div>';
 
   // 価格表示
   const firstItem = group.items[0];
@@ -292,7 +299,9 @@ function renderGroupCard(group) {
       <span>${statusLabel}</span>
       <span>${countLabel}</span>
     </div>
-    <div class="card-images">${thumbs}</div>
+    <div class="card-images-wrap">
+      <div class="card-images">${thumbs}</div>
+    </div>
     <div class="card-body">
       <div class="card-title" onclick="openItemDetail('${firstItemId}')"
            title="${escHtml(group.title)}">${escHtml(group.title || '（タイトル取得中）')}</div>

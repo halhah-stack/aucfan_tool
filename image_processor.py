@@ -150,7 +150,16 @@ class ImageProcessor:
     ) -> Dict[str, List[str]]:
         """
         pHashが近い商品を同一グループにまとめる。
-        Union-Find アルゴリズムを使用（複数ページをまたいで判定）。
+
+        【現在の方式】代表ハッシュ比較方式（2025-05-03 変更）
+          各アイテムをグループ先頭の「代表ハッシュ」とのみ比較する。
+          A≒B≒C でも A と C が遠ければ別グループになる（連鎖を防ぐ）。
+          閾値は .env の PHASH_THRESHOLD で調整（デフォルト 2）。
+
+        【元の方式に戻す場合】Union-Find方式
+          この関数を git で以下のコミットに戻す:
+            git checkout ac1661c -- image_processor.py
+          または PHASH_THRESHOLD=0 にすると実質的に完全一致のみになる。
 
         Args:
             items: item_id と phash を持つ辞書のリスト
@@ -165,38 +174,27 @@ class ImageProcessor:
         if n == 0:
             return {}
 
-        # Union-Find 初期化
-        parent = {item_id: item_id for item_id, _ in valid}
+        logger.info(f"pHashグループ化開始: {n}件 (閾値={config.PHASH_THRESHOLD})")
 
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]  # path compression
-                x = parent[x]
-            return x
+        # 代表ハッシュ比較方式
+        # groups: [(代表hash, [item_id, ...])]
+        # ※元のUnion-Find方式に戻すには上記docstringを参照
+        groups: List[Tuple[str, List[str]]] = []
 
-        def union(x, y):
-            rx, ry = find(x), find(y)
-            if rx != ry:
-                parent[ry] = rx
+        for item_id, item_hash in valid:
+            matched = False
+            for rep_hash, members in groups:
+                if self.is_same_image(item_hash, rep_hash):
+                    members.append(item_id)
+                    matched = True
+                    break
+            if not matched:
+                # 新グループ作成（このアイテムが代表ハッシュになる）
+                groups.append((item_hash, [item_id]))
 
-        # O(n²) でハミング距離を計算してマージ
-        # 500ページ × 50件 = 最大25,000件だが、候補は絞られているので現実的
-        logger.info(f"pHashグループ化開始: {n}件")
-        for i in range(n):
-            id1, h1 = valid[i]
-            for j in range(i + 1, n):
-                id2, h2 = valid[j]
-                if self.is_same_image(h1, h2):
-                    union(id1, id2)
-
-        # グループをまとめる
-        groups: Dict[str, List[str]] = {}
-        for item_id, _ in valid:
-            root = find(item_id)
-            groups.setdefault(root, []).append(item_id)
-
-        logger.info(f"pHashグループ化完了: {len(groups)}グループ")
-        return groups
+        result = {members[0]: members for _, members in groups}
+        logger.info(f"pHashグループ化完了: {len(result)}グループ")
+        return result
 
     def group_items(self, data_manager) -> int:
         """
