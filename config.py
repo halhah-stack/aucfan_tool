@@ -51,8 +51,8 @@ GEMINI_ENABLED = os.getenv("GEMINI_ENABLED", "true").lower() == "true"
 # ─────────────────────────────────────────────
 # Flask 設定
 # ─────────────────────────────────────────────
-FLASK_PORT = int(os.getenv("FLASK_PORT", "5000"))
-FLASK_HOST = os.getenv("FLASK_HOST", "127.0.0.1")
+FLASK_PORT = int(os.getenv("FLASK_PORT", "5001"))
+FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
 
 # ─────────────────────────────────────────────
 # 出力設定

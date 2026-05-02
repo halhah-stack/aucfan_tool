@@ -22,10 +22,32 @@
 
     <!-- スクレイピング開始フォーム -->
     <div class="start-form" id="startForm">
+
+      <!-- キーワード（Mac用） -->
       <div class="form-row">
-        <label>キーワード（現在の検索を引き継ぐ場合は空白OK）</label>
+        <label>キーワード <span class="badge-mac">Mac</span>　ChromeでAucFanを開いた状態でキーワードを入力してスクレイピング開始</label>
         <input type="text" id="inputKeyword" placeholder="例: LEDライト" class="input-text">
       </div>
+
+      <!-- iPhone/iPad用セクション -->
+      <div class="iphone-section">
+        <div class="iphone-section-title">📱 iPhone / iPadから操作する場合</div>
+
+        <div class="form-row">
+          <label>① AucFan 検索URLを貼り付ける　SafariでAucFanを検索 → URLをコピー → ここに貼り付け → MacのChromeが新規タブで開いてスクレイピング開始</label>
+          <input type="text" id="inputStartUrl" placeholder="https://aucfan.com/search1/..." class="input-text input-url">
+        </div>
+
+        <div class="form-row">
+          <label>② または MacのChromeで開いているAucFanタブを選ぶ　<span class="badge-iphone">iPhone / iPad 専用</span>　Macは直接Chromeで確認できるためこのボタンは不要です</label>
+          <div class="tab-check-row">
+            <button class="btn btn-secondary btn-sm" onclick="loadChromeTabs()">🔍 Chromeのタブを確認</button>
+            <span class="url-hint" id="tabsHint"></span>
+          </div>
+          <div id="chromeTabs" class="chrome-tabs-list" style="display:none"></div>
+        </div>
+      </div>
+
       <div class="form-row-buttons">
         <button class="btn btn-primary" id="btnStart" onclick="startScraping()">
           ▶ スクレイピング開始
@@ -115,6 +137,9 @@
       </button>
       <button class="btn btn-secondary btn-sm" id="btnReport" onclick="showReport()">
         📈 分析レポート
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btnExportHtml" onclick="exportHtml()">
+        📱 HTML書き出し
       </button>
     </div>
   </div>

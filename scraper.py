@@ -112,9 +112,10 @@ class AucFanScraper:
     # メインスクレイプフロー
     # ─────────────────────────────────────────────
 
-    def run(self, resume: bool = False):
+    def run(self, resume: bool = False, start_url: Optional[str] = None):
         """
         スクレイピングのメインフロー。
+        start_url が指定された場合はそのURLに遷移してからスクレイプ開始。
         Step1: 一覧ページ → Step2: 詳細ページ（候補のみ）
         """
         logger.info("=== AucFan スクレイピング開始 ===")
@@ -124,6 +125,17 @@ class AucFanScraper:
             return
 
         try:
+            # start_url が指定されていれば新規タブを開いてそこへ遷移
+            if start_url:
+                logger.info(f"新規タブでAucFanを開きます: {start_url}")
+                self.driver.execute_script("window.open('about:blank', '_blank');")
+                self.driver.switch_to.window(self.driver.window_handles[-1])
+                self.driver.get(start_url)
+                WebDriverWait(self.driver, config.PAGE_LOAD_TIMEOUT).until(
+                    lambda d: d.execute_script("return document.readyState") == "complete"
+                )
+                logger.info(f"タブ遷移完了: {self.driver.current_url}")
+
             # 現在のURLとキーワードを取得
             current_url = self.driver.current_url
             keyword = self._extract_keyword_from_url(current_url)

@@ -92,8 +92,9 @@ def api_start():
             return jsonify({"success": False, "message": "スクレイピングは既に実行中です"}), 400
 
         data = request.get_json(silent=True) or {}
-        keyword = data.get("keyword", "unknown")
-        resume = data.get("resume", False)
+        keyword   = data.get("keyword", "unknown")
+        resume    = data.get("resume", False)
+        start_url = data.get("start_url", "").strip()  # iPhoneから貼り付けたURL（任意）
 
         # セッション初期化
         out_dir, session_id = make_output_dir(keyword)
@@ -115,17 +116,18 @@ def api_start():
                 gemini_client=_gemini_client,
                 stop_event=_stop_event,
             )
-            scraper.run(resume=resume)
+            scraper.run(resume=resume, start_url=start_url or None)
 
         _scraper_thread = threading.Thread(target=run_scraper, daemon=True, name="scraper")
         _scraper_thread.start()
 
-        logger.info(f"スクレイピング開始: keyword={keyword}, session={session_id}")
+        logger.info(f"スクレイピング開始: keyword={keyword}, session={session_id}, start_url={start_url or '（現在タブ）'}")
         return jsonify({
             "success": True,
             "session_id": session_id,
             "output_dir": str(out_dir),
             "resume": resume,
+            "start_url": start_url or None,
         })
 
 
@@ -337,6 +339,377 @@ def api_update_group_status(group_id):
 # CSV エクスポート
 # ─────────────────────────────────────────────
 
+@app.route("/api/export/html")
+def api_export_html():
+    """スタンドアロンHTMLエクスポート（iPhone/iPad 持ち出し用）"""
+    import base64
+    from collections import defaultdict
+    from urllib.parse import quote
+
+    dm = get_dm()
+    if not dm:
+        return jsonify({"error": "データがありません"}), 400
+
+    items = dm.get_all_items()
+    if not items:
+        return jsonify({"error": "商品データがありません"}), 400
+
+    # ── グループ化 ──
+    group_map = defaultdict(list)
+    for item in items:
+        gid = item.get("group_id") or item["item_id"]
+        group_map[gid].append(item)
+    groups = sorted(group_map.values(), key=lambda g: len(g), reverse=True)
+
+    # ── 画像を base64 に変換 ──
+    def encode_image(local_path):
+        if not local_path or _session_output_dir is None:
+            return ""
+        try:
+            img_path = _session_output_dir / "images" / Path(local_path).name
+            if img_path.exists():
+                with open(img_path, "rb") as f:
+                    raw = f.read()
+                ext = img_path.suffix.lower().lstrip(".")
+                mime = {
+                    "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "png": "image/png", "gif": "image/gif",
+                    "webp": "image/webp",
+                }.get(ext, "image/jpeg")
+                return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+        except Exception as e:
+            logger.debug(f"画像base64変換エラー: {e}")
+        return ""
+
+    # ── グループデータを整形 ──
+    groups_data = []
+    for group in groups:
+        first = group[0]
+        thumbs = [
+            encode_image(item.get("thumbnail_local", ""))
+            for item in group[:5]
+        ]
+        thumbs = [t for t in thumbs if t]  # 空は除外
+
+        price    = first.get("price", 0)
+        shipping = first.get("shipping", 0)
+        total    = first.get("total", price + shipping)
+        seller_ids = list({i.get("seller_id", "") for i in group if i.get("seller_id")})
+
+        groups_data.append({
+            "count":      len(group),
+            "status":     first.get("status", "waiting"),
+            "title":      (first.get("title_full") or first.get("title_short", ""))[:120],
+            "price":      price,
+            "shipping":   shipping,
+            "total":      total,
+            "seller_ids": seller_ids[:5],
+            "thumbs":     thumbs,
+            "url":        first.get("url", ""),
+        })
+
+    progress     = dm.get_progress()
+    keyword      = progress.get("keyword", "")
+    exported_at  = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    total_items  = len(items)
+    total_groups = len(groups_data)
+
+    html = _build_export_html(groups_data, keyword, exported_at, total_items, total_groups)
+    safe_kw = "".join(c for c in keyword if c.isalnum() or c in ("_", "-"))[:20] or "result"
+    filename = f"aucfan_{safe_kw}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+
+    response = Response(html, mimetype="text/html; charset=utf-8")
+    response.headers["Content-Disposition"] = (
+        f"attachment; filename*=UTF-8''{quote(filename)}"
+    )
+    return response
+
+
+def _build_export_html(groups_data, keyword, exported_at, total_items, total_groups):
+    """iPhone/iPad 向けスタンドアロン HTML を生成する"""
+    import json
+    groups_json = json.dumps(groups_data, ensure_ascii=False)
+
+    return f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AucFan リサーチ結果 - {keyword}</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    :root {{
+      --primary: #2563eb; --primary-dark: #1d4ed8;
+      --success: #16a34a; --warning: #d97706;
+      --danger: #dc2626; --review: #7c3aed;
+      --gray-50: #f9fafb; --gray-100: #f3f4f6;
+      --gray-200: #e5e7eb; --gray-300: #d1d5db;
+      --gray-600: #4b5563; --gray-700: #374151;
+      --gray-900: #111827;
+    }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif;
+      font-size: 14px; background: var(--gray-50);
+      color: var(--gray-900); line-height: 1.5;
+    }}
+    /* ─ ヘッダー ─ */
+    .header {{
+      background: var(--primary); color: #fff;
+      position: sticky; top: 0; z-index: 100;
+      padding: 10px 16px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    }}
+    .header h1 {{ font-size: 16px; font-weight: 700; }}
+    .header-meta {{ font-size: 11px; opacity: .8; margin-top: 2px; }}
+    /* ─ フィルタータブ ─ */
+    .filter-bar {{
+      background: #fff; border-bottom: 1px solid var(--gray-200);
+      padding: 8px 12px; overflow-x: auto; white-space: nowrap;
+    }}
+    .filter-bar button {{
+      display: inline-block; padding: 5px 14px; margin-right: 6px;
+      border: 1px solid var(--gray-300); border-radius: 20px;
+      background: #fff; font-size: 13px; cursor: pointer; white-space: nowrap;
+    }}
+    .filter-bar button.active {{
+      background: var(--primary); color: #fff; border-color: var(--primary);
+    }}
+    /* ─ 統計バー ─ */
+    .stats {{
+      background: #fff; padding: 8px 16px;
+      display: flex; gap: 10px; flex-wrap: wrap;
+      border-bottom: 1px solid var(--gray-200); font-size: 12px;
+    }}
+    .stat {{ text-align: center; }}
+    .stat-num {{ font-size: 18px; font-weight: 700; }}
+    .stat-label {{ color: var(--gray-600); }}
+    /* ─ 検索バー ─ */
+    .search-bar {{
+      padding: 8px 12px; background: var(--gray-50);
+      border-bottom: 1px solid var(--gray-200);
+    }}
+    .search-bar input {{
+      width: 100%; padding: 8px 12px;
+      border: 1px solid var(--gray-300); border-radius: 20px;
+      font-size: 14px; outline: none;
+    }}
+    /* ─ グリッド ─ */
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 12px; padding: 12px;
+    }}
+    @media (max-width: 480px) {{ .grid {{ grid-template-columns: 1fr; }} }}
+    /* ─ カード ─ */
+    .card {{
+      background: #fff; border-radius: 10px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.1);
+      overflow: hidden; border: 2px solid transparent;
+    }}
+    .card.candidate {{ border-color: var(--primary); }}
+    .card.ok         {{ border-color: var(--success); }}
+    .card.review     {{ border-color: var(--review); }}
+    .card.ng         {{ opacity: .5; }}
+    /* ステータスバー */
+    .card-status {{
+      padding: 5px 12px; font-size: 11px; font-weight: 700;
+      color: #fff; display: flex; justify-content: space-between;
+    }}
+    .card-status.candidate {{ background: var(--primary); }}
+    .card-status.waiting   {{ background: var(--gray-600); }}
+    .card-status.review    {{ background: var(--review); }}
+    .card-status.ok        {{ background: var(--success); }}
+    .card-status.ng        {{ background: var(--danger); }}
+    /* サムネール */
+    .card-images {{
+      display: flex; gap: 4px; padding: 8px;
+      overflow-x: auto; background: var(--gray-50); min-height: 80px;
+    }}
+    .card-images img {{
+      width: 72px; height: 72px; object-fit: cover;
+      border-radius: 6px; flex-shrink: 0;
+    }}
+    .no-image {{
+      width: 72px; height: 72px; border-radius: 6px;
+      background: var(--gray-200); display: flex;
+      align-items: center; justify-content: center;
+      font-size: 24px; flex-shrink: 0;
+    }}
+    /* カード本文 */
+    .card-body {{ padding: 10px 12px; }}
+    .card-title {{
+      font-size: 13px; font-weight: 600; line-height: 1.4;
+      margin-bottom: 8px;
+      display: -webkit-box; -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical; overflow: hidden;
+    }}
+    .card-price-row {{
+      display: flex; gap: 12px; margin-bottom: 6px; font-size: 13px;
+    }}
+    .card-price {{ font-size: 18px; font-weight: 700; color: var(--danger); }}
+    .card-price-label {{ font-size: 10px; color: var(--gray-600); }}
+    .card-price-sub {{ font-weight: 600; }}
+    .card-sellers {{
+      font-size: 11px; color: var(--gray-600); margin-bottom: 8px;
+    }}
+    .seller-badge {{
+      display: inline-block; background: var(--gray-100);
+      border-radius: 3px; padding: 1px 5px; margin-right: 2px;
+      font-family: monospace;
+    }}
+    .group-badge {{
+      display: inline-block; background: #dbeafe;
+      color: var(--primary); border-radius: 4px;
+      padding: 2px 8px; font-weight: 700; font-size: 12px;
+    }}
+    /* アクション */
+    .card-actions {{
+      display: flex; gap: 6px; flex-wrap: wrap;
+      padding: 8px 12px; border-top: 1px solid var(--gray-100);
+      background: var(--gray-50);
+    }}
+    .btn {{
+      display: inline-flex; align-items: center;
+      padding: 7px 14px; border: none; border-radius: 6px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      text-decoration: none; color: inherit;
+    }}
+    .btn-gray  {{ background: var(--gray-200); color: var(--gray-700); }}
+    /* カウント表示 */
+    .count-info {{
+      text-align: center; padding: 12px;
+      color: var(--gray-600); font-size: 13px;
+    }}
+    /* empty */
+    .empty {{
+      text-align: center; padding: 60px 20px; color: var(--gray-600);
+    }}
+    .empty-icon {{ font-size: 48px; margin-bottom: 12px; }}
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🔍 AucFan リサーチ結果</h1>
+  <div class="header-meta">
+    キーワード: {keyword} ／ {total_items}件 / {total_groups}グループ ／ 書き出し: {exported_at}
+  </div>
+</div>
+
+<div class="filter-bar" id="filterBar">
+  <button class="active" onclick="setFilter('')">すべて</button>
+  <button onclick="setFilter('candidate')">🔵 仕入れ候補</button>
+  <button onclick="setFilter('ok')">✅ OK</button>
+  <button onclick="setFilter('waiting')">⏳ 確認待ち</button>
+  <button onclick="setFilter('review')">⚠️ 要確認</button>
+  <button onclick="setFilter('ng')">❌ NG</button>
+</div>
+
+<div class="search-bar">
+  <input type="search" id="searchInput" placeholder="タイトルで絞り込み..."
+         oninput="renderCards()" autocomplete="off" autocorrect="off">
+</div>
+
+<div id="countInfo" class="count-info"></div>
+<div class="grid" id="grid"></div>
+
+<script>
+const GROUPS = {groups_json};
+
+let currentFilter = '';
+
+function setFilter(status) {{
+  currentFilter = status;
+  document.querySelectorAll('#filterBar button').forEach(btn => btn.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('searchInput').value = '';
+  renderCards();
+}}
+
+function esc(str) {{
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}}
+
+const STATUS_LABEL = {{
+  candidate: '仕入れ候補', waiting: '確認待ち',
+  review: '要確認', ok: '✅ OK', ng: '❌ NG'
+}};
+
+function renderCards() {{
+  const grid = document.getElementById('grid');
+  const kw   = document.getElementById('searchInput').value.trim().toLowerCase();
+
+  const filtered = GROUPS.filter(g => {{
+    if (currentFilter && g.status !== currentFilter) return false;
+    if (kw && !g.title.toLowerCase().includes(kw)) return false;
+    return true;
+  }});
+
+  document.getElementById('countInfo').textContent =
+    `表示中: ${{filtered.length}} グループ`;
+
+  if (filtered.length === 0) {{
+    grid.innerHTML = '<div class="empty"><div class="empty-icon">📦</div><p>該当する商品がありません</p></div>';
+    return;
+  }}
+
+  grid.innerHTML = filtered.map(g => {{
+    const statusLabel = STATUS_LABEL[g.status] || g.status;
+    const countLabel  = g.count > 1
+      ? `同一商品 <span class="group-badge">${{g.count}}件</span>` : '単品';
+
+    const thumbsHtml = g.thumbs.length > 0
+      ? g.thumbs.map(src => `<img src="${{src}}" loading="lazy" alt="">`).join('')
+      : '<div class="no-image">📦</div>';
+
+    const shipping = g.shipping === 0 ? '無料' : '¥' + g.shipping.toLocaleString();
+    const sellers  = (g.seller_ids || []).map(s => `<span class="seller-badge">${{esc(s)}}</span>`).join('');
+
+    const searchQ  = encodeURIComponent((g.title || '').substring(0, 50));
+    const aliUrl   = `https://aliprice.com/search?q=${{searchQ}}`;
+    const amaUrl   = `https://www.amazon.co.jp/s?k=${{searchQ}}`;
+
+    return `<div class="card ${{g.status}}">
+      <div class="card-status ${{g.status}}">
+        <span>${{esc(statusLabel)}}</span>
+        <span>${{countLabel}}</span>
+      </div>
+      <div class="card-images">${{thumbsHtml}}</div>
+      <div class="card-body">
+        <div class="card-title">${{esc(g.title || '（タイトルなし）')}}</div>
+        <div class="card-price-row">
+          <div>
+            <div class="card-price-label">合計</div>
+            <div class="card-price">¥${{(g.total||0).toLocaleString()}}</div>
+          </div>
+          <div>
+            <div class="card-price-label">落札価格</div>
+            <div class="card-price-sub">¥${{(g.price||0).toLocaleString()}}</div>
+          </div>
+          <div>
+            <div class="card-price-label">送料</div>
+            <div class="card-price-sub">${{shipping}}</div>
+          </div>
+        </div>
+        <div class="card-sellers">出品者: ${{sellers || '—'}}</div>
+      </div>
+      <div class="card-actions">
+        <a class="btn btn-gray" href="${{aliUrl}}" target="_blank" rel="noopener">🛒 AliPrice</a>
+        <a class="btn btn-gray" href="${{amaUrl}}" target="_blank" rel="noopener">📦 Amazon</a>
+        ${{g.url ? `<a class="btn btn-gray" href="${{esc(g.url)}}" target="_blank" rel="noopener">🔗 元ページ</a>` : ''}}
+      </div>
+    </div>`;
+  }}).join('');
+}}
+
+renderCards();
+</script>
+</body>
+</html>"""
+
+
 @app.route("/api/export/csv")
 def api_export_csv():
     """CSVファイルをダウンロード"""
@@ -355,6 +728,56 @@ def api_export_csv():
         download_name=f"aucfan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mimetype="text/csv; charset=utf-8-sig"
     )
+
+
+# ─────────────────────────────────────────────
+# Chrome タブ一覧取得
+# ─────────────────────────────────────────────
+
+@app.route("/api/tabs")
+def api_tabs():
+    """MacのChromeで開いているAucFanタブ一覧を返す"""
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options as ChromeOptions
+    from selenium.common.exceptions import WebDriverException
+
+    try:
+        options = ChromeOptions()
+        options.add_experimental_option(
+            "debuggerAddress",
+            f"{config.CHROME_DEBUG_HOST}:{config.CHROME_DEBUG_PORT}"
+        )
+        options.add_argument("--no-sandbox")
+        driver = webdriver.Chrome(options=options)
+
+        tabs = []
+        current_handle = driver.current_window_handle
+        for handle in driver.window_handles:
+            driver.switch_to.window(handle)
+            url   = driver.current_url
+            title = driver.title
+            tabs.append({
+                "handle": handle,
+                "url":    url,
+                "title":  title,
+                "is_aucfan": "aucfan.com" in url,
+            })
+
+        # 元のタブに戻す
+        try:
+            driver.switch_to.window(current_handle)
+        except Exception:
+            pass
+
+        driver.quit()
+
+        aucfan_tabs = [t for t in tabs if t["is_aucfan"]]
+        return jsonify({"tabs": aucfan_tabs, "all_tabs": tabs})
+
+    except WebDriverException:
+        return jsonify({"error": "Chromeに接続できません。bash start.sh でアプリを起動してください。", "tabs": []}), 200
+    except Exception as e:
+        return jsonify({"error": f"エラー: {e}", "tabs": []}), 200
 
 
 # ─────────────────────────────────────────────
@@ -566,7 +989,7 @@ if __name__ == "__main__":
     # ブラウザを自動で開く（少し遅らせる）
     def open_browser():
         time.sleep(1.5)
-        webbrowser.open(f"http://{config.FLASK_HOST}:{config.FLASK_PORT}")
+        webbrowser.open(f"http://localhost:{config.FLASK_PORT}")
 
     browser_thread = threading.Thread(target=open_browser, daemon=True)
     browser_thread.start()

@@ -126,11 +126,74 @@ function updateProgressUI(data) {
 // ─────────────────────────────────────────────
 const config_MAX_PAGES = 500; // サーバー設定と合わせる
 
+// ─────────────────────────────────────────────
+// Chromeタブ確認（iPhone / iPad用）
+// ─────────────────────────────────────────────
+let _selectedTabUrl = '';
+
+async function loadChromeTabs() {
+  const hint = document.getElementById('tabsHint');
+  const list = document.getElementById('chromeTabs');
+  hint.textContent = '取得中...';
+  list.style.display = 'none';
+
+  const data = await fetchJSON('/api/tabs');
+
+  if (data.error) {
+    hint.textContent = '⚠️ ' + data.error;
+    return;
+  }
+
+  const tabs = data.tabs || [];
+  if (tabs.length === 0) {
+    hint.textContent = 'AucFanのタブが見つかりません';
+    return;
+  }
+
+  hint.textContent = `${tabs.length}件のAucFanタブが見つかりました`;
+  list.style.display = 'flex';
+  list.innerHTML = tabs.map(t => `
+    <div class="chrome-tab-item" id="tab-${btoa(t.url).substring(0,10)}"
+         onclick="selectTab('${escHtml(t.url)}', this)">
+      <div class="chrome-tab-info">
+        <div class="chrome-tab-title">${escHtml(t.title || t.url)}</div>
+        <div class="chrome-tab-url">${escHtml(t.url)}</div>
+      </div>
+      <button class="btn btn-primary btn-sm">選択</button>
+    </div>
+  `).join('');
+}
+
+function selectTab(url, el) {
+  _selectedTabUrl = url;
+  document.querySelectorAll('.chrome-tab-item').forEach(e => e.classList.remove('selected'));
+  el.classList.add('selected');
+  // URL入力欄はクリア（タブ選択優先）
+  const urlInput = document.getElementById('inputStartUrl');
+  if (urlInput) urlInput.value = '';
+  showToast('タブを選択しました。キーワードを確認してスクレイピング開始してください。');
+}
+
 async function startScraping() {
-  const keyword = document.getElementById('inputKeyword').value.trim() || 'unknown';
-  const res = await fetchJSON('/api/start', 'POST', { keyword, resume: false });
+  const keyword  = document.getElementById('inputKeyword').value.trim() || 'unknown';
+  // ① タブ選択 ② URL貼り付け の優先順位
+  const pastedUrl = (document.getElementById('inputStartUrl')?.value || '').trim();
+  const startUrl = _selectedTabUrl || pastedUrl;
+
+  if (startUrl && !startUrl.startsWith('http')) {
+    showToast('❌ URLが正しくありません（https://... から始めてください）', 'error');
+    return;
+  }
+
+  const payload = { keyword, resume: false };
+  if (startUrl) payload.start_url = startUrl;
+
+  const res = await fetchJSON('/api/start', 'POST', payload);
   if (res.success) {
-    showToast(`スクレイピング開始: ${keyword}`);
+    const msg = startUrl
+      ? `🌐 URLに遷移してスクレイピング開始: ${keyword}`
+      : `▶ スクレイピング開始: ${keyword}`;
+    showToast(msg);
     loadGroups();
   } else {
     showToast('❌ ' + (res.message || '開始失敗'), 'error');
@@ -372,6 +435,42 @@ function resetFilter() {
 function exportCsv() {
   window.location.href = '/api/export/csv';
   showToast('CSVをダウンロード中...');
+}
+
+// ─────────────────────────────────────────────
+// HTML エクスポート（iPhone/iPad 持ち出し用）
+// ─────────────────────────────────────────────
+async function exportHtml() {
+  const btn = document.getElementById('btnExportHtml');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 書き出し中...'; }
+  showToast('📱 HTMLを生成中... 画像埋め込みのため少し時間がかかります');
+
+  try {
+    const res = await fetch('/api/export/html');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast('❌ ' + (err.error || '書き出し失敗'), 'error');
+      return;
+    }
+    // Content-Disposition からファイル名を取得
+    const disposition = res.headers.get('Content-Disposition') || '';
+    let filename = 'aucfan_result.html';
+    const match = disposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
+    if (match) filename = decodeURIComponent(match[1].replace(/"/g, '').trim());
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('✅ HTMLを書き出しました。AirDropやiCloudでiPhone / iPadへ送れます。');
+  } catch (e) {
+    showToast('❌ 書き出しエラー: ' + e, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📱 HTML書き出し'; }
+  }
 }
 
 // ─────────────────────────────────────────────

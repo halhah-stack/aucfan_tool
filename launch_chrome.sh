@@ -14,12 +14,19 @@
 CHROME_APP="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 DEBUG_PORT=9222
 
-# Chrome が既に起動していないか確認
-if lsof -i :${DEBUG_PORT} > /dev/null 2>&1; then
-    echo "⚠️  ポート ${DEBUG_PORT} は既に使用中です。"
-    echo "   既存の Chrome デバッグセッションが起動中かもしれません。"
-    echo "   そのまま python app.py を実行できます。"
+# Chrome デバッグポートが実際に LISTEN しているか確認
+if lsof -i :${DEBUG_PORT} | grep -q LISTEN; then
+    echo "✅ ポート ${DEBUG_PORT} はすでに LISTEN 中です。"
+    echo "   既存の Chrome デバッグセッションが使えます。"
     exit 0
+fi
+
+# 残留プロセス（CLOSED/TIME_WAIT など）があればクリーンアップ
+LEFTOVER=$(lsof -ti :${DEBUG_PORT} 2>/dev/null)
+if [ -n "$LEFTOVER" ]; then
+    echo "🧹 残留プロセス(PID: $LEFTOVER)を終了します..."
+    kill $LEFTOVER 2>/dev/null
+    sleep 1
 fi
 
 if [ ! -f "$CHROME_APP" ]; then

@@ -18,6 +18,12 @@ __pycache__/
 # デバッグ用ファイル
 page_source.html
 
+# スクレイピング結果CSV（ルート直下）
+aucfan_results_*.csv
+
+# Chromeデバッグプロファイルキャッシュ
+.aucfan-chrome-profile/
+
 # macOS
 .DS_Store
 
