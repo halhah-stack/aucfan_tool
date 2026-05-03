@@ -14,6 +14,8 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
+import io
+import pandas as pd
 from flask import (
     Flask, Response, jsonify, render_template, request,
     send_from_directory, abort
@@ -44,7 +46,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["SECRET_KEY"] = os.urandom(24)
 
-# グローバル状態
+# グローバル状態（キーワードスクレイピング）
 _scraper_thread: threading.Thread = None
 _stop_event = threading.Event()
 _data_manager: DataManager = None
@@ -52,6 +54,17 @@ _image_processor: ImageProcessor = None
 _gemini_client: GeminiClient = None
 _session_output_dir: Path = None
 _lock = threading.Lock()
+
+# ─── セラースクレイピング状態 ───
+_seller_state = {
+    "sellers": [],          # [{"seller_id", "seller_url", "status": pending/running/done/error}]
+    "current_index": -1,
+    "running": False,
+    "stop_requested": False,
+    "thread": None,
+    "session_dirs": [],     # 完了済みセッションのディレクトリ一覧
+}
+_seller_lock = threading.Lock()
 
 
 def get_dm() -> DataManager:
@@ -937,6 +950,210 @@ def api_report():
         "total_sellers": len(seller_ranking),
         "total_groups": len(group_report),
     })
+
+
+# ─────────────────────────────────────────────
+# セラー分析機能
+# ─────────────────────────────────────────────
+
+@app.route("/api/import_csv", methods=["POST"])
+def api_import_csv():
+    """
+    CSVをアップロードしてseller_idを抽出する。
+    CSVフォーマット: results.csv と同一（seller_id列必須、seller_url列は任意）
+    """
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "ファイルがありません"}), 400
+
+    try:
+        raw = file.read()
+        # UTF-8 BOM → UTF-8 → Shift-JIS の順で試す
+        for enc in ("utf-8-sig", "utf-8", "shift-jis"):
+            try:
+                df = pd.read_csv(io.BytesIO(raw), encoding=enc, dtype=str)
+                break
+            except Exception:
+                continue
+        else:
+            return jsonify({"error": "CSVの文字コードを判別できませんでした"}), 400
+
+        if "seller_id" not in df.columns:
+            return jsonify({"error": "seller_id 列が見つかりません"}), 400
+
+        has_seller_url = "seller_url" in df.columns
+
+        # ユニークセラーを抽出（最初に出現した seller_url を使う）
+        seen = {}
+        for _, row in df.iterrows():
+            sid = str(row.get("seller_id", "")).strip()
+            if not sid or sid.lower() == "nan":
+                continue
+            if sid not in seen:
+                seller_url = ""
+                if has_seller_url:
+                    u = str(row.get("seller_url", "")).strip()
+                    if u and u.lower() != "nan":
+                        seller_url = u
+                seen[sid] = seller_url
+
+        sellers = [
+            {"seller_id": sid, "seller_url": url, "status": "pending"}
+            for sid, url in seen.items()
+        ]
+
+        with _seller_lock:
+            _seller_state["sellers"] = sellers
+            _seller_state["current_index"] = -1
+            _seller_state["running"] = False
+            _seller_state["stop_requested"] = False
+            _seller_state["session_dirs"] = []
+
+        logger.info(f"CSVインポート完了: {len(sellers)}件のユニークセラー（seller_url={'あり' if has_seller_url else 'なし'}）")
+        return jsonify({
+            "count": len(sellers),
+            "has_seller_url": has_seller_url,
+            "sellers": sellers,
+        })
+
+    except Exception as e:
+        logger.error(f"CSVインポートエラー: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/seller_scrape/start", methods=["POST"])
+def api_seller_scrape_start():
+    """セラーIDリストのスクレイピングを開始"""
+    with _seller_lock:
+        if _seller_state["running"]:
+            return jsonify({"error": "既に実行中です"}), 400
+        sellers = _seller_state["sellers"]
+        if not sellers:
+            return jsonify({"error": "セラーリストがありません。先にCSVをインポートしてください"}), 400
+
+        _seller_state["running"] = True
+        _seller_state["stop_requested"] = False
+
+    t = threading.Thread(target=_run_seller_scraping, daemon=True, name="seller-scraper")
+    t.start()
+    with _seller_lock:
+        _seller_state["thread"] = t
+
+    logger.info(f"セラースクレイピング開始: {len(sellers)}件")
+    return jsonify({"status": "started", "total": len(sellers)})
+
+
+def _run_seller_scraping():
+    """セラーごとにスクレイピングを順番に実行するバックグラウンドスレッド"""
+    global _seller_state
+
+    with _seller_lock:
+        sellers = list(_seller_state["sellers"])
+
+    for i, seller in enumerate(sellers):
+        # 停止チェック
+        with _seller_lock:
+            if _seller_state["stop_requested"]:
+                logger.info("セラースクレイピング: 停止リクエスト受信")
+                break
+        # すでに完了済みはスキップ
+        if seller.get("status") == "done":
+            continue
+
+        seller_id = seller["seller_id"]
+        seller_url = seller.get("seller_url", "").strip()
+
+        # seller_url が無い場合はフォールバック URL を構築
+        if not seller_url:
+            seller_url = f"https://aucfan.com/search1/?aucnm={seller_id}"
+            logger.info(f"seller_url未設定のためフォールバックURL使用: {seller_url}")
+
+        with _seller_lock:
+            _seller_state["current_index"] = i
+            _seller_state["sellers"][i]["status"] = "running"
+
+        logger.info(f"[{i+1}/{len(sellers)}] セラースクレイピング開始: {seller_id}")
+
+        try:
+            safe_id = "".join(c for c in seller_id if c.isalnum() or c in ("_", "-"))[:15]
+            out_dir, session_id = make_output_dir(f"seller_{safe_id}")
+            dm = DataManager(session_id, out_dir)
+            img = ImageProcessor(out_dir / "images")
+            gc = GeminiClient()
+            stop_ev = threading.Event()
+
+            scraper = AucFanScraper(
+                data_manager=dm,
+                image_processor=img,
+                gemini_client=gc,
+                stop_event=stop_ev,
+            )
+            scraper.run(start_url=seller_url)
+
+            with _seller_lock:
+                _seller_state["sellers"][i]["status"] = "done"
+                _seller_state["sellers"][i]["session_dir"] = str(out_dir)
+                _seller_state["session_dirs"].append(str(out_dir))
+
+            logger.info(f"セラースクレイピング完了: {seller_id} → {out_dir}")
+
+        except Exception as e:
+            logger.error(f"セラースクレイピングエラー ({seller_id}): {e}")
+            with _seller_lock:
+                _seller_state["sellers"][i]["status"] = "error"
+                _seller_state["sellers"][i]["error"] = str(e)
+
+    with _seller_lock:
+        _seller_state["running"] = False
+        _seller_state["current_index"] = -1
+
+    logger.info("セラースクレイピング全件完了")
+
+
+@app.route("/api/seller_scrape/stop", methods=["POST"])
+def api_seller_scrape_stop():
+    """セラースクレイピングを停止"""
+    with _seller_lock:
+        _seller_state["stop_requested"] = True
+    logger.info("セラースクレイピング停止リクエスト")
+    return jsonify({"status": "stopping"})
+
+
+@app.route("/api/seller_scrape/status")
+def api_seller_scrape_status():
+    """セラースクレイピングの現在状態を返す"""
+    with _seller_lock:
+        sellers = list(_seller_state["sellers"])
+        current_index = _seller_state["current_index"]
+        running = _seller_state["running"]
+        session_dirs = list(_seller_state["session_dirs"])
+
+    total = len(sellers)
+    done = sum(1 for s in sellers if s.get("status") == "done")
+    errors = sum(1 for s in sellers if s.get("status") == "error")
+
+    return jsonify({
+        "running": running,
+        "current_index": current_index,
+        "total": total,
+        "done": done,
+        "errors": errors,
+        "sellers": sellers,
+        "session_dirs": session_dirs,
+    })
+
+
+@app.route("/api/seller_scrape/reset", methods=["POST"])
+def api_seller_scrape_reset():
+    """セラーリストをリセット"""
+    with _seller_lock:
+        if _seller_state["running"]:
+            return jsonify({"error": "実行中はリセットできません"}), 400
+        _seller_state["sellers"] = []
+        _seller_state["current_index"] = -1
+        _seller_state["session_dirs"] = []
+        _seller_state["stop_requested"] = False
+    return jsonify({"status": "reset"})
 
 
 # ─────────────────────────────────────────────

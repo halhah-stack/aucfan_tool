@@ -346,9 +346,14 @@ class AucFanScraper:
         if price > 0 and (price < config.MIN_PRICE or price > config.MAX_PRICE * 1.5):
             return None
 
-        # セラーID
+        # セラーID + セラー検索URL（a.sellerLink の href を流用）
         seller_el = self._find_element_soup(card, config.SELECTORS["list"]["seller"])
         seller_id = seller_el.get_text(strip=True) if seller_el else ""
+        seller_url = ""
+        if seller_el:
+            seller_href = seller_el.get("href", "")
+            if seller_href:
+                seller_url = seller_href if seller_href.startswith("http") else urljoin(base_url, seller_href)
 
         # 画像URL（AucFanは data-src-original で遅延読み込み）
         img_el = self._find_element_soup(card, config.SELECTORS["list"]["image"])
@@ -396,6 +401,7 @@ class AucFanScraper:
             "title_short": title[:200],
             "price": price,
             "seller_id": seller_id,
+            "seller_url": seller_url,   # a.sellerLink の href（セラー分析機能で使用）
             "url": item_url,
             "thumbnail_url": thumbnail_url,
             "thumbnail_local": thumbnail_local,

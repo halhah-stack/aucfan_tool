@@ -141,6 +141,9 @@
       <button class="btn btn-secondary btn-sm" id="btnExportHtml" onclick="exportHtml()">
         📱 HTML書き出し
       </button>
+      <button class="btn btn-secondary btn-sm" id="btnSellerAnalysis" onclick="showSellerAnalysis()">
+        🏪 セラー分析
+      </button>
     </div>
   </div>
 </section>
@@ -193,6 +196,77 @@
     </div>
     <div class="modal-body" id="reportBody">
       <div class="loading">読み込み中...</div>
+    </div>
+  </div>
+</div>
+
+<!-- セラー分析 モーダル -->
+<div class="modal-overlay" id="sellerModal" style="display:none" onclick="hideModal('sellerModal')">
+  <div class="modal modal-large" onclick="event.stopPropagation()" style="max-width:860px;max-height:92vh;display:flex;flex-direction:column">
+    <div class="modal-header">
+      <h2>🏪 セラー分析スクレイピング</h2>
+      <button class="modal-close" onclick="hideModal('sellerModal')">✕</button>
+    </div>
+    <div class="modal-body" id="sellerModalBody" style="overflow-y:auto;flex:1">
+
+      <!-- Step 1: CSVアップロード -->
+      <div id="sellerStep1">
+        <p style="margin-bottom:12px;color:#4b5563;font-size:14px">
+          キーワードスクレイピングで保存した <strong>results.csv</strong> をアップロードすると、含まれるセラーIDを抽出してセラーごとにスクレイピングできます。
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+          <label class="btn btn-primary" style="cursor:pointer">
+            📂 CSVファイルを選択
+            <input type="file" id="sellerCsvInput" accept=".csv" style="display:none" onchange="importSellerCsv(this)">
+          </label>
+          <span id="sellerCsvName" style="color:#6b7280;font-size:13px">ファイル未選択</span>
+        </div>
+        <div id="sellerImportResult" style="display:none">
+          <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px;margin-bottom:12px;font-size:14px">
+            <strong id="sellerImportSummary"></strong>
+          </div>
+          <!-- セラーリスト -->
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:13px;color:#6b7280" id="sellerListMeta"></span>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-primary btn-sm" id="btnSellerStart" onclick="startSellerScraping()">
+                ▶ スクレイピング開始
+              </button>
+              <button class="btn btn-warning btn-sm" id="btnSellerStop" onclick="stopSellerScraping()" disabled>
+                ■ 停止
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="resetSellerScraping()">
+                🗑 リセット
+              </button>
+            </div>
+          </div>
+          <!-- 進捗バー -->
+          <div id="sellerProgressWrap" style="display:none;margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+              <span id="sellerProgressLabel">処理中...</span>
+              <span id="sellerProgressCount"></span>
+            </div>
+            <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
+              <div id="sellerProgressBar" style="background:#2563eb;height:100%;width:0%;transition:width .3s"></div>
+            </div>
+          </div>
+          <!-- セラーテーブル -->
+          <div style="overflow-y:auto;max-height:380px;border:1px solid #e5e7eb;border-radius:8px">
+            <table style="width:100%;border-collapse:collapse;font-size:13px" id="sellerTable">
+              <thead style="position:sticky;top:0;background:#f9fafb;z-index:1">
+                <tr>
+                  <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-weight:600">#</th>
+                  <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-weight:600">セラーID</th>
+                  <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-weight:600">URL</th>
+                  <th style="padding:8px 12px;text-align:center;border-bottom:1px solid #e5e7eb;font-weight:600">状態</th>
+                </tr>
+              </thead>
+              <tbody id="sellerTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>

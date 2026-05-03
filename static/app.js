@@ -110,14 +110,14 @@ function updateProgressUI(data) {
   if (btnStart) btnStart.disabled = is_running;
   if (btnStop) btnStop.disabled = !is_running;
 
-  // 統計
+  // 統計（仕入れ候補・OK・NG・要確認はグループ単位、取得件数はアイテム総数）
   if (stats) {
     const byStatus = stats.by_status || {};
     setText('statTotal', stats.total || 0);
-    setText('statCandidate', byStatus.candidate || 0);
-    setText('statReview', byStatus.review || 0);
-    setText('statOk', byStatus.ok || 0);
-    setText('statNg', byStatus.ng || 0);
+    setText('statCandidate', byStatus.candidate || 0);   // グループ数
+    setText('statReview', byStatus.review || 0);         // グループ数
+    setText('statOk', byStatus.ok || 0);                 // グループ数
+    setText('statNg', byStatus.ng || 0);                 // グループ数
   }
 }
 
@@ -717,6 +717,159 @@ function renderReport(data) {
       </table>
     </div>
   `;
+}
+
+// ─────────────────────────────────────────────
+// セラー分析機能
+// ─────────────────────────────────────────────
+
+let sellerPollTimer = null;
+
+function showSellerAnalysis() {
+  document.getElementById('sellerModal').style.display = 'flex';
+  // すでにセラーリストがあれば状態を復元
+  fetchSellerStatus(/* silent */ true);
+}
+
+async function importSellerCsv(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  document.getElementById('sellerCsvName').textContent = file.name;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch('/api/import_csv', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      showToast(data.error || 'CSVインポート失敗', 'error');
+      return;
+    }
+
+    const hasUrl = data.has_seller_url;
+    document.getElementById('sellerImportSummary').textContent =
+      `${data.count} 件のユニークセラーIDを抽出しました（seller_url: ${hasUrl ? 'あり ✅' : 'なし ⚠ フォールバックURLを使用'}）`;
+
+    renderSellerTable(data.sellers);
+    document.getElementById('sellerImportResult').style.display = 'block';
+    document.getElementById('sellerListMeta').textContent = `${data.count} 件`;
+    showToast(`${data.count} 件のセラーIDを読み込みました`);
+
+  } catch (e) {
+    showToast('CSVの読み込みに失敗しました: ' + e.message, 'error');
+  }
+}
+
+function renderSellerTable(sellers) {
+  const tbody = document.getElementById('sellerTableBody');
+  if (!tbody) return;
+
+  tbody.innerHTML = sellers.map((s, i) => {
+    const statusHtml = sellerStatusBadge(s.status);
+    const urlHtml = s.seller_url
+      ? `<a href="${esc(s.seller_url)}" target="_blank" rel="noopener" style="color:#2563eb;font-size:12px;word-break:break-all">リンク</a>`
+      : '<span style="color:#9ca3af;font-size:12px">未取得</span>';
+    return `<tr id="seller-row-${i}" style="border-bottom:1px solid #f3f4f6">
+      <td style="padding:7px 12px;color:#6b7280">${i + 1}</td>
+      <td style="padding:7px 12px;font-family:monospace;font-size:12px">${esc(s.seller_id)}</td>
+      <td style="padding:7px 12px">${urlHtml}</td>
+      <td style="padding:7px 12px;text-align:center">${statusHtml}</td>
+    </tr>`;
+  }).join('');
+}
+
+function sellerStatusBadge(status) {
+  const map = {
+    pending: '<span style="color:#6b7280">待機中</span>',
+    running: '<span style="color:#2563eb;font-weight:700">▶ 処理中</span>',
+    done:    '<span style="color:#16a34a;font-weight:700">✅ 完了</span>',
+    error:   '<span style="color:#dc2626;font-weight:700">❌ エラー</span>',
+  };
+  return map[status] || `<span>${esc(status)}</span>`;
+}
+
+async function startSellerScraping() {
+  const res = await fetch('/api/seller_scrape/start', { method: 'POST' });
+  const data = await res.json();
+
+  if (!res.ok || data.error) {
+    showToast(data.error || '開始失敗', 'error');
+    return;
+  }
+
+  showToast('セラースクレイピングを開始しました');
+  document.getElementById('btnSellerStart').disabled = true;
+  document.getElementById('btnSellerStop').disabled = false;
+  document.getElementById('sellerProgressWrap').style.display = 'block';
+
+  // ポーリング開始
+  clearInterval(sellerPollTimer);
+  sellerPollTimer = setInterval(fetchSellerStatus, 3000);
+}
+
+async function stopSellerScraping() {
+  await fetch('/api/seller_scrape/stop', { method: 'POST' });
+  showToast('停止リクエストを送信しました');
+}
+
+async function resetSellerScraping() {
+  const res = await fetch('/api/seller_scrape/reset', { method: 'POST' });
+  const data = await res.json();
+  if (data.error) { showToast(data.error, 'error'); return; }
+
+  clearInterval(sellerPollTimer);
+  document.getElementById('sellerImportResult').style.display = 'none';
+  document.getElementById('sellerCsvName').textContent = 'ファイル未選択';
+  document.getElementById('sellerCsvInput').value = '';
+  document.getElementById('sellerProgressWrap').style.display = 'none';
+  document.getElementById('btnSellerStart').disabled = false;
+  document.getElementById('btnSellerStop').disabled = true;
+  showToast('リセットしました');
+}
+
+async function fetchSellerStatus(silent = false) {
+  try {
+    const res = await fetch('/api/seller_scrape/status');
+    const data = await res.json();
+
+    if (!data.sellers || data.sellers.length === 0) return;
+
+    // テーブル更新
+    renderSellerTable(data.sellers);
+    document.getElementById('sellerImportResult').style.display = 'block';
+    document.getElementById('sellerListMeta').textContent = `${data.total} 件`;
+
+    // 進捗バー更新
+    if (data.total > 0) {
+      const pct = Math.round((data.done / data.total) * 100);
+      document.getElementById('sellerProgressWrap').style.display = 'block';
+      document.getElementById('sellerProgressBar').style.width = pct + '%';
+      document.getElementById('sellerProgressCount').textContent = `${data.done} / ${data.total} 件完了`;
+      const currentSeller = data.current_index >= 0
+        ? data.sellers[data.current_index]?.seller_id || ''
+        : '';
+      document.getElementById('sellerProgressLabel').textContent =
+        data.running ? `処理中: ${currentSeller}` : (data.done === data.total ? '全件完了 ✅' : '停止中');
+    }
+
+    // ボタン状態
+    document.getElementById('btnSellerStart').disabled = data.running;
+    document.getElementById('btnSellerStop').disabled = !data.running;
+
+    // 完了時はポーリング停止
+    if (!data.running) {
+      clearInterval(sellerPollTimer);
+      if (!silent && data.done > 0) {
+        showToast(`完了: ${data.done}件処理 / ${data.errors}件エラー`);
+      }
+    }
+
+  } catch (e) {
+    console.warn('セラーステータス取得失敗:', e);
+  }
 }
 
 let toastTimer;

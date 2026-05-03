@@ -155,6 +155,7 @@ class DataManager:
             item.setdefault("total", item.get("price", 0))
             item.setdefault("images_local", [])
             item.setdefault("phash", "")
+            item.setdefault("seller_url", "")  # a.sellerLink の href（セラー分析機能で使用）
             self._items[item_id] = item
         return item_id
 
@@ -310,14 +311,35 @@ class DataManager:
             )
 
     def get_stats(self) -> dict:
+        """
+        統計情報を返す。
+        - total: 取得アイテム総数（件数ベース）
+        - by_status: グループ単位のステータス集計
+            ※ 同一商品20件グループは「1候補」としてカウント
+            【元に戻す場合】グループ単位→アイテム単位に変更:
+              statuses = {}
+              for v in self._items.values():
+                  s = v.get("status", "unknown")
+                  statuses[s] = statuses.get(s, 0) + 1
+        """
         with self._lock:
-            statuses = {}
-            for v in self._items.values():
-                s = v.get("status", "unknown")
-                statuses[s] = statuses.get(s, 0) + 1
+            items = list(self._items.values())
+
+        # グループ単位でステータスを集計（代表アイテム = group_id が最初に出現した1件）
+        seen_groups: dict = {}  # group_id -> status
+        for item in items:
+            gid = item.get("group_id") or item["item_id"]
+            if gid not in seen_groups:
+                seen_groups[gid] = item.get("status", "unknown")
+
+        group_statuses: dict = {}
+        for status in seen_groups.values():
+            group_statuses[status] = group_statuses.get(status, 0) + 1
+
         return {
-            "total": self.total_items,
-            "by_status": statuses,
+            "total": len(items),          # 取得件数（アイテム総数）
+            "total_groups": len(seen_groups),  # グループ総数
+            "by_status": group_statuses,  # グループ単位のステータス集計
         }
 
 
