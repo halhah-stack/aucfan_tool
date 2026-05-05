@@ -16,6 +16,7 @@ import requests
 from PIL import Image
 
 import config
+import time as _time
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +182,16 @@ class ImageProcessor:
         # ※元のUnion-Find方式に戻すには上記docstringを参照
         groups: List[Tuple[str, List[str]]] = []
 
-        for item_id, item_hash in valid:
+        # GIL解放インターバル: 500件ごとに sleep(0) してFlask等の他スレッドに制御を渡す
+        # pHash比較は純粋Python計算でGILを保持し続けるため、これがないとFlaskが応答不能になる
+        _GIL_YIELD_INTERVAL = 500
+
+        for i, (item_id, item_hash) in enumerate(valid):
+            # 定期的にGILを解放（他スレッドにCPU時間を渡す）
+            if i % _GIL_YIELD_INTERVAL == 0 and i > 0:
+                _time.sleep(0)
+                logger.debug(f"pHashグループ化: {i}/{n}件処理中 ({len(groups)}グループ)")
+
             matched = False
             for rep_hash, members in groups:
                 if self.is_same_image(item_hash, rep_hash):
@@ -202,18 +212,25 @@ class ImageProcessor:
         DataManager に反映する。
         変更したグループ数を返す。
         """
+        return self.group_items_with_min_size(data_manager, min_group_size=None)
+
+    def group_items_with_min_size(self, data_manager, min_group_size: int = None) -> int:
+        """
+        DataManager のアイテムを pHash でグループ化し、DataManager に反映する。
+        min_group_size を指定すると promote_candidates の閾値を上書きできる。
+        （セラー分析では min_group_size=1 を渡して全商品を候補にする）
+        """
         items = data_manager.get_all_items()
         groups = self.group_by_phash(items)
 
         count = 0
         for group_root, member_ids in groups.items():
-            # group_id は最初のメンバーのIDを使用
             gid = group_root
             data_manager.assign_group(member_ids, gid)
             count += 1
 
         # グループサイズ閾値以上を候補に昇格
-        data_manager.promote_candidates()
+        data_manager.promote_candidates(min_group_size=min_group_size)
         return count
 
     # ─────────────────────────────────────────────

@@ -16,11 +16,42 @@
   </div>
 </header>
 
+<!-- ステップナビゲーション -->
+<nav class="step-nav">
+  <div class="step-nav-inner">
+    <button class="step-tab active" id="stepTab1" onclick="switchStep(1)">
+      <span class="step-num">STEP 1</span>
+      <span class="step-name">🔍 キーワードリサーチ</span>
+      <span class="step-desc">キーワードで検索 → 同一商品グループ化 → 仕入れ候補を抽出</span>
+    </button>
+    <div class="step-arrow">›</div>
+    <button class="step-tab" id="stepTab2" onclick="switchStep(2)">
+      <span class="step-num">STEP 2</span>
+      <span class="step-name">🏪 セラーリサーチ</span>
+      <span class="step-desc">セラーの全商品をスクレイピング → 複数セラーをまたいで比較</span>
+    </button>
+    <div class="step-arrow">›</div>
+    <button class="step-tab" id="stepTab3" onclick="switchStep(3)">
+      <span class="step-num">STEP 3</span>
+      <span class="step-name">📋 マスターセラーリサーチ</span>
+      <span class="step-desc">マスターリストの未スクレイピングセラーをまとめて横断リサーチ</span>
+    </button>
+  </div>
+</nav>
+
+<!-- スクレイピング進捗バナー（動作中のみ表示） -->
+<div id="scrapingBanner" class="scraping-banner" style="display:none">
+  <span id="bannerIcon" class="banner-icon">⚡</span>
+  <span id="bannerMain" class="banner-main"></span>
+  <span id="bannerSub"  class="banner-sub"></span>
+</div>
+
 <!-- コントロールパネル -->
 <section class="control-panel">
-  <div class="control-inner">
 
-    <!-- スクレイピング開始フォーム -->
+  <!-- ══ STEP 1: キーワードリサーチ ══ -->
+  <div id="step1Panel" class="control-inner">
+
     <div class="start-form" id="startForm">
 
       <!-- キーワード（Mac用） -->
@@ -83,6 +114,10 @@
         <div class="stat-num" id="statCandidate">0</div>
         <div class="stat-label">仕入れ候補</div>
       </div>
+      <div class="stat-card stat-next-candidate">
+        <div class="stat-num" id="statNextCandidate">0</div>
+        <div class="stat-label">次期候補</div>
+      </div>
       <div class="stat-card stat-review">
         <div class="stat-num" id="statReview">0</div>
         <div class="stat-label">要確認</div>
@@ -96,7 +131,233 @@
         <div class="stat-label">NG</div>
       </div>
     </div>
-  </div>
+
+    <!-- 過去のSTEP 1セッション一覧 -->
+    <div class="sessions-section" style="margin-top:16px">
+      <div class="sessions-section-header">
+        <span class="sessions-section-title">📂 過去のSTEP 1セッション</span>
+        <button class="btn btn-secondary btn-sm" onclick="loadKeywordSessions()">🔄 更新</button>
+      </div>
+      <div id="step1SessionsList" class="sessions-list-wrap">
+        <span style="color:#9ca3af;font-size:13px">「更新」を押してください</span>
+      </div>
+    </div>
+
+  </div><!-- /step1Panel -->
+
+  <!-- ══ STEP 2: セラーリサーチ ══ -->
+  <div id="step2Panel" class="control-inner" style="display:none">
+    <div class="step2-grid">
+
+      <!-- 左カラム: 過去の分析結果 -->
+      <div class="step2-col step2-col-history">
+        <div class="step2-col-head">
+          <span class="step2-col-icon">📂</span>
+          <span class="step2-col-title">過去の分析結果を読み込む</span>
+          <button class="btn btn-secondary btn-sm" onclick="loadSellerHistory()" style="margin-left:auto">🔄 更新</button>
+        </div>
+        <p class="step2-col-desc">
+          過去に実行したセラー分析の結果をメイン画面に読み込みます。スクレイピングは行いません。
+        </p>
+        <div id="sellerHistoryList" class="seller-history-list">
+          <span style="color:#9ca3af;font-size:13px">「更新」を押すと過去のセッションが表示されます</span>
+        </div>
+      </div>
+
+      <!-- 右カラム: 新規スクレイピング -->
+      <div class="step2-col step2-col-scrape">
+        <div class="step2-col-head">
+          <span class="step2-col-icon">⚡</span>
+          <span class="step2-col-title">新規スクレイピング</span>
+        </div>
+        <p class="step2-col-desc">
+          STEP 1で保存した <strong>results.csv</strong> からセラーIDを抽出し、セラーごとにスクレイピングします。
+          セラーをまたいで同一商品をグループ化して表示します。
+        </p>
+
+        <!-- セラーID取得ボタン群 -->
+        <!-- ① 最速: 現在のSTEP 1結果から直接抽出（CSV不要） -->
+        <div class="seller-source-box seller-source-direct" id="sourceBox1">
+          <div class="seller-source-label">⚡ 最速</div>
+          <button class="btn btn-primary" onclick="loadFromCurrentSession()" id="btnFromSession">
+            🔗 現在のSTEP 1結果からセラーIDを取得
+          </button>
+          <span class="seller-source-hint">現在メモリにある検索結果を直接使用。CSV不要。</span>
+          <div id="sourceInfo1" class="source-selected-info" style="display:none"></div>
+        </div>
+
+        <!-- ② 過去のSTEP 1セッションから選択 -->
+        <div class="seller-source-box" id="sourceBox2">
+          <div class="seller-source-label" style="display:flex;align-items:center;justify-content:space-between">
+            <span>📂 過去のSTEP 1セッションから選択</span>
+            <button class="btn btn-secondary btn-sm" onclick="loadStep2KeywordSessions()" style="font-size:11px;padding:3px 8px">🔄</button>
+          </div>
+          <div id="step2KeywordSessionsList" class="sessions-list-wrap" style="max-height:160px;overflow-y:auto;margin-top:6px">
+            <span style="color:#9ca3af;font-size:12px">🔄 ボタンを押してセッション一覧を更新</span>
+          </div>
+          <div id="sourceInfo2" class="source-selected-info" style="display:none"></div>
+        </div>
+
+        <!-- ③ CSV経由 -->
+        <div class="seller-source-box" id="sourceBox3">
+          <div class="seller-source-label">📁 CSV経由（手動）</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px">
+            <button class="btn btn-secondary btn-sm" onclick="loadLatestCsv()" id="btnLoadLatest">
+              💾 最新の保存済みCSVを使用
+            </button>
+            <label class="btn btn-secondary btn-sm" style="cursor:pointer">
+              📂 CSVファイルを選択
+              <input type="file" id="sellerCsvInput" accept=".csv" style="display:none" onchange="importSellerCsv(this)">
+            </label>
+            <div id="sourceInfo3" class="source-selected-info" style="display:none"></div>
+          </div>
+        </div>
+
+        <!-- 読み込み結果・セラーリスト -->
+        <div id="sellerImportResult" style="display:none">
+          <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px">
+            <strong id="sellerImportSummary"></strong>
+          </div>
+
+          <!-- スクレイピング操作ボタン -->
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:13px;color:#6b7280" id="sellerListMeta"></span>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-success btn-sm" id="btnSellerStart" onclick="startSellerScraping()">
+                ▶ スクレイピング開始
+              </button>
+              <button class="btn btn-warning btn-sm" id="btnSellerStop" onclick="stopSellerScraping()" disabled>
+                ■ 停止
+              </button>
+              <button class="btn btn-secondary btn-sm" onclick="resetSellerScraping()">
+                🗑 リセット
+              </button>
+            </div>
+          </div>
+
+          <!-- 進捗バー -->
+          <div id="sellerProgressWrap" style="display:none;margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+              <span id="sellerProgressLabel">処理中...</span>
+              <span id="sellerProgressCount"></span>
+            </div>
+            <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
+              <div id="sellerProgressBar" style="background:#16a34a;height:100%;width:0%;transition:width .3s"></div>
+            </div>
+          </div>
+
+          <!-- セラーIDリスト -->
+          <div class="seller-list-label">スクレイピング対象セラーID一覧</div>
+          <div style="overflow-y:auto;max-height:200px;border:1px solid #e5e7eb;border-radius:8px">
+            <table style="width:100%;border-collapse:collapse;font-size:13px" id="sellerTable">
+              <thead style="position:sticky;top:0;background:#f9fafb;z-index:1">
+                <tr>
+                  <th style="padding:6px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-weight:600;color:#374151">#</th>
+                  <th style="padding:6px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-weight:600;color:#374151">セラーID</th>
+                  <th style="padding:6px 12px;text-align:center;border-bottom:1px solid #e5e7eb;font-weight:600;color:#374151">状態</th>
+                </tr>
+              </thead>
+              <tbody id="sellerTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /step2-col-scrape -->
+
+    </div><!-- /step2-grid -->
+  </div><!-- /step2Panel -->
+
+  <!-- ══ STEP 3: マスターセラーリサーチ ══ -->
+  <div id="step3Panel" class="control-inner" style="display:none">
+    <div class="step3-grid">
+
+      <!-- 左カラム: マスターリスト一覧 -->
+      <div class="step3-col step3-col-list">
+        <div class="step3-col-head">
+          <span class="step3-col-icon">📋</span>
+          <span class="step3-col-title">マスターセラーリスト</span>
+          <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <button class="btn btn-secondary btn-sm" onclick="loadMasterSellers()">🔄 更新</button>
+            <button class="btn btn-success btn-sm" onclick="exportMasterCsv()" title="マスターリストをCSVで保存">💾 CSV保存</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportMasterHtml()" title="マスターリストをHTMLで書き出し">📄 HTML書き出し</button>
+            <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="seller_id列を含むCSVをインポート">
+              📂 CSV読み込み
+              <input type="file" id="masterCsvInput" accept=".csv" style="display:none" onchange="importMasterCsv(this)">
+            </label>
+          </div>
+        </div>
+        <div id="masterStats" class="master-stats">
+          合計 <strong id="masterTotal">—</strong>件 / 未スクレイピング <strong id="masterUnscraped">—</strong>件
+        </div>
+        <div id="masterSellerList" class="master-seller-list">
+          <span style="color:#9ca3af;font-size:13px">「更新」を押してください</span>
+        </div>
+      </div>
+
+      <!-- 右カラム: スクレイピング設定 -->
+      <div class="step3-col step3-col-scrape">
+        <div class="step3-col-head">
+          <span class="step3-col-icon">⚡</span>
+          <span class="step3-col-title">横断スクレイピング設定</span>
+        </div>
+        <p class="step2-col-desc">
+          マスターリストの<strong>未スクレイピング</strong>セラーを一括でリサーチします。
+          STEP 1実行のたびにマスターリストに新セラーが自動追加されます。
+        </p>
+
+        <div class="master-settings">
+          <!-- 並び順 -->
+          <div class="master-setting-row">
+            <span class="master-setting-label">並び順（first_seen_date）</span>
+            <label class="master-radio">
+              <input type="radio" name="masterSortOrder" value="desc" checked onchange="updateMasterBatchPreview()"> 新しい順
+            </label>
+            <label class="master-radio">
+              <input type="radio" name="masterSortOrder" value="asc" onchange="updateMasterBatchPreview()"> 古い順
+            </label>
+          </div>
+
+          <!-- バッチサイズ -->
+          <div class="master-setting-row">
+            <span class="master-setting-label">バッチサイズ（件数）</span>
+            <select id="masterBatchSize" class="master-select" onchange="updateMasterBatchPreview()">
+              <option value="50">50件</option>
+              <option value="100">100件</option>
+              <option value="200">200件</option>
+              <option value="0">上限なし</option>
+            </select>
+          </div>
+
+          <div class="master-batch-preview" id="masterBatchPreview">
+            対象: <strong id="masterBatchCount">—</strong>件
+          </div>
+        </div>
+
+        <!-- ボタン -->
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-success" id="btnMasterStart" onclick="startMasterScraping()">
+            ▶ スクレイピング開始
+          </button>
+          <button class="btn btn-warning" id="btnMasterStop" onclick="stopMasterScraping()" disabled>
+            ■ 停止
+          </button>
+        </div>
+
+        <!-- 進捗 -->
+        <div id="masterProgressWrap" style="display:none;margin-top:14px">
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+            <span id="masterProgressLabel">処理中...</span>
+            <span id="masterProgressCount"></span>
+          </div>
+          <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
+            <div id="masterProgressBar" style="background:#7c3aed;height:100%;width:0%;transition:width .3s"></div>
+          </div>
+          <div id="masterProgressSeller" style="font-size:12px;color:#6b7280;margin-top:4px"></div>
+        </div>
+      </div>
+
+    </div><!-- /step3-grid -->
+  </div><!-- /step3Panel -->
+
 </section>
 
 <!-- フィルター -->
@@ -108,6 +369,7 @@
         <select id="filterStatus" onchange="applyFilter()">
           <option value="">すべて</option>
           <option value="candidate">仕入れ候補</option>
+          <option value="next_candidate">次期候補</option>
           <option value="waiting">確認待ち</option>
           <option value="review">要確認</option>
           <option value="ok">OK</option>
@@ -141,18 +403,55 @@
       <button class="btn btn-secondary btn-sm" id="btnExportHtml" onclick="exportHtml()">
         📱 HTML書き出し
       </button>
-      <button class="btn btn-secondary btn-sm" id="btnSellerAnalysis" onclick="showSellerAnalysis()">
-        🏪 セラー分析
-      </button>
+      <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="results.csv を読み込んでグリッドに表示します">
+        📂 CSV読み込み
+        <input type="file" id="gridCsvInput" accept=".csv" style="display:none" onchange="loadGridFromCsv(this)">
+      </label>
+    </div>
+
+    <!-- セラー分析専用フィルター（セラー分析モード時のみ表示） -->
+    <div id="sellerAnalysisFilter" class="sa-filter-row" style="display:none">
+      <span class="sa-filter-label">🏪 セラー分析フィルター</span>
+      <button class="btn btn-sm sa-filter-btn" id="saBtnAll"    onclick="setSellerGroupFilter(1)">すべて</button>
+      <button class="btn btn-sm sa-filter-btn" id="saBtnTwo"    onclick="setSellerGroupFilter(2)">2件以上</button>
+      <button class="btn btn-sm sa-filter-btn active" id="saBtnThree" onclick="setSellerGroupFilter(3)">🤖 3件以上（AI判定対象）</button>
     </div>
   </div>
 </section>
 
 <!-- メインコンテンツ：商品グループカード -->
 <main class="main-content">
+  <!-- ソートバー（セラー分析モード時のみ表示） -->
+  <div class="sort-bar" id="sortBar" style="display:none">
+    <span class="sort-label">📊 並び替え</span>
+    <div class="sort-controls">
+      <div class="sort-group">
+        <label for="sortCount">件数</label>
+        <select id="sortCount" onchange="applySort()">
+          <option value="desc">多い順 ↓</option>
+          <option value="asc">少ない順 ↑</option>
+        </select>
+      </div>
+      <div class="sort-group">
+        <label for="sortPrice">価格（最安）</label>
+        <select id="sortPrice" onchange="applySort()">
+          <option value="">指定なし</option>
+          <option value="desc">高い順 ↓</option>
+          <option value="asc">安い順 ↑</option>
+        </select>
+      </div>
+    </div>
+    <span class="sort-hint" id="sortHint">件数 多い順</span>
+  </div>
+
   <div class="groups-header">
     <div id="groupsCount" class="groups-count">グループ: 0件</div>
-    <div class="pagination" id="pagination"></div>
+    <div class="groups-header-right">
+      <button class="btn btn-sm ng-toggle-btn" id="btnNgToggle" onclick="toggleNgList()" style="display:none">
+        ❌ NG一覧を表示 (<span id="ngCount">0</span>件)
+      </button>
+      <div class="pagination" id="pagination"></div>
+    </div>
   </div>
   <div class="groups-grid" id="groupsGrid">
     <div class="empty-state" id="emptyState">
@@ -161,13 +460,23 @@
     </div>
   </div>
   <div class="pagination-bottom" id="paginationBottom"></div>
+
+  <!-- NG一覧セクション（デフォルト非表示） -->
+  <div class="ng-section" id="ngSection" style="display:none">
+    <div class="ng-section-header">
+      <span class="ng-section-title">❌ NG一覧</span>
+      <span class="ng-section-sub" id="ngSectionSub"></span>
+      <button class="btn btn-sm btn-secondary" onclick="toggleNgList()">閉じる ✕</button>
+    </div>
+    <div class="ng-grid" id="ngGrid"></div>
+  </div>
 </main>
 
-<!-- 過去セッション モーダル -->
+<!-- 過去セッション モーダル（STEP 1 キーワードリサーチ用） -->
 <div class="modal-overlay" id="sessionsModal" style="display:none" onclick="hideModal('sessionsModal')">
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-header">
-      <h2>過去のセッション</h2>
+      <h2>過去のセッション（キーワードリサーチ）</h2>
       <button class="modal-close" onclick="hideModal('sessionsModal')">✕</button>
     </div>
     <div class="modal-body" id="sessionsBody">
@@ -196,77 +505,6 @@
     </div>
     <div class="modal-body" id="reportBody">
       <div class="loading">読み込み中...</div>
-    </div>
-  </div>
-</div>
-
-<!-- セラー分析 モーダル -->
-<div class="modal-overlay" id="sellerModal" style="display:none" onclick="hideModal('sellerModal')">
-  <div class="modal modal-large" onclick="event.stopPropagation()" style="max-width:860px;max-height:92vh;display:flex;flex-direction:column">
-    <div class="modal-header">
-      <h2>🏪 セラー分析スクレイピング</h2>
-      <button class="modal-close" onclick="hideModal('sellerModal')">✕</button>
-    </div>
-    <div class="modal-body" id="sellerModalBody" style="overflow-y:auto;flex:1">
-
-      <!-- Step 1: CSVアップロード -->
-      <div id="sellerStep1">
-        <p style="margin-bottom:12px;color:#4b5563;font-size:14px">
-          キーワードスクレイピングで保存した <strong>results.csv</strong> をアップロードすると、含まれるセラーIDを抽出してセラーごとにスクレイピングできます。
-        </p>
-        <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
-          <label class="btn btn-primary" style="cursor:pointer">
-            📂 CSVファイルを選択
-            <input type="file" id="sellerCsvInput" accept=".csv" style="display:none" onchange="importSellerCsv(this)">
-          </label>
-          <span id="sellerCsvName" style="color:#6b7280;font-size:13px">ファイル未選択</span>
-        </div>
-        <div id="sellerImportResult" style="display:none">
-          <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px;margin-bottom:12px;font-size:14px">
-            <strong id="sellerImportSummary"></strong>
-          </div>
-          <!-- セラーリスト -->
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <span style="font-size:13px;color:#6b7280" id="sellerListMeta"></span>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-primary btn-sm" id="btnSellerStart" onclick="startSellerScraping()">
-                ▶ スクレイピング開始
-              </button>
-              <button class="btn btn-warning btn-sm" id="btnSellerStop" onclick="stopSellerScraping()" disabled>
-                ■ 停止
-              </button>
-              <button class="btn btn-secondary btn-sm" onclick="resetSellerScraping()">
-                🗑 リセット
-              </button>
-            </div>
-          </div>
-          <!-- 進捗バー -->
-          <div id="sellerProgressWrap" style="display:none;margin-bottom:12px">
-            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-              <span id="sellerProgressLabel">処理中...</span>
-              <span id="sellerProgressCount"></span>
-            </div>
-            <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
-              <div id="sellerProgressBar" style="background:#2563eb;height:100%;width:0%;transition:width .3s"></div>
-            </div>
-          </div>
-          <!-- セラーテーブル -->
-          <div style="overflow-y:auto;max-height:380px;border:1px solid #e5e7eb;border-radius:8px">
-            <table style="width:100%;border-collapse:collapse;font-size:13px" id="sellerTable">
-              <thead style="position:sticky;top:0;background:#f9fafb;z-index:1">
-                <tr>
-                  <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-weight:600">#</th>
-                  <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-weight:600">セラーID</th>
-                  <th style="padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-weight:600">URL</th>
-                  <th style="padding:8px 12px;text-align:center;border-bottom:1px solid #e5e7eb;font-weight:600">状態</th>
-                </tr>
-              </thead>
-              <tbody id="sellerTableBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
     </div>
   </div>
 </div>

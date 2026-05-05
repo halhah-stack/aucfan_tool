@@ -15,14 +15,228 @@ const state = {
   filterMinGroup: 1,
   refreshInterval: null,
   sseSource: null,
+  isSellerAnalysis: false,   // セラー分析モードかどうか
+  sellerDetailMinGroup: 3,   // Gemini判定対象の最小グループ件数（サーバーから取得）
+  activeStep: 1,             // 現在アクティブなステップ (1 or 2)
+  showNgList: false,         // NG一覧の表示/非表示
+  sortCount: 'desc',         // 'desc'=件数多い順 / 'asc'=件数少ない順
+  sortPrice: '',             // ''=指定なし / 'desc'=価格高い順 / 'asc'=価格安い順
+  allGroups: [],             // クライアントサイドソート用キャッシュ
 };
 
 // ─── 初期化 ───
 document.addEventListener('DOMContentLoaded', () => {
   startSSE();
   loadGroups();
+  loadKeywordSessions(); // STEP 1 セッション一覧を初期表示
   setInterval(loadGroups, 8000); // 8秒ごとに自動更新
 });
+
+// ─────────────────────────────────────────────
+// ステップ切り替え
+// ─────────────────────────────────────────────
+function switchStep(step) {
+  state.activeStep = step;
+
+  const p1 = document.getElementById('step1Panel');
+  const p2 = document.getElementById('step2Panel');
+  const p3 = document.getElementById('step3Panel');
+  const t1 = document.getElementById('stepTab1');
+  const t2 = document.getElementById('stepTab2');
+  const t3 = document.getElementById('stepTab3');
+
+  if (p1) p1.style.display = step === 1 ? '' : 'none';
+  if (p2) p2.style.display = step === 2 ? '' : 'none';
+  if (p3) p3.style.display = step === 3 ? '' : 'none';
+  if (t1) t1.classList.toggle('active', step === 1);
+  if (t2) t2.classList.toggle('active', step === 2);
+  if (t3) t3.classList.toggle('active', step === 3);
+
+  if (step === 1) {
+    loadKeywordSessions();
+  }
+  if (step === 2) {
+    loadSellerHistory();
+    loadStep2KeywordSessions();
+    fetchSellerStatus(/* silent */ true);
+  }
+  if (step === 3) {
+    loadMasterSellers();
+    fetchMasterStatus(/* silent */ true);
+  }
+}
+
+// ─────────────────────────────────────────────
+// セッション名パーサー（共通ユーティリティ）
+// ─────────────────────────────────────────────
+
+/**
+ * セッション名 "キーワード_YYYYMMDD_HHMMSS" を分解して表示用オブジェクトを返す。
+ * seller_analysis_ プレフィックスは除去してラベル化する。
+ */
+function parseSessionName(name) {
+  const m = name.match(/^(.+?)_(\d{8})_(\d{6})$/);
+  if (!m) return { label: name, dateStr: '' };
+  let [, kw, date, time] = m;
+  const y  = date.slice(0, 4), mo = date.slice(4, 6), d = date.slice(6, 8);
+  const h  = time.slice(0, 2), mi = time.slice(2, 4);
+  return {
+    label: kw === 'seller_analysis' ? 'セラー分析' : kw,
+    dateStr: `${y}/${mo}/${d} ${h}:${mi}`,
+  };
+}
+
+/**
+ * ステータスラベルを色付きスパンで返す
+ */
+function sessionStatusSpan(status) {
+  const map = {
+    done:    '<span class="meta-status-done">✅ 完了</span>',
+    stopped: '<span class="meta-status-stopped">⏹ 停止</span>',
+    error:   '<span class="meta-status-error">❌ エラー</span>',
+  };
+  return map[status] || `<span>${escHtml(status || '—')}</span>`;
+}
+
+// ─────────────────────────────────────────────
+// STEP 1: キーワードセッション一覧
+// ─────────────────────────────────────────────
+
+async function loadKeywordSessions() {
+  const el = document.getElementById('step1SessionsList');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#9ca3af;font-size:13px">読み込み中...</span>';
+
+  const data = await fetchJSON('/api/sessions');
+  const sessions = (data.sessions || []).filter(s => s.session_type === 'keyword');
+
+  if (sessions.length === 0) {
+    el.innerHTML = '<span style="color:#9ca3af;font-size:13px">過去のSTEP 1セッションはありません</span>';
+    return;
+  }
+
+  el.innerHTML = sessions.map(s => {
+    const { label, dateStr } = parseSessionName(s.name);
+    return `
+    <div class="session-row">
+      <div class="session-row-info">
+        <div class="session-row-keyword">${escHtml(label)}</div>
+        <div class="session-row-meta">
+          <span class="meta-count">${(s.total_items || 0).toLocaleString()}件</span>
+          <span class="meta-date">${dateStr}</span>
+          ${sessionStatusSpan(s.status)}
+        </div>
+      </div>
+      <div class="session-row-actions">
+        <button class="btn btn-secondary btn-sm"
+                title="このセッションをメイン画面に表示"
+                onclick="loadSession('${escHtml(s.name)}')">📂 ロード</button>
+        <button class="btn btn-success btn-sm"
+                title="このセッションのセラーIDをSTEP 2にセット"
+                onclick="sellerIdsFromSession('${escHtml(s.name)}')">→ STEP 2</button>
+        <button class="btn-delete"
+                title="このセッションを削除（復元不可）"
+                onclick="deleteSession('${escHtml(s.name)}', 'keyword')">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// STEP 2 右カラム: STEP 1セッション選択リスト
+// ─────────────────────────────────────────────
+
+async function loadStep2KeywordSessions() {
+  const el = document.getElementById('step2KeywordSessionsList');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#9ca3af;font-size:12px">読み込み中...</span>';
+
+  const data = await fetchJSON('/api/sessions');
+  const sessions = (data.sessions || []).filter(s => s.session_type === 'keyword');
+
+  if (sessions.length === 0) {
+    el.innerHTML = '<span style="color:#9ca3af;font-size:12px">過去のSTEP 1セッションはありません</span>';
+    return;
+  }
+
+  el.innerHTML = sessions.map(s => {
+    const { label, dateStr } = parseSessionName(s.name);
+    return `
+    <div class="session-row" style="margin-bottom:4px;padding:6px 8px">
+      <div class="session-row-info">
+        <div class="session-row-keyword" style="font-size:12px">${escHtml(label)}</div>
+        <div class="session-row-meta">
+          <span class="meta-count">${(s.total_items || 0).toLocaleString()}件</span>
+          <span class="meta-date">${dateStr}</span>
+        </div>
+      </div>
+      <div class="session-row-actions">
+        <button class="btn btn-primary btn-sm"
+                style="font-size:11px;padding:4px 10px"
+                onclick="sellerIdsFromSession('${escHtml(s.name)}')">このセッションを使用</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// 指定セッションからセラーIDを抽出してSTEP 2にセット
+// ─────────────────────────────────────────────
+
+async function sellerIdsFromSession(sessionName) {
+  showToast(`⏳ ${sessionName} からセラーIDを取得中...`);
+
+  const res = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionName)}/seller_ids`, 'POST');
+  if (res.error) {
+    showToast('❌ ' + res.error, 'error');
+    return;
+  }
+
+  const { label, dateStr } = parseSessionName(sessionName);
+  setActiveSource('sourceBox2',
+    `✅ 使用中: 「${escHtml(label)}」（${dateStr}）${res.count}件`);
+  document.getElementById('sellerImportSummary').textContent =
+    `${res.count} 件のユニークセラーIDを取得しました（seller_url: ${res.has_seller_url ? 'あり ✅' : 'なし ⚠ フォールバックURLを使用'}）`;
+
+  renderSellerTable(res.sellers);
+  document.getElementById('sellerImportResult').style.display = 'block';
+  document.getElementById('sellerListMeta').textContent = `${res.count} 件`;
+
+  // STEP 2 に切り替え
+  switchStep(2);
+  showToast(`✅ ${res.count} 件のセラーIDをセットしました`);
+}
+
+// ─────────────────────────────────────────────
+// セッション削除
+// ─────────────────────────────────────────────
+
+async function deleteSession(sessionName, sessionType) {
+  const { label, dateStr } = parseSessionName(sessionName);
+  const displayName = `${label}（${dateStr}）`;
+
+  if (!confirm(`「${displayName}」を削除しますか？\n\n画像を含むフォルダが完全に削除されます。この操作は取り消せません。`)) {
+    return;
+  }
+
+  const res = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionName)}`, 'DELETE');
+  if (!res.success) {
+    showToast('❌ 削除失敗: ' + (res.message || '不明なエラー'), 'error');
+    return;
+  }
+
+  showToast(`🗑 「${displayName}」を削除しました`);
+
+  // 種別に応じてリストを再読み込み
+  if (sessionType === 'keyword') {
+    loadKeywordSessions();
+    loadStep2KeywordSessions();
+  } else {
+    loadSellerHistory();
+  }
+  // 削除したセッションが現在表示中なら画面をリフレッシュ
+  loadGroups();
+}
 
 // ─────────────────────────────────────────────
 // SSE（リアルタイム進捗）
@@ -51,10 +265,20 @@ function updateProgressUI(data) {
   const { progress, stats, is_running } = data;
   state.isRunning = is_running;
 
+  // セラー分析モード切り替え
+  const prevSellerMode = state.isSellerAnalysis;
+  state.isSellerAnalysis = data.is_seller_analysis || false;
+  const saFilter = document.getElementById('sellerAnalysisFilter');
+  if (saFilter) saFilter.style.display = state.isSellerAnalysis ? '' : 'none';
+  // モードが切り替わったらグループを再描画（バッジ表示を更新）
+  if (prevSellerMode !== state.isSellerAnalysis) loadGroups();
+
   // ヘッダーステータス
   const statusLabels = {
     idle: '待機中', scraping_list: '一覧取得中', scraping_detail: '詳細取得中',
-    grouping: 'グループ化中', done: '完了', stopped: '停止済み', error: 'エラー',
+    grouping: 'グループ化中', vision_check: '🤖 Vision判定中',
+    done: '完了', stopped: '停止済み', error: 'エラー',
+    candidate: '仕入れ候補', next_candidate: '次期候補',
   };
   const statusEl = document.getElementById('headerStatus');
   if (statusEl) {
@@ -110,14 +334,63 @@ function updateProgressUI(data) {
   if (btnStart) btnStart.disabled = is_running;
   if (btnStop) btnStop.disabled = !is_running;
 
+  // ── スクレイピングバナー更新（キーワードリサーチ用） ──
+  // セラー分析中は fetchSellerStatus 側でバナーを管理するためスキップ
+  if (!state.isSellerAnalysis) {
+    if (is_running) {
+      const phaseText = {
+        scraping_list:   '一覧取得中',
+        scraping_detail: '詳細取得中',
+        grouping:        'グループ化中',
+        vision_check:    '🤖 Vision判定中',
+      }[progress.status] || progress.status;
+
+      const pageInfo = progress.status === 'scraping_list'
+        ? `ページ ${progress.pages_done || 0} / ${config_MAX_PAGES}`
+        : progress.status === 'scraping_detail'
+          ? `詳細 ${progress.detail_pages_done || 0} / ${progress.detail_pages_total || '?'} 件`
+          : '';
+
+      updateBanner({
+        isActive: true,
+        main: `${phaseText}...`,
+        sub:  `商品 ${progress.total_items || 0}件取得中${pageInfo ? '  |  ' + pageInfo : ''}`,
+      });
+    } else if (progress.status === 'done') {
+      updateBanner({
+        isActive: true, icon: '✅', type: 'done',
+        main: '完了',
+        sub:  `商品 ${progress.total_items || 0}件取得`,
+        autohide: 10000,
+      });
+    } else if (progress.status === 'stopped') {
+      updateBanner({
+        isActive: true, icon: '⏹', type: 'stopped',
+        main: '停止',
+        sub:  `商品 ${progress.total_items || 0}件取得`,
+        autohide: 8000,
+      });
+    } else if (progress.status === 'error') {
+      updateBanner({
+        isActive: true, icon: '❌', type: 'error',
+        main: 'エラーが発生しました',
+        sub:  'ターミナルのログを確認してください',
+        autohide: 15000,
+      });
+    } else {
+      updateBanner({ isActive: false });
+    }
+  }
+
   // 統計（仕入れ候補・OK・NG・要確認はグループ単位、取得件数はアイテム総数）
   if (stats) {
     const byStatus = stats.by_status || {};
     setText('statTotal', stats.total || 0);
-    setText('statCandidate', byStatus.candidate || 0);   // グループ数
-    setText('statReview', byStatus.review || 0);         // グループ数
-    setText('statOk', byStatus.ok || 0);                 // グループ数
-    setText('statNg', byStatus.ng || 0);                 // グループ数
+    setText('statCandidate', byStatus.candidate || 0);          // グループ数
+    setText('statNextCandidate', byStatus.next_candidate || 0); // グループ数
+    setText('statReview', byStatus.review || 0);                // グループ数
+    setText('statOk', byStatus.ok || 0);                       // グループ数
+    setText('statNg', byStatus.ng || 0);                       // グループ数
   }
 }
 
@@ -209,7 +482,11 @@ async function stopScraping() {
 // 商品グループ取得・描画
 // ─────────────────────────────────────────────
 async function loadGroups(page) {
+  const isPageChange = !!page;   // ユーザーがページボタンを押したか
   if (page) state.currentPage = page;
+
+  // セラー分析モードは全件まとめて取得してクライアントソートしやすくする
+  const perPage = state.isSellerAnalysis ? 300 : 50;
 
   const params = new URLSearchParams({
     status: state.filterStatus,
@@ -218,7 +495,7 @@ async function loadGroups(page) {
     max_price: state.filterMaxPrice,
     min_group: state.filterMinGroup,
     page: state.currentPage,
-    per_page: 50,
+    per_page: perPage,
   });
 
   const data = await fetchJSON(`/api/items?${params}`);
@@ -227,33 +504,219 @@ async function loadGroups(page) {
   state.totalPages = data.total_pages || 1;
   state.totalGroups = data.total_groups || 0;
 
-  renderGroups(data.groups);
+  // セラー分析フラグとGemini対象閾値をAPIから取得
+  if (data.is_seller_analysis !== undefined) {
+    const wasSellerAnalysis = state.isSellerAnalysis;
+    state.isSellerAnalysis = data.is_seller_analysis;
+    const saFilter = document.getElementById('sellerAnalysisFilter');
+    if (saFilter) saFilter.style.display = state.isSellerAnalysis ? '' : 'none';
+    // ソートバーの表示切替
+    const sortBar = document.getElementById('sortBar');
+    if (sortBar) sortBar.style.display = state.isSellerAnalysis ? '' : 'none';
+    // セラー分析モードなら STEP 2 タブへ自動切り替え
+    if (state.isSellerAnalysis && state.activeStep === 1) {
+      switchStep(2);
+    }
+    // セラー分析モードを初めて検出したとき per_page=300 で再取得
+    if (!wasSellerAnalysis && state.isSellerAnalysis) {
+      loadGroups(1);
+      return;
+    }
+  }
+  if (data.seller_detail_min_group !== undefined) {
+    state.sellerDetailMinGroup = data.seller_detail_min_group;
+  }
+
+  // クライアントサイドソート用にグループをキャッシュ
+  state.allGroups = data.groups || [];
+
+  // ソート適用してレンダリング
+  renderGroups(sortGroups(state.allGroups));
   renderPagination();
   setText('groupsCount', `グループ: ${state.totalGroups}件`);
+  updateSortHint();
+
+  // ページ切り替え時はグリッド先頭へスクロール
+  if (isPageChange) {
+    const target = document.getElementById('sortBar') &&
+                   document.getElementById('sortBar').offsetParent
+      ? document.getElementById('sortBar')
+      : document.getElementById('groupsGrid');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
 function renderGroups(groups) {
   const grid = document.getElementById('groupsGrid');
   const empty = document.getElementById('emptyState');
 
-  if (!groups || groups.length === 0) {
+  // NG グループを分離（メイングリッドには表示しない）
+  const ngGroups = (groups || []).filter(g => g.status === 'ng');
+  const mainGroups = (groups || []).filter(g => g.status !== 'ng');
+
+  if (mainGroups.length === 0) {
     grid.innerHTML = '';
     if (empty) {
       empty.style.display = '';
       grid.appendChild(empty);
     }
+  } else {
+    if (empty) empty.style.display = 'none';
+    grid.innerHTML = mainGroups.map(g => renderGroupCard(g)).join('');
+  }
+
+  // NG セクションを更新
+  renderNgList(ngGroups);
+}
+
+// ─────────────────────────────────────────────
+// クライアントサイド ソート
+// ─────────────────────────────────────────────
+
+/** グループの「最安合計価格（送料込み）」を返すヘルパー */
+function getGroupMinTotal(group) {
+  if (!group.items || group.items.length === 0) return group.min_price || 0;
+  return Math.min(
+    ...group.items.map(i => i.total || ((i.price || 0) + (i.shipping || 0)))
+  );
+}
+
+/** state.sortCount / state.sortPrice に従いグループ配列をソートして返す */
+function sortGroups(groups) {
+  if (!groups || groups.length === 0) return groups || [];
+  const countDir = state.sortCount === 'asc' ? 1 : -1;
+  const priceDir = state.sortPrice === 'asc' ? 1 : -1;
+  return [...groups].sort((a, b) => {
+    // 1st key: 件数
+    const cd = ((a.count || 0) - (b.count || 0)) * countDir;
+    if (cd !== 0) return cd;
+    // 2nd key: 価格（指定があれば）
+    if (!state.sortPrice) return 0;
+    return (getGroupMinTotal(a) - getGroupMinTotal(b)) * priceDir;
+  });
+}
+
+/** ソート選択変更時：キャッシュを再ソートして再描画（API再取得なし） */
+function applySort() {
+  const selCount = document.getElementById('sortCount');
+  const selPrice = document.getElementById('sortPrice');
+  if (selCount) state.sortCount = selCount.value;
+  if (selPrice) state.sortPrice = selPrice.value;
+  if (state.allGroups.length > 0) {
+    renderGroups(sortGroups(state.allGroups));
+  }
+  updateSortHint();
+}
+
+/** ソートバーのヒント文字列を更新 */
+function updateSortHint() {
+  const hint = document.getElementById('sortHint');
+  if (!hint) return;
+  const countLabel = state.sortCount === 'asc' ? '件数 少ない順' : '件数 多い順';
+  const priceLabel = state.sortPrice === 'asc' ? '価格 安い順'
+    : state.sortPrice === 'desc' ? '価格 高い順' : '';
+  hint.textContent = priceLabel
+    ? `${countLabel} → ${priceLabel}`
+    : countLabel;
+}
+
+function renderNgList(ngGroups) {
+  const btn = document.getElementById('btnNgToggle');
+  const section = document.getElementById('ngSection');
+  const ngCount = document.getElementById('ngCount');
+  const ngGrid = document.getElementById('ngGrid');
+  const ngSub = document.getElementById('ngSectionSub');
+
+  const totalNgItems = ngGroups.reduce((sum, g) => sum + (g.count || 1), 0);
+
+  if (!ngGroups || ngGroups.length === 0) {
+    if (btn) btn.style.display = 'none';
+    if (section && !state.showNgList) section.style.display = 'none';
     return;
   }
 
-  if (empty) empty.style.display = 'none';
-  grid.innerHTML = groups.map(g => renderGroupCard(g)).join('');
+  // トグルボタン表示
+  if (btn) {
+    btn.style.display = '';
+    if (ngCount) ngCount.textContent = totalNgItems;
+    btn.textContent = state.showNgList
+      ? `❌ NG一覧を隠す`
+      : `❌ NG一覧を表示 (${totalNgItems}件)`;
+  }
+  if (ngSub) {
+    ngSub.textContent = `${totalNgItems}件 / ${ngGroups.length}グループ`;
+  }
+
+  // NG カード描画
+  if (ngGrid) {
+    ngGrid.innerHTML = ngGroups.map(g => {
+      const item = g.items[0];
+      const thumb = item.thumbnail_local
+        ? `/images/${getFilename(item.thumbnail_local)}` : '';
+      const title = item.title_full || item.title_short || '（タイトル不明）';
+      const reason = item.exclude_reason || item.gemini_reason || '';
+      const src = item.gemini_source || '';
+      const badge = src === 'vision'
+        ? '<span class="ng-badge ng-badge-vision">🤖 Vision NG</span>'
+        : src === 'text'
+          ? '<span class="ng-badge ng-badge-text">📝 テキスト NG</span>'
+          : '<span class="ng-badge ng-badge-manual">手動 NG</span>';
+      const thumbHtml = thumb
+        ? `<img class="ng-thumb" src="${thumb}" alt=""
+               onerror="this.outerHTML='<div class=ng-thumb-placeholder>📦</div>'">`
+        : '<div class="ng-thumb-placeholder">📦</div>';
+      const countBadge = g.count > 1
+        ? `<span class="ng-count-badge">${g.count}件</span>` : '';
+
+      return `
+        <div class="ng-item">
+          ${thumbHtml}
+          <div class="ng-item-info">
+            <div class="ng-item-title">${escHtml(title)}${countBadge}</div>
+            ${reason ? `<div class="ng-item-reason">${escHtml(reason)}</div>` : ''}
+            <div class="ng-item-footer">${badge}
+              <button class="btn btn-sm btn-secondary ng-restore-btn"
+                      onclick="updateGroupStatus('${g.group_id}', 'waiting')">↩ 解除</button>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+}
+
+function toggleNgList() {
+  state.showNgList = !state.showNgList;
+  const section = document.getElementById('ngSection');
+  const btn = document.getElementById('btnNgToggle');
+  const ngCount = document.getElementById('ngCount');
+  if (section) section.style.display = state.showNgList ? '' : 'none';
+  if (btn) {
+    btn.textContent = state.showNgList
+      ? `❌ NG一覧を隠す`
+      : `❌ NG一覧を表示 (${ngCount ? ngCount.textContent : '0'}件)`;
+  }
 }
 
 function renderGroupCard(group) {
   const statusClass = group.status || 'waiting';
   const statusLabel = {
-    candidate: '仕入れ候補', waiting: '確認待ち', review: '要確認', ok: '✅ OK', ng: '❌ NG'
+    candidate: '仕入れ候補', next_candidate: '次期候補',
+    waiting: '確認待ち', review: '要確認', ok: '✅ OK', ng: '❌ NG'
   }[statusClass] || statusClass;
+
+  // セラー分析モード：グループサイズに応じたバッジを生成
+  let sellerGroupBadge = '';
+  if (state.isSellerAnalysis) {
+    const gs = group.count;
+    const minG = state.sellerDetailMinGroup;
+    if (gs >= minG) {
+      sellerGroupBadge = `<span class="sa-group-badge sa-badge-ai">🤖 AI判定対象</span>`;
+    } else if (gs === 2) {
+      sellerGroupBadge = `<span class="sa-group-badge sa-badge-watch">👀 2件一致</span>`;
+    } else {
+      sellerGroupBadge = `<span class="sa-group-badge sa-badge-ref">参考</span>`;
+    }
+  }
 
   // 【現在】サムネイルがある件数だけ表示（最大20枚）し、件数バッジと一致させる（2025-05-03 変更）
   // 【元に戻す場合】以下の4行をこのブロックと差し替える:
@@ -281,9 +744,18 @@ function renderGroupCard(group) {
   const shipping = firstItem.shipping || 0;
   const total = firstItem.total || (price + shipping);
 
-  // セラーID（最大5人）
-  const sellerBadges = (group.seller_ids || []).slice(0, 5)
+  // セラーID（全員表示、5件超は "+N" で省略）
+  const allSellers = (group.seller_ids || []).filter(Boolean);
+  const maxShow = 5;
+  const shownSellers = allSellers.slice(0, maxShow);
+  const extraCount = allSellers.length - shownSellers.length;
+  const sellerBadges = shownSellers
     .map(s => `<span class="seller-badge">${escHtml(s)}</span>`).join('');
+  const sellerExtra = extraCount > 0
+    ? `<span class="seller-more">+${extraCount}</span>` : '';
+  const sellerCountLabel = allSellers.length > 1
+    ? `<span class="seller-count-label">${allSellers.length}名</span>` : '';
+  const multiSellerClass = allSellers.length > 1 ? ' multi-seller' : '';
 
   // アリプライス・Amazon検索URL
   const searchTitle = encodeURIComponent((group.title || '').substring(0, 50));
@@ -305,6 +777,7 @@ function renderGroupCard(group) {
     <div class="card-body">
       <div class="card-title" onclick="openItemDetail('${firstItemId}')"
            title="${escHtml(group.title)}">${escHtml(group.title || '（タイトル取得中）')}</div>
+      ${sellerGroupBadge}
       <div class="card-price-row">
         <div>
           <div class="card-price-label">合計</div>
@@ -319,7 +792,9 @@ function renderGroupCard(group) {
           <div class="price-val">${shipping === 0 ? '無料' : '¥' + shipping.toLocaleString()}</div>
         </div>
       </div>
-      <div class="card-sellers">出品者: ${sellerBadges || '—'}</div>
+      <div class="card-sellers${multiSellerClass}">
+        出品者${sellerCountLabel}: ${sellerBadges || '—'}${sellerExtra}
+      </div>
     </div>
     <div class="card-actions">
       <a class="btn btn-secondary btn-sm" href="${aliprice_url}" target="_blank" rel="noopener">
@@ -552,11 +1027,30 @@ function buildPaginationHTML() {
     prev = p;
   });
 
-  return pages.map(p => {
+  const btnHTML = pages.map(p => {
     if (p === '...') return `<span style="padding:5px 4px;color:#9ca3af">…</span>`;
     const active = p === cur ? 'active' : '';
     return `<button class="page-btn ${active}" onclick="loadGroups(${p})">${p}</button>`;
   }).join('');
+
+  const jumpHTML = `
+    <span class="page-jump">
+      <span class="page-jump-label">ページ指定:</span>
+      <input class="page-jump-input" type="number" min="1" max="${total}"
+             value="${cur}" id="pageJumpInput"
+             onkeydown="if(event.key==='Enter') jumpToPage(this.value)">
+      <span class="page-jump-total">/ ${total}</span>
+      <button class="page-jump-btn" onclick="jumpToPage(document.getElementById('pageJumpInput').value)">移動</button>
+    </span>`;
+
+  return btnHTML + jumpHTML;
+}
+
+function jumpToPage(val) {
+  const n = parseInt(val, 10);
+  if (isNaN(n)) return;
+  const page = Math.max(1, Math.min(state.totalPages, n));
+  loadGroups(page);
 }
 
 // ─────────────────────────────────────────────
@@ -726,16 +1220,226 @@ function renderReport(data) {
 let sellerPollTimer = null;
 
 function showSellerAnalysis() {
-  document.getElementById('sellerModal').style.display = 'flex';
-  // すでにセラーリストがあれば状態を復元
-  fetchSellerStatus(/* silent */ true);
+  // STEP 2 タブへ切り替え（後方互換性のため残す）
+  switchStep(2);
+}
+
+// ─────────────────────────────────────────────
+// スクレイピング進捗バナー
+// ─────────────────────────────────────────────
+let _bannerHideTimer = null;
+
+/**
+ * 画面上部バナーを更新する。
+ * @param {object} opts
+ *   isActive  {bool}   バナーを表示するか
+ *   icon      {string} 先頭アイコン
+ *   main      {string} 太字メインテキスト
+ *   sub       {string} サブテキスト（薄い色）
+ *   type      {string} '' | 'done' | 'stopped' | 'error'  背景色を切り替える
+ *   autohide  {number} ms後に自動的に非表示 (0=しない)
+ */
+function updateBanner({ isActive, icon = '⚡', main = '', sub = '', type = '', autohide = 0 } = {}) {
+  const banner = document.getElementById('scrapingBanner');
+  if (!banner) return;
+
+  clearTimeout(_bannerHideTimer);
+
+  if (!isActive) {
+    banner.style.display = 'none';
+    return;
+  }
+
+  banner.style.display = '';
+  banner.className = 'scraping-banner' + (type ? ` banner-${type}` : '');
+  setText('bannerIcon', icon);
+  setText('bannerMain', main);
+  setText('bannerSub',  sub);
+
+  if (autohide > 0) {
+    _bannerHideTimer = setTimeout(() => { banner.style.display = 'none'; }, autohide);
+  }
+}
+
+// ─────────────────────────────────────────────
+// セラー分析：グループサイズ クイックフィルター
+// ─────────────────────────────────────────────
+function setSellerGroupFilter(minGroup) {
+  state.filterMinGroup = minGroup;
+  state.currentPage = 1;
+  document.getElementById('filterMinGroup').value = minGroup;
+
+  // ボタンのアクティブ状態を更新
+  ['saBtnAll', 'saBtnTwo', 'saBtnThree'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.classList.remove('active');
+  });
+  const map = { 1: 'saBtnAll', 2: 'saBtnTwo', 3: 'saBtnThree' };
+  const activeId = map[minGroup] || 'saBtnAll';
+  const activeBtn = document.getElementById(activeId);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  loadGroups();
+}
+
+// ─────────────────────────────────────────────
+// セラー分析：過去セッション読み込み
+// ─────────────────────────────────────────────
+async function loadSellerHistory() {
+  const listEl = document.getElementById('sellerHistoryList');
+  if (!listEl) return;
+  listEl.innerHTML = '<span style="color:#6b7280">読み込み中...</span>';
+
+  const data = await fetchJSON('/api/sessions');
+  const sessions = (data.sessions || []).filter(s => s.session_type === 'seller');
+
+  if (sessions.length === 0) {
+    listEl.innerHTML = '<span style="color:#9ca3af">過去のセラー分析セッションはありません</span>';
+    return;
+  }
+
+  listEl.innerHTML = sessions.map(s => {
+    const { dateStr } = parseSessionName(s.name);
+    return `
+    <div class="session-row">
+      <div class="session-row-info">
+        <div class="session-row-keyword" style="font-size:12px">🏪 セラー分析</div>
+        <div class="session-row-meta">
+          <span class="meta-count">${(s.total_items || 0).toLocaleString()}件</span>
+          <span class="meta-date">${dateStr}</span>
+          ${sessionStatusSpan(s.status)}
+        </div>
+      </div>
+      <div class="session-row-actions">
+        <button class="btn btn-secondary btn-sm"
+                style="font-size:11px;padding:4px 10px;white-space:nowrap"
+                title="このセッションの分析結果をメイン画面に表示します"
+                onclick="loadSellerSession('${escHtml(s.name)}')">📊 結果を表示</button>
+        <button class="btn-delete"
+                title="このセッションを削除（復元不可）"
+                onclick="deleteSession('${escHtml(s.name)}', 'seller')">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadSellerSession(sessionName) {
+  const res = await fetchJSON(`/api/sessions/${sessionName}/load`, 'POST');
+  if (res.success) {
+    showToast(`セラー分析「${sessionName}」を読み込みました（${res.total_items}件）`);
+    // モーダルではなくインライン表示のためクローズ不要
+    loadGroups();
+  } else {
+    showToast('❌ 読み込み失敗', 'error');
+  }
+}
+
+// ─────────────────────────────────────────────
+// アクティブソース表示ヘルパー
+// ─────────────────────────────────────────────
+
+/**
+ * 3つのソースボックスのうち1つをアクティブ表示にして、情報テキストを表示する。
+ * @param {'sourceBox1'|'sourceBox2'|'sourceBox3'} activeId  アクティブにするボックスのID
+ * @param {string} infoHtml  そのボックスに表示するHTMLテキスト（空文字で非表示）
+ */
+function setActiveSource(activeId, infoHtml) {
+  const boxes = ['sourceBox1', 'sourceBox2', 'sourceBox3'];
+  const infos = ['sourceInfo1', 'sourceInfo2', 'sourceInfo3'];
+
+  // 全ボックスのアクティブ状態と情報をリセット
+  boxes.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('source-active');
+  });
+  infos.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.innerHTML = ''; el.style.display = 'none'; }
+  });
+
+  // 選択されたボックスをアクティブに
+  const activeBox = document.getElementById(activeId);
+  if (activeBox) activeBox.classList.add('source-active');
+
+  // 情報テキストを対応するinfoエレメントに表示
+  const infoIndex = boxes.indexOf(activeId);
+  if (infoIndex >= 0 && infoHtml) {
+    const infoEl = document.getElementById(infos[infoIndex]);
+    if (infoEl) { infoEl.innerHTML = infoHtml; infoEl.style.display = ''; }
+  }
+}
+
+// ─────────────────────────────────────────────
+// セラー分析：現在のSTEP 1結果から直接セラーIDを取得（CSV不要）
+// ─────────────────────────────────────────────
+async function loadFromCurrentSession() {
+  const btn = document.getElementById('btnFromSession');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 取得中...'; }
+
+  try {
+    const res = await fetch('/api/seller_ids_from_current_session', { method: 'POST' });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      showToast('❌ ' + (data.error || '取得失敗'), 'error');
+      return;
+    }
+
+    const hasUrl = data.has_seller_url;
+    setActiveSource('sourceBox1',
+      `✅ 使用中: 現在のセッション「${escHtml(data.keyword || '—')}」（${data.count}件）`);
+    document.getElementById('sellerImportSummary').textContent =
+      `${data.count} 件のユニークセラーIDを取得しました（seller_url: ${hasUrl ? 'あり ✅' : 'なし ⚠ フォールバックURLを使用'}）`;
+
+    renderSellerTable(data.sellers);
+    document.getElementById('sellerImportResult').style.display = 'block';
+    document.getElementById('sellerListMeta').textContent = `${data.count} 件`;
+    showToast(`✅ ${data.count} 件のセラーIDを取得しました`);
+
+  } catch (e) {
+    showToast('❌ 取得に失敗しました: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔗 現在のSTEP 1結果からセラーIDを取得'; }
+  }
+}
+
+async function loadLatestCsv() {
+  const btn = document.getElementById('btnLoadLatest');
+  btn.disabled = true;
+  btn.textContent = '⏳ 読み込み中...';
+
+  try {
+    const res = await fetch('/api/latest_csv_import', { method: 'POST' });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      showToast(data.error || '読み込み失敗', 'error');
+      return;
+    }
+
+    const hasUrl = data.has_seller_url;
+    const { label, dateStr } = parseSessionName(data.session_name || '');
+    setActiveSource('sourceBox3',
+      `✅ 使用中: 「${escHtml(label || data.session_name)}」（${dateStr}）${data.count}件`);
+    document.getElementById('sellerImportSummary').textContent =
+      `${data.count} 件のユニークセラーIDを読み込みました（seller_url: ${hasUrl ? 'あり ✅' : 'なし ⚠ フォールバックURLを使用'}）`;
+
+    renderSellerTable(data.sellers);
+    document.getElementById('sellerImportResult').style.display = 'block';
+    document.getElementById('sellerListMeta').textContent = `${data.count} 件`;
+    showToast(`最新結果から ${data.count} 件のセラーIDを読み込みました`);
+
+  } catch (e) {
+    showToast('読み込みに失敗しました: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 最新の保存済みCSVを使用';
+  }
 }
 
 async function importSellerCsv(input) {
   const file = input.files[0];
   if (!file) return;
-
-  document.getElementById('sellerCsvName').textContent = file.name;
 
   const formData = new FormData();
   formData.append('file', file);
@@ -750,6 +1454,8 @@ async function importSellerCsv(input) {
     }
 
     const hasUrl = data.has_seller_url;
+    setActiveSource('sourceBox3',
+      `✅ 使用中: 📁 ${escHtml(file.name)}（${data.count}件）`);
     document.getElementById('sellerImportSummary').textContent =
       `${data.count} 件のユニークセラーIDを抽出しました（seller_url: ${hasUrl ? 'あり ✅' : 'なし ⚠ フォールバックURLを使用'}）`;
 
@@ -767,15 +1473,13 @@ function renderSellerTable(sellers) {
   const tbody = document.getElementById('sellerTableBody');
   if (!tbody) return;
 
+  // URL列は表示しない（各行にボタン・リンクを置かず、一覧は表示のみ）
+  // スクレイピングは「▶ スクレイピング開始」ボタン1つで全セラーを一括処理
   tbody.innerHTML = sellers.map((s, i) => {
     const statusHtml = sellerStatusBadge(s.status);
-    const urlHtml = s.seller_url
-      ? `<a href="${esc(s.seller_url)}" target="_blank" rel="noopener" style="color:#2563eb;font-size:12px;word-break:break-all">リンク</a>`
-      : '<span style="color:#9ca3af;font-size:12px">未取得</span>';
     return `<tr id="seller-row-${i}" style="border-bottom:1px solid #f3f4f6">
-      <td style="padding:7px 12px;color:#6b7280">${i + 1}</td>
-      <td style="padding:7px 12px;font-family:monospace;font-size:12px">${esc(s.seller_id)}</td>
-      <td style="padding:7px 12px">${urlHtml}</td>
+      <td style="padding:7px 12px;color:#9ca3af;font-size:12px">${i + 1}</td>
+      <td style="padding:7px 12px;font-family:monospace;font-size:12px;color:#111827">${escHtml(s.seller_id)}</td>
       <td style="padding:7px 12px;text-align:center">${statusHtml}</td>
     </tr>`;
   }).join('');
@@ -788,7 +1492,7 @@ function sellerStatusBadge(status) {
     done:    '<span style="color:#16a34a;font-weight:700">✅ 完了</span>',
     error:   '<span style="color:#dc2626;font-weight:700">❌ エラー</span>',
   };
-  return map[status] || `<span>${esc(status)}</span>`;
+  return map[status] || `<span>${escHtml(status)}</span>`;
 }
 
 async function startSellerScraping() {
@@ -800,12 +1504,14 @@ async function startSellerScraping() {
     return;
   }
 
-  showToast('セラースクレイピングを開始しました');
+  showToast('セラー分析スクレイピングを開始しました');
   document.getElementById('btnSellerStart').disabled = true;
   document.getElementById('btnSellerStop').disabled = false;
   document.getElementById('sellerProgressWrap').style.display = 'block';
+  // 完了後の「メイン画面で結果を見る」ボタンを非表示に
+  const viewBtn = document.getElementById('btnViewSellerResult');
+  if (viewBtn) viewBtn.style.display = 'none';
 
-  // ポーリング開始
   clearInterval(sellerPollTimer);
   sellerPollTimer = setInterval(fetchSellerStatus, 3000);
 }
@@ -822,12 +1528,33 @@ async function resetSellerScraping() {
 
   clearInterval(sellerPollTimer);
   document.getElementById('sellerImportResult').style.display = 'none';
-  document.getElementById('sellerCsvName').textContent = 'ファイル未選択';
   document.getElementById('sellerCsvInput').value = '';
   document.getElementById('sellerProgressWrap').style.display = 'none';
   document.getElementById('btnSellerStart').disabled = false;
   document.getElementById('btnSellerStop').disabled = true;
+  const viewBtn = document.getElementById('btnViewSellerResult');
+  if (viewBtn) viewBtn.style.display = 'none';
+  // ソース表示もリセット
+  setActiveSource('', '');
   showToast('リセットしました');
+}
+
+// フェーズ表示テキスト
+function sellerPhaseLabel(phase, currentSeller, data) {
+  switch (phase) {
+    case 'scraping_list':
+      return currentSeller ? `一覧取得中: ${currentSeller}` : '一覧ページ取得中...';
+    case 'grouping':
+      return `pHash グループ化中... (${data.total_items || 0} 件取得済み)`;
+    case 'scraping_detail':
+      return data.detail_pages_total > 0
+        ? `詳細ページ取得中 ${data.detail_pages_done || 0} / ${data.detail_pages_total} 件`
+        : '詳細ページ取得中...';
+    case 'done':    return `完了 ✅ — ${data.total_items || 0} 件取得`;
+    case 'stopped': return `停止 — ${data.total_items || 0} 件取得`;
+    case 'error':   return 'エラーが発生しました';
+    default:        return '準備中...';
+  }
 }
 
 async function fetchSellerStatus(silent = false) {
@@ -837,38 +1564,341 @@ async function fetchSellerStatus(silent = false) {
 
     if (!data.sellers || data.sellers.length === 0) return;
 
-    // テーブル更新
+    // セラーテーブル更新
     renderSellerTable(data.sellers);
     document.getElementById('sellerImportResult').style.display = 'block';
     document.getElementById('sellerListMeta').textContent = `${data.total} 件`;
 
-    // 進捗バー更新
+    // 進捗バー: セラー単位の完了率
     if (data.total > 0) {
       const pct = Math.round((data.done / data.total) * 100);
       document.getElementById('sellerProgressWrap').style.display = 'block';
       document.getElementById('sellerProgressBar').style.width = pct + '%';
-      document.getElementById('sellerProgressCount').textContent = `${data.done} / ${data.total} 件完了`;
+      document.getElementById('sellerProgressCount').textContent =
+        `セラー ${data.done} / ${data.total} 件 | 商品 ${data.total_items || 0} 件取得`;
+
       const currentSeller = data.current_index >= 0
         ? data.sellers[data.current_index]?.seller_id || ''
         : '';
       document.getElementById('sellerProgressLabel').textContent =
-        data.running ? `処理中: ${currentSeller}` : (data.done === data.total ? '全件完了 ✅' : '停止中');
+        data.running
+          ? sellerPhaseLabel(data.phase, currentSeller, data)
+          : sellerPhaseLabel(data.phase, '', data);
     }
 
     // ボタン状態
     document.getElementById('btnSellerStart').disabled = data.running;
     document.getElementById('btnSellerStop').disabled = !data.running;
 
-    // 完了時はポーリング停止
+    // ── スクレイピングバナー更新（セラー分析用） ──
+    if (data.running) {
+      const currentSeller = data.current_index >= 0
+        ? (data.sellers[data.current_index]?.seller_id || '') : '';
+      const phaseText = sellerPhaseLabel(data.phase, currentSeller, data);
+      const sellerProgress = data.total > 0
+        ? `セラー ${data.done}/${data.total} 件  |  商品 ${data.total_items || 0}件取得`
+        : `商品 ${data.total_items || 0}件取得`;
+      updateBanner({
+        isActive: true,
+        main: phaseText,
+        sub:  sellerProgress,
+      });
+    } else if (data.phase === 'done') {
+      updateBanner({
+        isActive: true, icon: '✅', type: 'done',
+        main: 'セラー分析 完了',
+        sub:  `商品 ${data.total_items || 0}件 / セラー ${data.done}件`,
+        autohide: 12000,
+      });
+    } else if (data.phase === 'stopped') {
+      updateBanner({
+        isActive: true, icon: '⏹', type: 'stopped',
+        main: 'セラー分析 停止',
+        sub:  `商品 ${data.total_items || 0}件取得`,
+        autohide: 8000,
+      });
+    } else if (data.phase === 'error') {
+      updateBanner({
+        isActive: true, icon: '❌', type: 'error',
+        main: 'セラー分析 エラー',
+        sub:  'ターミナルのログを確認してください',
+        autohide: 15000,
+      });
+    }
+
+    // 完了 or 停止時: ポーリング停止 + メイン画面更新ボタンを表示
     if (!data.running) {
       clearInterval(sellerPollTimer);
-      if (!silent && data.done > 0) {
-        showToast(`完了: ${data.done}件処理 / ${data.errors}件エラー`);
+
+      if (data.phase === 'done' || data.phase === 'stopped') {
+        // 「メイン画面で結果を見る」ボタンを表示
+        let viewBtn = document.getElementById('btnViewSellerResult');
+        if (!viewBtn) {
+          viewBtn = document.createElement('button');
+          viewBtn.id = 'btnViewSellerResult';
+          viewBtn.className = 'btn btn-primary btn-sm';
+          viewBtn.style.marginTop = '10px';
+          viewBtn.textContent = '📊 メイン画面で結果を見る';
+          viewBtn.onclick = () => {
+            loadGroups();  // メイングリッドを再読み込み
+            showToast('セラー分析結果をメイン画面に表示しました');
+          };
+          document.getElementById('sellerProgressWrap').appendChild(viewBtn);
+        }
+        viewBtn.style.display = '';
+
+        // メイングリッドをバックグラウンドで先読み
+        loadGroups();
+
+        if (!silent) {
+          showToast(
+            data.phase === 'done'
+              ? `完了: 商品 ${data.total_items || 0} 件 / セラー ${data.done} 件処理`
+              : `停止: 商品 ${data.total_items || 0} 件取得`
+          );
+        }
       }
     }
 
   } catch (e) {
     console.warn('セラーステータス取得失敗:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════
+// STEP 3: マスターセラーリサーチ
+// ═══════════════════════════════════════════════
+
+let masterPollTimer = null;
+
+// ─── マスターリスト取得・表示 ───
+async function loadMasterSellers() {
+  const data = await fetchJSON('/api/master_sellers?sort_order=desc&limit=0');
+  if (!data || !data.sellers) return;
+
+  // 統計
+  const stats = await fetchJSON('/api/master_sellers/stats');
+  if (stats) {
+    setText('masterTotal', stats.total ?? '—');
+    setText('masterUnscraped', stats.unscraped ?? '—');
+  }
+
+  const list = document.getElementById('masterSellerList');
+  if (!list) return;
+
+  if (!data.sellers.length) {
+    list.innerHTML = '<span style="color:#9ca3af;font-size:13px">セラーがいません（STEP 1実行後に自動追加されます）</span>';
+    updateMasterBatchPreview();
+    return;
+  }
+
+  list.innerHTML = data.sellers.map(s => {
+    const scraped = s.last_scraped_date
+      ? `<span class="master-date">${s.last_scraped_date}</span>`
+      : `<span class="master-badge-new">未</span>`;
+    const cands = s.candidates_count != null
+      ? `<span class="master-cands">${s.candidates_count}件</span>` : '';
+    return `
+      <div class="master-seller-row">
+        <span class="master-seller-id">${escHtml(s.seller_id)}</span>
+        <span class="master-first-date">${s.first_seen_date || '—'}</span>
+        <span class="master-scraped-label">${scraped}</span>
+        ${cands}
+        <span class="master-keyword">${escHtml(s.source_keyword || '')}</span>
+      </div>`;
+  }).join('');
+
+  updateMasterBatchPreview();
+}
+
+async function updateMasterBatchPreview() {
+  const stats = await fetchJSON('/api/master_sellers/stats');
+  if (!stats) return;
+  const unscraped = stats.unscraped || 0;
+  const batchSel = document.getElementById('masterBatchSize');
+  const batchSize = batchSel ? parseInt(batchSel.value, 10) : 0;
+  const count = batchSize > 0 ? Math.min(batchSize, unscraped) : unscraped;
+  setText('masterBatchCount', count);
+}
+
+// ─── スクレイピング開始 ───
+async function startMasterScraping() {
+  const sortOrder = document.querySelector('input[name="masterSortOrder"]:checked')?.value || 'desc';
+  const batchSize = parseInt(document.getElementById('masterBatchSize')?.value || '0', 10);
+
+  const data = await fetchJSON('/api/master_sellers/scrape/start', 'POST', {
+    sort_order: sortOrder,
+    batch_size: batchSize,
+  });
+
+  if (data.error) {
+    showToast('❌ ' + data.error, 'error');
+    return;
+  }
+
+  document.getElementById('btnMasterStart').disabled = true;
+  document.getElementById('btnMasterStop').disabled = false;
+  document.getElementById('masterProgressWrap').style.display = '';
+  showToast(`▶ STEP 3 スクレイピング開始（${data.total}件）`);
+
+  clearInterval(masterPollTimer);
+  masterPollTimer = setInterval(() => fetchMasterStatus(), 3000);
+}
+
+// ─── 停止 ───
+async function stopMasterScraping() {
+  await fetchJSON('/api/master_sellers/scrape/stop', 'POST');
+  showToast('⏹ 停止中...');
+}
+
+// ─── 進捗ポーリング ───
+async function fetchMasterStatus(silent = false) {
+  try {
+    const data = await fetchJSON('/api/master_sellers/scrape/status');
+    if (!data) return;
+
+    const pct = data.total > 0 ? Math.round(data.done / data.total * 100) : 0;
+    const bar = document.getElementById('masterProgressBar');
+    if (bar) bar.style.width = pct + '%';
+    setText('masterProgressLabel', phaseLabel3(data.phase));
+    setText('masterProgressCount', `${data.done} / ${data.total} セラー`);
+    setText('masterProgressSeller', data.current_seller ? `処理中: ${data.current_seller}` : '');
+
+    if (!data.running) {
+      clearInterval(masterPollTimer);
+      document.getElementById('btnMasterStart').disabled = false;
+      document.getElementById('btnMasterStop').disabled = true;
+
+      if (data.phase === 'done' || data.phase === 'stopped') {
+        // マスターリストを更新（scraped日付が書き込まれた後）
+        loadMasterSellers();
+        // グリッドにも結果を反映
+        loadGroups();
+        if (!silent) {
+          showToast(
+            data.phase === 'done'
+              ? `✅ STEP 3 完了: 商品 ${data.total_items || 0}件 / セラー ${data.done}件`
+              : `⏹ STEP 3 停止: 商品 ${data.total_items || 0}件取得`
+          );
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('STEP 3 ステータス取得失敗:', e);
+  }
+}
+
+function phaseLabel3(phase) {
+  return {
+    idle: '待機中',
+    scraping_list: '一覧取得中',
+    grouping: 'グループ化中',
+    scraping_detail: '詳細取得中',
+    vision_check: 'Vision判定中',
+    done: '完了',
+    stopped: '停止',
+    error: 'エラー',
+  }[phase] || phase;
+}
+
+// ═══════════════════════════════════════════════
+// グリッド CSV 読み込み（STEP 1 / 2 / 3 共通）
+// ═══════════════════════════════════════════════
+
+async function loadGridFromCsv(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const label = input.closest('label');
+  const origText = label ? label.childNodes[0]?.textContent?.trim() : '';
+  if (label) label.style.opacity = '0.6';
+  showToast('⏳ CSV読み込み中...');
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const res = await fetch('/api/load_csv', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      showToast('❌ ' + (data.error || 'CSV読み込み失敗'), 'error');
+      return;
+    }
+
+    showToast(`✅ ${data.total_items.toLocaleString()} 件を読み込みました`);
+    loadGroups(1);   // グリッドを再描画
+
+  } catch (e) {
+    showToast('❌ CSV読み込みエラー: ' + e.message, 'error');
+  } finally {
+    input.value = '';   // 同じファイルを再選択できるようにリセット
+    if (label) label.style.opacity = '';
+  }
+}
+
+// ═══════════════════════════════════════════════
+// マスターリスト CSV 保存 / HTML 書き出し / CSV 読み込み
+// ═══════════════════════════════════════════════
+
+function exportMasterCsv() {
+  window.location.href = '/api/master_sellers/export/csv';
+  showToast('💾 マスターリストCSVをダウンロード中...');
+}
+
+async function exportMasterHtml() {
+  showToast('⏳ HTML生成中...');
+  try {
+    const res = await fetch('/api/master_sellers/export/html');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast('❌ ' + (err.error || 'HTML書き出し失敗'), 'error');
+      return;
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    let filename = 'sellers_master.html';
+    const match = disposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
+    if (match) filename = decodeURIComponent(match[1].replace(/"/g, '').trim());
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('✅ マスターリストHTMLを書き出しました');
+  } catch (e) {
+    showToast('❌ HTML書き出しエラー: ' + e.message, 'error');
+  }
+}
+
+async function importMasterCsv(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append('file', file);
+  showToast('⏳ マスターリストにインポート中...');
+
+  try {
+    const res = await fetch('/api/master_sellers/import/csv', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      showToast('❌ ' + (data.error || 'インポート失敗'), 'error');
+      return;
+    }
+
+    showToast(
+      `✅ ${data.added}件追加（ファイル内 ${data.total_in_file}件 / 合計 ${data.stats?.total ?? '?'}件）`
+    );
+    loadMasterSellers();   // マスターリスト表示を更新
+
+  } catch (e) {
+    showToast('❌ インポートエラー: ' + e.message, 'error');
+  } finally {
+    input.value = '';
   }
 }
 

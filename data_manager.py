@@ -244,16 +244,32 @@ class DataManager:
                     self._items[item_id]["group_size"] = size
 
     def promote_candidates(self, min_group_size: int = None):
-        """グループサイズが閾値以上の商品を候補に昇格"""
-        threshold = min_group_size or config.MIN_GROUP_SIZE
+        """
+        グループサイズに応じて商品ステータスを昇格する。
+
+        - size >= threshold (MIN_GROUP_SIZE)          → candidate（仕入れ候補）
+        - size >= next_threshold (MIN_NEXT_CANDIDATE_SIZE) → next_candidate（次期候補）
+        - それ未満                                    → waiting のまま
+
+        min_group_size=1（セラー分析）の場合は全商品が candidate になるため
+        next_candidate の elif は自然にスキップされる。
+        """
+        threshold = min_group_size if min_group_size is not None else config.MIN_GROUP_SIZE
+        next_threshold = config.MIN_NEXT_CANDIDATE_SIZE
         groups = self.get_groups()
         with self._lock:
             for gid, members in groups.items():
-                if len(members) >= threshold:
+                size = len(members)
+                if size >= threshold:
                     for item in members:
                         iid = item["item_id"]
                         if self._items[iid]["status"] == config.STATUS_WAITING:
                             self._items[iid]["status"] = config.STATUS_CANDIDATE
+                elif size >= next_threshold:
+                    for item in members:
+                        iid = item["item_id"]
+                        if self._items[iid]["status"] == config.STATUS_WAITING:
+                            self._items[iid]["status"] = config.STATUS_NEXT_CANDIDATE
 
     def add_error(self, msg: str):
         with self._lock:

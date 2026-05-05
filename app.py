@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 import io
+import shutil
 import pandas as pd
 from flask import (
     Flask, Response, jsonify, render_template, request,
@@ -26,6 +27,8 @@ from data_manager import DataManager, make_output_dir, make_session_id
 from image_processor import ImageProcessor
 from gemini_client import GeminiClient
 from scraper import AucFanScraper
+from seller_analyzer import SellerAnalyzer
+from sellers_master import SellersMaster
 
 # ─────────────────────────────────────────────
 # ロギング設定
@@ -55,16 +58,35 @@ _gemini_client: GeminiClient = None
 _session_output_dir: Path = None
 _lock = threading.Lock()
 
-# ─── セラースクレイピング状態 ───
+# ─── セラー分析スクレイピング状態 ───
 _seller_state = {
-    "sellers": [],          # [{"seller_id", "seller_url", "status": pending/running/done/error}]
-    "current_index": -1,
+    "sellers": [],        # [{"seller_id", "seller_url", "status": pending/running/done/error}]
+    "current_index": -1,  # 現在処理中のセラーインデックス
     "running": False,
-    "stop_requested": False,
+    "phase": "idle",      # idle/scraping_list/grouping/scraping_detail/done/stopped/error
+    "stop_event": None,   # threading.Event（実行中のみ有効）
     "thread": None,
-    "session_dirs": [],     # 完了済みセッションのディレクトリ一覧
+    "dm": None,           # 実行中 DataManager（進捗ポーリング用）
+    "session_id": None,   # 完了セッションID
+    "output_dir": None,   # 完了セッション出力ディレクトリ（Path）
 }
 _seller_lock = threading.Lock()
+
+# ─── STEP 3: マスターセラーリサーチ状態 ───
+_master_state = {
+    "running": False,
+    "phase": "idle",       # idle/scraping_list/grouping/vision_check/done/stopped/error
+    "stop_event": None,
+    "thread": None,
+    "dm": None,
+    "session_id": None,
+    "output_dir": None,
+    "total": 0,
+    "done": 0,
+    "current_seller": "",
+}
+_master_lock = threading.Lock()
+_sellers_master = SellersMaster()   # シングルトン
 
 
 def get_dm() -> DataManager:
@@ -181,6 +203,7 @@ def api_stream():
                         "stats": stats,
                         "is_running": is_running,
                         "gemini_enabled": _gemini_client.available if _gemini_client else False,
+                        "is_seller_analysis": progress.get("keyword", "") == "seller_analysis",
                     }
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 else:
@@ -271,12 +294,15 @@ def api_items():
             "seller_ids": list(set(i.get("seller_id", "") for i in group if i.get("seller_id"))),
         })
 
+    progress = dm.get_progress()
     return jsonify({
         "groups": result_groups,
         "total_groups": total_groups,
         "page": page,
         "per_page": per_page,
         "total_pages": (total_groups + per_page - 1) // per_page,
+        "is_seller_analysis": progress.get("keyword", "") == "seller_analysis",
+        "seller_detail_min_group": config.SELLER_DETAIL_MIN_GROUP,
     })
 
 
@@ -352,34 +378,31 @@ def api_update_group_status(group_id):
 # CSV エクスポート
 # ─────────────────────────────────────────────
 
-@app.route("/api/export/html")
-def api_export_html():
-    """スタンドアロンHTMLエクスポート（iPhone/iPad 持ち出し用）"""
+def _generate_export_html(dm, images_dir: Path) -> str:
+    """
+    DataManager と images_dir から HTML エクスポート文字列を生成する共通ヘルパー。
+    api_export_html（ブラウザ経由）と _save_export_files（自動保存）の両方から呼ばれる。
+    """
     import base64
     from collections import defaultdict
-    from urllib.parse import quote
-
-    dm = get_dm()
-    if not dm:
-        return jsonify({"error": "データがありません"}), 400
 
     items = dm.get_all_items()
     if not items:
-        return jsonify({"error": "商品データがありません"}), 400
+        return ""
 
-    # ── グループ化 ──
+    # グループ化
     group_map = defaultdict(list)
     for item in items:
         gid = item.get("group_id") or item["item_id"]
         group_map[gid].append(item)
     groups = sorted(group_map.values(), key=lambda g: len(g), reverse=True)
 
-    # ── 画像を base64 に変換 ──
+    # 画像を base64 に変換
     def encode_image(local_path):
-        if not local_path or _session_output_dir is None:
+        if not local_path or not images_dir:
             return ""
         try:
-            img_path = _session_output_dir / "images" / Path(local_path).name
+            img_path = images_dir / Path(local_path).name
             if img_path.exists():
                 with open(img_path, "rb") as f:
                     raw = f.read()
@@ -394,15 +417,12 @@ def api_export_html():
             logger.debug(f"画像base64変換エラー: {e}")
         return ""
 
-    # ── グループデータを整形 ──
+    # グループデータを整形
     groups_data = []
     for group in groups:
         first = group[0]
-        thumbs = [
-            encode_image(item.get("thumbnail_local", ""))
-            for item in group[:5]
-        ]
-        thumbs = [t for t in thumbs if t]  # 空は除外
+        thumbs = [encode_image(item.get("thumbnail_local", "")) for item in group[:5]]
+        thumbs = [t for t in thumbs if t]
 
         price    = first.get("price", 0)
         shipping = first.get("shipping", 0)
@@ -421,13 +441,50 @@ def api_export_html():
             "url":        first.get("url", ""),
         })
 
-    progress     = dm.get_progress()
-    keyword      = progress.get("keyword", "")
-    exported_at  = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-    total_items  = len(items)
-    total_groups = len(groups_data)
+    progress    = dm.get_progress()
+    keyword     = progress.get("keyword", "")
+    exported_at = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    return _build_export_html(groups_data, keyword, exported_at, len(items), len(groups_data))
 
-    html = _build_export_html(groups_data, keyword, exported_at, total_items, total_groups)
+
+def _save_export_files(dm, output_dir: Path):
+    """
+    CSV と HTML をセッションフォルダに自動保存する。
+    セラー分析完了時・キーワードスクレイピング完了時に呼ばれる。
+    """
+    try:
+        # CSV（DataManager.save_csv() は results.csv に書き込む）
+        dm.save_csv()
+        logger.info(f"自動CSV保存: {output_dir / 'results.csv'}")
+    except Exception as e:
+        logger.error(f"CSV自動保存エラー: {e}")
+
+    try:
+        images_dir = output_dir / "images"
+        html = _generate_export_html(dm, images_dir)
+        if html:
+            html_path = output_dir / "result.html"
+            html_path.write_text(html, encoding="utf-8")
+            logger.info(f"自動HTML保存: {html_path}")
+    except Exception as e:
+        logger.error(f"HTML自動保存エラー: {e}")
+
+
+@app.route("/api/export/html")
+def api_export_html():
+    """スタンドアロンHTMLエクスポート（iPhone/iPad 持ち出し用）"""
+    from urllib.parse import quote
+
+    dm = get_dm()
+    if not dm:
+        return jsonify({"error": "データがありません"}), 400
+
+    images_dir = _session_output_dir / "images" if _session_output_dir else None
+    html = _generate_export_html(dm, images_dir)
+    if not html:
+        return jsonify({"error": "商品データがありません"}), 400
+
+    keyword = dm.get_progress().get("keyword", "")
     safe_kw = "".join(c for c in keyword if c.isalnum() or c in ("_", "-"))[:20] or "result"
     filename = f"aucfan_{safe_kw}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
 
@@ -743,6 +800,270 @@ def api_export_csv():
     )
 
 
+@app.route("/api/load_csv", methods=["POST"])
+def api_load_csv():
+    """
+    results.csv をアップロードしてグリッドに表示する。
+    CSV の各行をアイテムとして新規 DataManager セッションにロードし、
+    _data_manager を差し替える（画像は別途 /images/ から参照）。
+    """
+    global _data_manager, _image_processor, _gemini_client, _session_output_dir
+
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "ファイルがありません"}), 400
+
+    try:
+        raw = file.read()
+        df = None
+        for enc in ("utf-8-sig", "utf-8", "shift-jis"):
+            try:
+                df = pd.read_csv(io.BytesIO(raw), encoding=enc, dtype=str)
+                break
+            except Exception:
+                continue
+
+        if df is None:
+            return jsonify({"error": "CSVの文字コードを判別できませんでした"}), 400
+        if df.empty:
+            return jsonify({"error": "CSVにデータがありません"}), 400
+
+        # 新規セッションを作成
+        keyword_val = "csv_import"
+        if "keyword" in df.columns:
+            first_kw = str(df["keyword"].iloc[0]).strip()
+            if first_kw and first_kw.lower() not in ("nan", ""):
+                keyword_val = first_kw
+
+        out_dir, session_id = make_output_dir(keyword_val)
+        dm = DataManager(session_id, out_dir)
+
+        # CSV行をアイテムとして追加
+        for _, row in df.iterrows():
+            item = {k: v for k, v in row.items() if pd.notna(v)}
+            # 数値列を適切な型に変換
+            for int_col in ("price", "shipping", "total", "group_size"):
+                if int_col in item:
+                    try:
+                        item[int_col] = int(float(item[int_col]))
+                    except (ValueError, TypeError):
+                        item[int_col] = 0
+            for bool_col in ("needs_review", "scraped_detail"):
+                if bool_col in item:
+                    item[bool_col] = str(item[bool_col]).lower() in ("true", "1", "yes")
+            if isinstance(item.get("images_local"), str):
+                # "[]" や JSON文字列をリストに変換
+                try:
+                    import json as _json
+                    item["images_local"] = _json.loads(item["images_local"])
+                except Exception:
+                    item["images_local"] = []
+            dm.add_item(item)
+
+        loaded = dm.total_items
+        dm.update_progress(
+            keyword=keyword_val,
+            status="done",
+            total_items=loaded,
+        )
+        dm.save_all()
+
+        with _lock:
+            _data_manager = dm
+            _image_processor = ImageProcessor(out_dir / "images")
+            _gemini_client = GeminiClient()
+            _session_output_dir = out_dir
+
+        logger.info(f"CSV読み込み完了: {file.filename} → {loaded}件 セッション={session_id}")
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "total_items": loaded,
+            "keyword": keyword_val,
+        })
+
+    except Exception as e:
+        logger.error(f"CSV読み込みエラー: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────
+# マスターセラーリスト CSV / HTML エクスポート・インポート
+# ─────────────────────────────────────────────
+
+@app.route("/api/master_sellers/export/csv")
+def api_master_export_csv():
+    """マスターセラーリストを CSV でダウンロード"""
+    from urllib.parse import quote
+
+    records = _sellers_master.get_all()
+    if not records:
+        return jsonify({"error": "マスターリストが空です"}), 400
+
+    df = pd.DataFrame(records)
+    buf = io.BytesIO()
+    df.to_csv(buf, index=False, encoding="utf-8-sig")
+    buf.seek(0)
+
+    filename = f"sellers_master_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    response = Response(buf.getvalue(), mimetype="text/csv; charset=utf-8-sig")
+    response.headers["Content-Disposition"] = (
+        f"attachment; filename*=UTF-8''{quote(filename)}"
+    )
+    return response
+
+
+@app.route("/api/master_sellers/export/html")
+def api_master_export_html():
+    """マスターセラーリストをスタンドアロン HTML でダウンロード"""
+    from urllib.parse import quote
+
+    records = _sellers_master.get_all()
+    if not records:
+        return jsonify({"error": "マスターリストが空です"}), 400
+
+    stats = _sellers_master.stats()
+    exported_at = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+
+    rows_html = ""
+    for r in records:
+        scraped = r.get("last_scraped_date") or '<span style="color:#dc2626">未</span>'
+        cands = r.get("candidates_count")
+        cands_str = str(cands) if cands is not None else "—"
+        rows_html += f"""
+        <tr>
+          <td style="font-family:monospace">{r.get('seller_id', '')}</td>
+          <td>{r.get('first_seen_date', '—')}</td>
+          <td>{scraped}</td>
+          <td style="text-align:center">{cands_str}</td>
+          <td>{r.get('source_keyword', '—')}</td>
+        </tr>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>マスターセラーリスト</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif;
+           font-size: 14px; background: #f9fafb; color: #111827; padding: 16px; }}
+    .header {{ background: #2563eb; color: #fff; padding: 12px 16px;
+               border-radius: 8px; margin-bottom: 12px; }}
+    .header h1 {{ font-size: 16px; font-weight: 700; }}
+    .header-meta {{ font-size: 11px; opacity: .8; margin-top: 2px; }}
+    .search-bar {{ margin-bottom: 10px; }}
+    .search-bar input {{ width: 100%; padding: 8px 12px; border: 1px solid #d1d5db;
+                         border-radius: 20px; font-size: 14px; outline: none; }}
+    table {{ width: 100%; border-collapse: collapse; background: #fff;
+             border-radius: 8px; overflow: hidden;
+             box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
+    th {{ padding: 10px 12px; background: #f3f4f6; font-weight: 600;
+          text-align: left; border-bottom: 2px solid #e5e7eb; font-size: 12px; }}
+    td {{ padding: 9px 12px; border-bottom: 1px solid #f3f4f6; font-size: 13px; }}
+    tr:last-child td {{ border-bottom: none; }}
+    tr:hover td {{ background: #f0f9ff; }}
+    .count-info {{ color: #6b7280; font-size: 12px; margin: 8px 0 4px; }}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📋 マスターセラーリスト</h1>
+    <div class="header-meta">
+      合計 {stats['total']}件 ／ 未スクレイピング {stats['unscraped']}件 ／ 書き出し: {exported_at}
+    </div>
+  </div>
+  <div class="search-bar">
+    <input type="search" id="searchInput" placeholder="セラーIDで絞り込み..." oninput="filterTable()" autocomplete="off">
+  </div>
+  <div class="count-info" id="countInfo">表示中: {stats['total']}件</div>
+  <table id="masterTable">
+    <thead>
+      <tr>
+        <th>セラーID</th>
+        <th>初回検出日</th>
+        <th>最終スクレイピング</th>
+        <th>候補件数</th>
+        <th>キーワード</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody">{rows_html}</tbody>
+  </table>
+  <script>
+    const allRows = Array.from(document.querySelectorAll('#tableBody tr'));
+    function filterTable() {{
+      const q = document.getElementById('searchInput').value.trim().toLowerCase();
+      let count = 0;
+      allRows.forEach(tr => {{
+        const text = tr.textContent.toLowerCase();
+        const show = !q || text.includes(q);
+        tr.style.display = show ? '' : 'none';
+        if (show) count++;
+      }});
+      document.getElementById('countInfo').textContent = '表示中: ' + count + '件';
+    }}
+  </script>
+</body>
+</html>"""
+
+    filename = f"sellers_master_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    response = Response(html, mimetype="text/html; charset=utf-8")
+    response.headers["Content-Disposition"] = (
+        f"attachment; filename*=UTF-8''{quote(filename)}"
+    )
+    return response
+
+
+@app.route("/api/master_sellers/import/csv", methods=["POST"])
+def api_master_import_csv():
+    """
+    seller_id 列を含む CSV をアップロードしてマスターリストに追記する。
+    既存セラーはスキップ（重複無視）。
+    """
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "ファイルがありません"}), 400
+
+    try:
+        raw = file.read()
+        df = None
+        for enc in ("utf-8-sig", "utf-8", "shift-jis"):
+            try:
+                df = pd.read_csv(io.BytesIO(raw), encoding=enc, dtype=str)
+                break
+            except Exception:
+                continue
+
+        if df is None:
+            return jsonify({"error": "CSVの文字コードを判別できませんでした"}), 400
+        if "seller_id" not in df.columns:
+            return jsonify({"error": "seller_id 列が見つかりません"}), 400
+
+        seller_ids = []
+        for _, row in df.iterrows():
+            sid = str(row.get("seller_id", "")).strip()
+            if sid and sid.lower() not in ("nan", ""):
+                seller_ids.append(sid)
+
+        if not seller_ids:
+            return jsonify({"error": "有効な seller_id がありません"}), 400
+
+        added = _sellers_master.upsert_sellers(seller_ids, source_keyword="csv_import")
+
+        logger.info(f"マスターリストCSVインポート: {len(seller_ids)}件中 {added}件追加")
+        return jsonify({
+            "success": True,
+            "added": added,
+            "total_in_file": len(seller_ids),
+            "stats": _sellers_master.stats(),
+        })
+
+    except Exception as e:
+        logger.error(f"マスターCSVインポートエラー: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # ─────────────────────────────────────────────
 # Chrome タブ一覧取得
 # ─────────────────────────────────────────────
@@ -803,6 +1124,128 @@ def api_sessions():
     return jsonify({"sessions": _list_sessions()})
 
 
+@app.route("/api/sessions/<session_name>", methods=["DELETE"])
+def api_delete_session(session_name):
+    """
+    セッションフォルダを丸ごと削除する。
+    現在メモリにロードされているセッションを削除する場合は _data_manager もリセット。
+    """
+    global _data_manager, _image_processor, _gemini_client, _session_output_dir
+
+    # パストラバーサル防止
+    if ".." in session_name or "/" in session_name or "\\" in session_name:
+        return jsonify({"success": False, "message": "不正なセッション名"}), 400
+
+    base = Path(config.OUTPUT_BASE_DIR)
+    session_dir = base / session_name
+
+    if not session_dir.exists():
+        return jsonify({"success": False, "message": "セッションが見つかりません"}), 404
+
+    try:
+        shutil.rmtree(session_dir)
+        logger.info(f"セッション削除: {session_dir}")
+
+        # 削除したセッションが現在ロード中なら状態をリセット
+        if _session_output_dir is not None and _session_output_dir.resolve() == session_dir.resolve():
+            _data_manager = None
+            _image_processor = None
+            _gemini_client = None
+            _session_output_dir = None
+            logger.info("現在のセッションを削除したためメモリをリセットしました")
+
+        return jsonify({"success": True, "name": session_name})
+    except Exception as e:
+        logger.error(f"セッション削除エラー: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route("/api/sessions/<session_name>/seller_ids", methods=["POST"])
+def api_seller_ids_from_session(session_name):
+    """
+    指定した過去のSTEP 1セッションの results.csv から seller_id を抽出して
+    _seller_state にセットする。
+    """
+    # パストラバーサル防止
+    if ".." in session_name or "/" in session_name or "\\" in session_name:
+        return jsonify({"error": "不正なセッション名"}), 400
+
+    base = Path(config.OUTPUT_BASE_DIR)
+    session_dir = base / session_name
+    csv_path = session_dir / "results.csv"
+
+    if not csv_path.exists():
+        # CSV がなければ items.json から試みる
+        items_path = session_dir / "items.json"
+        if items_path.exists():
+            try:
+                with open(items_path, encoding="utf-8") as f:
+                    items_dict = json.load(f)
+                seen = {}
+                for item in items_dict.values():
+                    sid = str(item.get("seller_id", "")).strip()
+                    if not sid or sid.lower() in ("nan", ""):
+                        continue
+                    if sid not in seen:
+                        url = str(item.get("seller_url", "")).strip()
+                        seen[sid] = "" if url.lower() in ("nan", "") else url
+                sellers = [{"seller_id": s, "seller_url": u, "status": "pending"} for s, u in seen.items()]
+                with _seller_lock:
+                    _seller_state["sellers"] = sellers
+                    _seller_state["current_index"] = -1
+                    _seller_state["running"] = False
+                    _seller_state["stop_requested"] = False
+                    _seller_state["session_dirs"] = []
+                return jsonify({
+                    "count": len(sellers),
+                    "has_seller_url": any(s["seller_url"] for s in sellers),
+                    "sellers": sellers,
+                    "session_name": session_name,
+                })
+            except Exception as e:
+                return jsonify({"error": f"items.json 読み込み失敗: {e}"}), 500
+        return jsonify({"error": f"results.csv が見つかりません: {session_name}"}), 404
+
+    try:
+        df = pd.read_csv(csv_path, encoding="utf-8-sig", dtype=str)
+        if "seller_id" not in df.columns:
+            return jsonify({"error": "seller_id 列が見つかりません"}), 400
+
+        has_seller_url = "seller_url" in df.columns
+        seen = {}
+        for _, row in df.iterrows():
+            sid = str(row.get("seller_id", "")).strip()
+            if not sid or sid.lower() in ("nan", ""):
+                continue
+            if sid not in seen:
+                seller_url = ""
+                if has_seller_url:
+                    u = str(row.get("seller_url", "")).strip()
+                    if u and u.lower() != "nan":
+                        seller_url = u
+                seen[sid] = seller_url
+
+        sellers = [{"seller_id": s, "seller_url": u, "status": "pending"} for s, u in seen.items()]
+
+        with _seller_lock:
+            _seller_state["sellers"] = sellers
+            _seller_state["current_index"] = -1
+            _seller_state["running"] = False
+            _seller_state["stop_requested"] = False
+            _seller_state["session_dirs"] = []
+
+        logger.info(f"セッション({session_name})からセラーID抽出: {len(sellers)}件")
+        return jsonify({
+            "count": len(sellers),
+            "has_seller_url": has_seller_url,
+            "sellers": sellers,
+            "session_name": session_name,
+        })
+    except Exception as e:
+        logger.error(f"セラーID抽出エラー: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/sessions/<session_name>/load", methods=["POST"])
 def api_load_session(session_name):
     """過去セッションをロード"""
@@ -840,16 +1283,21 @@ def _list_sessions():
                 try:
                     with open(progress_file) as f:
                         p = json.load(f)
+                    name = d.name
+                    # seller_analysis_ で始まるセッションかどうかで種別を判定
+                    session_type = "seller" if name.startswith("seller_analysis") else "keyword"
                     sessions.append({
-                        "name": d.name,
+                        "name": name,
+                        "session_type": session_type,
                         "keyword": p.get("keyword", ""),
                         "status": p.get("status", ""),
                         "total_items": p.get("total_items", 0),
                         "updated_at": p.get("updated_at", ""),
+                        "has_csv": (d / "results.csv").exists(),
                     })
                 except Exception:
-                    sessions.append({"name": d.name})
-    return sessions[:20]
+                    sessions.append({"name": d.name, "session_type": "unknown"})
+    return sessions[:100]
 
 
 # ─────────────────────────────────────────────
@@ -956,6 +1404,134 @@ def api_report():
 # セラー分析機能
 # ─────────────────────────────────────────────
 
+@app.route("/api/seller_ids_from_current_session", methods=["POST"])
+def api_seller_ids_from_current_session():
+    """
+    現在メモリに読み込まれているキーワードリサーチ結果から
+    seller_id のユニークリストを抽出して _seller_state にセットする。
+    CSV ファイルを介さずに STEP 1 → STEP 2 を直結する。
+    """
+    dm = get_dm()
+    if dm is None or dm.total_items == 0:
+        return jsonify({"error": "現在のセッションにデータがありません。先にSTEP 1のスクレイピングを実行してください"}), 404
+
+    all_items = dm.get_all_items()
+    seen = {}
+    for item in all_items:
+        sid = str(item.get("seller_id", "")).strip()
+        if not sid or sid.lower() in ("nan", ""):
+            continue
+        if sid not in seen:
+            seller_url = str(item.get("seller_url", "")).strip()
+            if seller_url.lower() in ("nan", ""):
+                seller_url = ""
+            seen[sid] = seller_url
+
+    if not seen:
+        return jsonify({"error": "seller_id が見つかりませんでした（スクレイピング結果を確認してください）"}), 404
+
+    sellers = [
+        {"seller_id": sid, "seller_url": url, "status": "pending"}
+        for sid, url in seen.items()
+    ]
+
+    with _seller_lock:
+        _seller_state["sellers"] = sellers
+        _seller_state["current_index"] = -1
+        _seller_state["running"] = False
+        _seller_state["stop_requested"] = False
+        _seller_state["session_dirs"] = []
+
+    has_seller_url = any(s["seller_url"] for s in sellers)
+    keyword = dm.get_progress().get("keyword", "（不明）")
+    logger.info(f"現在のセッション({keyword})からセラーID抽出: {len(sellers)}件")
+
+    return jsonify({
+        "count": len(sellers),
+        "has_seller_url": has_seller_url,
+        "sellers": sellers,
+        "keyword": keyword,
+    })
+
+
+@app.route("/api/latest_csv_import", methods=["POST"])
+def api_latest_csv_import():
+    """
+    Mac上の最新 results.csv を自動で読み込む（iPhone からのアップロード不要）。
+    現在アクティブなセッション → なければ最新セッションの順で探す。
+    """
+    csv_path = None
+    session_name = ""
+
+    # 1. 現在アクティブなセッションの CSV を優先
+    if _session_output_dir is not None:
+        candidate = _session_output_dir / "results.csv"
+        if candidate.exists():
+            csv_path = candidate
+            session_name = _session_output_dir.name
+
+    # 2. なければ最新セッションを探す
+    if csv_path is None:
+        base = Path(config.OUTPUT_BASE_DIR)
+        if base.exists():
+            for d in sorted(base.iterdir(), reverse=True):
+                if d.is_dir():
+                    candidate = d / "results.csv"
+                    if candidate.exists():
+                        csv_path = candidate
+                        session_name = d.name
+                        break
+
+    if csv_path is None:
+        return jsonify({"error": "results.csv が見つかりません。先にキーワードスクレイピングを実行してください"}), 404
+
+    try:
+        df = pd.read_csv(csv_path, encoding="utf-8-sig", dtype=str)
+
+        if "seller_id" not in df.columns:
+            return jsonify({"error": f"seller_id 列が見つかりません: {csv_path}"}), 400
+
+        has_seller_url = "seller_url" in df.columns
+
+        seen = {}
+        for _, row in df.iterrows():
+            sid = str(row.get("seller_id", "")).strip()
+            if not sid or sid.lower() == "nan":
+                continue
+            if sid not in seen:
+                seller_url = ""
+                if has_seller_url:
+                    u = str(row.get("seller_url", "")).strip()
+                    if u and u.lower() != "nan":
+                        seller_url = u
+                seen[sid] = seller_url
+
+        sellers = [
+            {"seller_id": sid, "seller_url": url, "status": "pending"}
+            for sid, url in seen.items()
+        ]
+
+        with _seller_lock:
+            _seller_state["sellers"] = sellers
+            _seller_state["current_index"] = -1
+            _seller_state["running"] = False
+            _seller_state["stop_requested"] = False
+            _seller_state["session_dirs"] = []
+
+        logger.info(f"最新CSV自動読み込み: {csv_path} → {len(sellers)}件のユニークセラー")
+        return jsonify({
+            "count": len(sellers),
+            "has_seller_url": has_seller_url,
+            "sellers": sellers,
+            "session_name": session_name,
+            "csv_path": str(csv_path),
+        })
+
+    except Exception as e:
+        logger.error(f"最新CSV読み込みエラー: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/import_csv", methods=["POST"])
 def api_import_csv():
     """
@@ -1023,7 +1599,7 @@ def api_import_csv():
 
 @app.route("/api/seller_scrape/start", methods=["POST"])
 def api_seller_scrape_start():
-    """セラーIDリストのスクレイピングを開始"""
+    """セラー分析スクレイピングを開始"""
     with _seller_lock:
         if _seller_state["running"]:
             return jsonify({"error": "既に実行中です"}), 400
@@ -1031,115 +1607,140 @@ def api_seller_scrape_start():
         if not sellers:
             return jsonify({"error": "セラーリストがありません。先にCSVをインポートしてください"}), 400
 
+        stop_ev = threading.Event()
         _seller_state["running"] = True
-        _seller_state["stop_requested"] = False
+        _seller_state["phase"] = "scraping_list"
+        _seller_state["stop_event"] = stop_ev
+        _seller_state["session_id"] = None
+        _seller_state["output_dir"] = None
+        _seller_state["dm"] = None
 
-    t = threading.Thread(target=_run_seller_scraping, daemon=True, name="seller-scraper")
+    t = threading.Thread(
+        target=_run_seller_analysis,
+        args=(stop_ev,),
+        daemon=True,
+        name="seller-analyzer",
+    )
     t.start()
     with _seller_lock:
         _seller_state["thread"] = t
 
-    logger.info(f"セラースクレイピング開始: {len(sellers)}件")
+    logger.info(f"セラー分析スクレイピング開始: {len(sellers)}件")
     return jsonify({"status": "started", "total": len(sellers)})
 
 
-def _run_seller_scraping():
-    """セラーごとにスクレイピングを順番に実行するバックグラウンドスレッド"""
-    global _seller_state
+def _run_seller_analysis(stop_ev: threading.Event):
+    """
+    SellerAnalyzer を使って全セラーを 1 セッションにまとめてスクレイプする
+    バックグラウンドスレッド。完了後に _data_manager を差し替えてメイン UI で表示可能にする。
+    """
+    global _data_manager, _image_processor, _gemini_client, _session_output_dir
 
     with _seller_lock:
         sellers = list(_seller_state["sellers"])
 
-    for i, seller in enumerate(sellers):
-        # 停止チェック
+    # 1 セッションフォルダを作成
+    out_dir, session_id = make_output_dir("seller_analysis")
+    dm = DataManager(session_id, out_dir)
+    img = ImageProcessor(out_dir / "images")
+    gc = GeminiClient()
+
+    with _seller_lock:
+        _seller_state["session_id"] = session_id
+        _seller_state["output_dir"] = out_dir
+        _seller_state["dm"] = dm
+
+    # セラーごとの進捗をコールバックで _seller_state に反映
+    def on_progress(index: int, status: str):
         with _seller_lock:
-            if _seller_state["stop_requested"]:
-                logger.info("セラースクレイピング: 停止リクエスト受信")
-                break
-        # すでに完了済みはスキップ
-        if seller.get("status") == "done":
-            continue
+            if 0 <= index < len(_seller_state["sellers"]):
+                _seller_state["sellers"][index]["status"] = status
+            _seller_state["current_index"] = index if status == "running" else -1
+            # phase を DataManager の進捗から同期
+            dm_status = dm.get_progress().get("status", "scraping_list")
+            _seller_state["phase"] = dm_status
 
-        seller_id = seller["seller_id"]
-        seller_url = seller.get("seller_url", "").strip()
+    analyzer = SellerAnalyzer(
+        sellers=sellers,
+        data_manager=dm,
+        image_processor=img,
+        gemini_client=gc,
+        stop_event=stop_ev,
+        on_seller_progress=on_progress,
+    )
+    analyzer.run()
 
-        # seller_url が無い場合はフォールバック URL を構築
-        if not seller_url:
-            seller_url = f"https://aucfan.com/search1/?aucnm={seller_id}"
-            logger.info(f"seller_url未設定のためフォールバックURL使用: {seller_url}")
+    final_status = dm.get_progress().get("status", "done")
 
-        with _seller_lock:
-            _seller_state["current_index"] = i
-            _seller_state["sellers"][i]["status"] = "running"
+    # CSV・HTML を自動保存（完了時のみ）
+    if final_status in ("done", "stopped"):
+        _save_export_files(dm, out_dir)
 
-        logger.info(f"[{i+1}/{len(sellers)}] セラースクレイピング開始: {seller_id}")
-
-        try:
-            safe_id = "".join(c for c in seller_id if c.isalnum() or c in ("_", "-"))[:15]
-            out_dir, session_id = make_output_dir(f"seller_{safe_id}")
-            dm = DataManager(session_id, out_dir)
-            img = ImageProcessor(out_dir / "images")
-            gc = GeminiClient()
-            stop_ev = threading.Event()
-
-            scraper = AucFanScraper(
-                data_manager=dm,
-                image_processor=img,
-                gemini_client=gc,
-                stop_event=stop_ev,
-            )
-            scraper.run(start_url=seller_url)
-
-            with _seller_lock:
-                _seller_state["sellers"][i]["status"] = "done"
-                _seller_state["sellers"][i]["session_dir"] = str(out_dir)
-                _seller_state["session_dirs"].append(str(out_dir))
-
-            logger.info(f"セラースクレイピング完了: {seller_id} → {out_dir}")
-
-        except Exception as e:
-            logger.error(f"セラースクレイピングエラー ({seller_id}): {e}")
-            with _seller_lock:
-                _seller_state["sellers"][i]["status"] = "error"
-                _seller_state["sellers"][i]["error"] = str(e)
+    # 完了後: メイン UI でそのまま結果を表示できるよう差し替え
+    with _lock:
+        _data_manager = dm
+        _image_processor = img
+        _gemini_client = gc
+        _session_output_dir = out_dir
 
     with _seller_lock:
         _seller_state["running"] = False
         _seller_state["current_index"] = -1
+        _seller_state["phase"] = final_status
 
-    logger.info("セラースクレイピング全件完了")
+    logger.info(
+        f"セラー分析完了: {dm.total_items}件 → {out_dir} (status={final_status})"
+    )
 
 
 @app.route("/api/seller_scrape/stop", methods=["POST"])
 def api_seller_scrape_stop():
-    """セラースクレイピングを停止"""
+    """セラー分析スクレイピングを停止"""
     with _seller_lock:
-        _seller_state["stop_requested"] = True
-    logger.info("セラースクレイピング停止リクエスト")
+        ev = _seller_state.get("stop_event")
+    if ev:
+        ev.set()
+    logger.info("セラー分析停止リクエスト")
     return jsonify({"status": "stopping"})
 
 
 @app.route("/api/seller_scrape/status")
 def api_seller_scrape_status():
-    """セラースクレイピングの現在状態を返す"""
+    """セラー分析スクレイピングの現在状態を返す"""
     with _seller_lock:
         sellers = list(_seller_state["sellers"])
         current_index = _seller_state["current_index"]
         running = _seller_state["running"]
-        session_dirs = list(_seller_state["session_dirs"])
+        phase = _seller_state["phase"]
+        session_id = _seller_state["session_id"]
+        dm = _seller_state["dm"]
 
     total = len(sellers)
-    done = sum(1 for s in sellers if s.get("status") == "done")
+    done_sellers = sum(1 for s in sellers if s.get("status") == "done")
     errors = sum(1 for s in sellers if s.get("status") == "error")
+
+    # DataManager から詳細進捗を取得
+    dm_progress = {}
+    total_items = 0
+    if dm is not None:
+        try:
+            dm_progress = dm.get_progress()
+            total_items = dm.total_items
+        except Exception:
+            pass
 
     return jsonify({
         "running": running,
+        "phase": phase,
         "current_index": current_index,
         "total": total,
-        "done": done,
+        "done": done_sellers,
         "errors": errors,
         "sellers": sellers,
-        "session_dirs": session_dirs,
+        "session_id": session_id,
+        "total_items": total_items,
+        "detail_pages_done": dm_progress.get("detail_pages_done", 0),
+        "detail_pages_total": dm_progress.get("detail_pages_total", 0),
     })
 
 
@@ -1151,9 +1752,199 @@ def api_seller_scrape_reset():
             return jsonify({"error": "実行中はリセットできません"}), 400
         _seller_state["sellers"] = []
         _seller_state["current_index"] = -1
-        _seller_state["session_dirs"] = []
-        _seller_state["stop_requested"] = False
+        _seller_state["phase"] = "idle"
+        _seller_state["stop_event"] = None
+        _seller_state["dm"] = None
+        _seller_state["session_id"] = None
+        _seller_state["output_dir"] = None
     return jsonify({"status": "reset"})
+
+
+# ─────────────────────────────────────────────
+# STEP 3: マスターセラーリサーチ
+# ─────────────────────────────────────────────
+
+@app.route("/api/master_sellers")
+def api_master_sellers():
+    """マスターセラーリスト取得（ソート・件数制限付き）"""
+    sort_order = request.args.get("sort_order", "desc")   # asc / desc
+    limit = request.args.get("limit", "0")
+    try:
+        limit = int(limit)
+    except ValueError:
+        limit = 0
+    records = _sellers_master.get_all(sort_order=sort_order)
+    if limit > 0:
+        records = records[:limit]
+    return jsonify({"sellers": records, "total": len(records)})
+
+
+@app.route("/api/master_sellers/stats")
+def api_master_sellers_stats():
+    """マスターリスト統計"""
+    return jsonify(_sellers_master.stats())
+
+
+@app.route("/api/master_sellers/scrape/start", methods=["POST"])
+def api_master_scrape_start():
+    """STEP 3 スクレイピング開始"""
+    with _master_lock:
+        if _master_state["running"]:
+            return jsonify({"error": "既に実行中です"}), 400
+
+    data = request.get_json(silent=True) or {}
+    sort_order = data.get("sort_order", "desc")
+    batch_size = data.get("batch_size", 0)   # 0 = 上限なし
+
+    all_unscraped = _sellers_master.get_unscraped(sort_order=sort_order)
+    if not all_unscraped:
+        return jsonify({"error": "未スクレイピングのセラーがありません"}), 400
+
+    targets = all_unscraped[:batch_size] if batch_size > 0 else all_unscraped
+
+    stop_ev = threading.Event()
+    with _master_lock:
+        _master_state["running"] = True
+        _master_state["phase"] = "scraping_list"
+        _master_state["stop_event"] = stop_ev
+        _master_state["session_id"] = None
+        _master_state["output_dir"] = None
+        _master_state["dm"] = None
+        _master_state["total"] = len(targets)
+        _master_state["done"] = 0
+        _master_state["current_seller"] = ""
+
+    t = threading.Thread(
+        target=_run_master_analysis,
+        args=(targets, stop_ev),
+        daemon=True,
+        name="master-analyzer",
+    )
+    t.start()
+    with _master_lock:
+        _master_state["thread"] = t
+
+    logger.info(f"STEP 3 スクレイピング開始: {len(targets)}件")
+    return jsonify({"status": "started", "total": len(targets)})
+
+
+@app.route("/api/master_sellers/scrape/stop", methods=["POST"])
+def api_master_scrape_stop():
+    """STEP 3 スクレイピング停止"""
+    with _master_lock:
+        ev = _master_state.get("stop_event")
+    if ev:
+        ev.set()
+    logger.info("STEP 3 停止リクエスト")
+    return jsonify({"status": "stopping"})
+
+
+@app.route("/api/master_sellers/scrape/status")
+def api_master_scrape_status():
+    """STEP 3 進捗"""
+    with _master_lock:
+        running = _master_state["running"]
+        phase = _master_state["phase"]
+        total = _master_state["total"]
+        done = _master_state["done"]
+        current_seller = _master_state["current_seller"]
+        session_id = _master_state["session_id"]
+        dm = _master_state["dm"]
+
+    total_items = 0
+    if dm is not None:
+        try:
+            total_items = dm.total_items
+        except Exception:
+            pass
+
+    return jsonify({
+        "running": running,
+        "phase": phase,
+        "total": total,
+        "done": done,
+        "current_seller": current_seller,
+        "session_id": session_id,
+        "total_items": total_items,
+    })
+
+
+def _run_master_analysis(targets: list, stop_ev: threading.Event):
+    """STEP 3 バックグラウンドスレッド"""
+    global _data_manager, _image_processor, _gemini_client, _session_output_dir
+
+    out_dir, session_id = make_output_dir("master_analysis")
+    dm = DataManager(session_id, out_dir)
+    img = ImageProcessor(out_dir / "images")
+    gc = GeminiClient()
+
+    with _master_lock:
+        _master_state["session_id"] = session_id
+        _master_state["output_dir"] = out_dir
+        _master_state["dm"] = dm
+
+    # SellerAnalyzer に渡す形式に変換
+    sellers_for_analyzer = [
+        {
+            "seller_id": r["seller_id"],
+            "seller_url": f"https://aucfan.com/search1/?aucnm={r['seller_id']}",
+            "status": "pending",
+        }
+        for r in targets
+    ]
+
+    def on_progress(index: int, status: str):
+        with _master_lock:
+            sid = targets[index]["seller_id"] if 0 <= index < len(targets) else ""
+            if status == "running":
+                _master_state["current_seller"] = sid
+            if status == "done":
+                _master_state["done"] += 1
+                # last_scraped_date と candidates_count を書き戻す
+                try:
+                    # 完了時点でのグループ化済み候補数を取得
+                    cnt = sum(
+                        1 for i in dm.get_all_items()
+                        if i.get("seller_id") == sid
+                        and i.get("status") in (
+                            config.STATUS_CANDIDATE,
+                            config.STATUS_NEXT_CANDIDATE,
+                            config.STATUS_OK,
+                        )
+                    )
+                    _sellers_master.update_scraped(sid, candidates_count=cnt)
+                except Exception as _e:
+                    logger.warning(f"sellers_master 更新失敗 ({sid}): {_e}")
+            dm_status = dm.get_progress().get("status", "scraping_list")
+            _master_state["phase"] = dm_status
+
+    analyzer = SellerAnalyzer(
+        sellers=sellers_for_analyzer,
+        data_manager=dm,
+        image_processor=img,
+        gemini_client=gc,
+        stop_event=stop_ev,
+        on_seller_progress=on_progress,
+    )
+    analyzer.run()
+
+    final_status = dm.get_progress().get("status", "done")
+    if final_status in ("done", "stopped"):
+        _save_export_files(dm, out_dir)
+
+    # 完了後にメイン UI に差し替え
+    with _lock:
+        _data_manager = dm
+        _image_processor = img
+        _gemini_client = gc
+        _session_output_dir = out_dir
+
+    with _master_lock:
+        _master_state["running"] = False
+        _master_state["current_seller"] = ""
+        _master_state["phase"] = final_status
+
+    logger.info(f"STEP 3 完了: {dm.total_items}件 → {out_dir}")
 
 
 # ─────────────────────────────────────────────
@@ -1200,8 +1991,49 @@ def check_env():
     logger.info("")
 
 
+def _auto_load_latest_session():
+    """
+    起動時に最新のセッションを自動ロードする。
+    前回のスクレイピング結果をすぐに表示できるようにする。
+    セッションが存在しない場合は何もしない。
+    """
+    global _data_manager, _image_processor, _gemini_client, _session_output_dir
+
+    base = Path(config.OUTPUT_BASE_DIR)
+    if not base.exists():
+        return
+
+    # 最新のセッションフォルダを探す（更新日時順）
+    latest_dir = None
+    for d in sorted(base.iterdir(), reverse=True):
+        if d.is_dir() and (d / "progress.json").exists():
+            latest_dir = d
+            break
+
+    if latest_dir is None:
+        return
+
+    try:
+        session_name = latest_dir.name
+        _session_output_dir = latest_dir
+        _data_manager = DataManager(session_name, latest_dir)
+        _data_manager.load_previous_session()
+        _image_processor = ImageProcessor(latest_dir / "images")
+        _gemini_client = GeminiClient()
+        logger.info(
+            f"[起動時自動ロード] セッション: {session_name}"
+            f" ({_data_manager.total_items}件)"
+        )
+    except Exception as e:
+        logger.warning(f"[起動時自動ロード] 失敗（スキップ）: {e}")
+        # ロード失敗してもFlaskは起動する
+
+
 if __name__ == "__main__":
     check_env()
+
+    # 最新セッションを自動ロード（再起動後も前回結果をすぐ表示）
+    _auto_load_latest_session()
 
     # ブラウザを自動で開く（少し遅らせる）
     def open_browser():

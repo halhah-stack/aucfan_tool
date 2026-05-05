@@ -7,6 +7,7 @@ scraper.py - AucFan Selenium スクレイパー
 - エラーがあっても継続
 - 途中停止・再開対応
 """
+import hashlib
 import logging
 import random
 import re
@@ -52,6 +53,10 @@ class AucFanScraper:
         self.gemini = gemini_client
         self.stop_event = stop_event
         self.driver: Optional[webdriver.Chrome] = None
+        # True にすると _parse_item_card() の価格フィルタをスキップする
+        # キーワードリサーチ: False（デフォルト）
+        # セラー分析: True（SellerAnalyzer.__init__ で設定）
+        self.skip_price_filter: bool = False
 
     # ─────────────────────────────────────────────
     # Chrome 接続
@@ -74,7 +79,7 @@ class AucFanScraper:
             self.driver = webdriver.Chrome(options=options)
             logger.info(f"Chrome に接続しました（初期タブ）: {self.driver.current_url}")
 
-            # AucFanタブに切り替え
+            # AucFanタブに切り替え（見つからない場合は現在のタブで続行）
             for handle in self.driver.window_handles:
                 self.driver.switch_to.window(handle)
                 current = self.driver.current_url
@@ -82,7 +87,11 @@ class AucFanScraper:
                     logger.info(f"AucFanタブに切り替えました: {current}")
                     break
             else:
-                logger.warning("AucFanタブが見つかりません。現在のタブで続行します: " + self.driver.current_url)
+                # セラー分析では直後に navigate() で目的のURLへ移動するため問題なし
+                logger.info(
+                    "AucFanタブが見つかりません（スクレイピング開始時に移動します）: "
+                    + self.driver.current_url
+                )
 
             logger.info(f"現在のURL: {self.driver.current_url}")
             return True
@@ -170,9 +179,28 @@ class AucFanScraper:
                 logger.info("=== 最終グループ化 ===")
                 self._run_phash_grouping()
 
+            # Vision判定（最終グループ化後）
+            if not self.stop_event.is_set():
+                self.dm.update_progress(status="vision_check")
+                self._run_vision_group_check()
+
             final_status = "stopped" if self.stop_event.is_set() else "done"
             self.dm.update_progress(status=final_status)
             logger.info(f"=== スクレイピング完了 ({final_status}) ===")
+
+            # ── マスターセラーリストへ seller_id を追記 ──
+            try:
+                from sellers_master import SellersMaster
+                keyword = self.dm.get_progress().get("keyword", "")
+                all_sids = list({
+                    str(i.get("seller_id", "")).strip()
+                    for i in self.dm.get_all_items()
+                    if i.get("seller_id")
+                })
+                if all_sids:
+                    SellersMaster().upsert_sellers(all_sids, source_keyword=keyword)
+            except Exception as _e:
+                logger.warning(f"sellers_master 更新スキップ: {_e}")
 
         except Exception as e:
             logger.error(f"スクレイピング中に予期しないエラー: {e}", exc_info=True)
@@ -215,25 +243,44 @@ class AucFanScraper:
         consecutive_errors = 0
 
         while page <= config.MAX_PAGES and not self.stop_event.is_set():
-            logger.info(f"[一覧] ページ {page} / {config.MAX_PAGES}: {current_url}")
+            logger.info(f"[一覧] ページ {page}: {current_url}")
 
             try:
-                # ページ解析
-                items = self._parse_list_page()
+                # ── 商品取得（リトライあり）──
+                items, all_timed_out = self._fetch_page_items_with_retry(
+                    current_url, max_retries=2
+                )
 
                 if not items:
-                    logger.warning(f"ページ {page}: アイテムが見つかりません")
-                    consecutive_errors += 1
-                    if consecutive_errors >= 5:
-                        logger.error("連続5ページ空白のため一覧取得を終了します")
-                        break
+                    if all_timed_out:
+                        # 全リトライがタイムアウト → ページ読み込み失敗扱いでスキップ
+                        logger.warning(f"[一覧] ページ {page}: 全リトライタイムアウト → スキップ")
+                        # consecutive_errors はカウントしない
+                    else:
+                        logger.info(f"[一覧] ページ {page}: リトライ後も商品なし")
+                        consecutive_errors += 1
+                        if consecutive_errors >= 3:
+                            logger.info("連続3ページ空白のため一覧取得を終了します")
+                            break
                 else:
-                    consecutive_errors = 0
-                    logger.info(f"ページ {page}: {len(items)}件取得")
-
+                    prev_count = self.dm.total_items
                     for item in items:
                         self.dm.add_item(item)
+                    new_count = self.dm.total_items - prev_count
 
+                    if new_count == 0:
+                        # 全件が重複 = 同一ページを再取得している（ページネーション終了）
+                        logger.info(
+                            f"[一覧] ページ {page}: {len(items)}件取得したが全て重複。"
+                            "ページネーション終了と判定。"
+                        )
+                        break
+
+                    consecutive_errors = 0
+                    logger.info(
+                        f"[一覧] ページ {page}: {len(items)}件取得"
+                        f" (新規: {new_count}件, 累計: {self.dm.total_items}件)"
+                    )
                     self.dm.update_progress(
                         pages_done=page,
                         total_items=self.dm.total_items,
@@ -246,7 +293,7 @@ class AucFanScraper:
                 # 次のページへ
                 next_url = self._get_next_page_url(current_url, page)
                 if not next_url:
-                    logger.info("次のページが見つかりません。一覧取得完了。")
+                    logger.info("[一覧] 次のページが見つかりません。一覧取得完了。")
                     break
 
                 current_url = next_url
@@ -260,7 +307,7 @@ class AucFanScraper:
                         break
 
             except Exception as e:
-                logger.warning(f"ページ {page} でエラー: {e}")
+                logger.warning(f"[一覧] ページ {page} でエラー: {e}")
                 self.dm.add_error(f"ページ{page}: {e}")
                 consecutive_errors += 1
                 if consecutive_errors >= 5:
@@ -271,6 +318,131 @@ class AucFanScraper:
 
         logger.info(f"一覧取得完了: {self.dm.total_items}件")
         self.dm.save_all()
+
+    # ─────────────────────────────────────────────
+    # ページ取得（リトライあり）
+    # ─────────────────────────────────────────────
+
+    def _fetch_page_items_with_retry(
+        self, url: str, max_retries: int = 2
+    ) -> tuple:
+        """
+        現在ページの商品を取得する。0件またはタイムアウトの場合は
+        ページをリロードして最大 max_retries 回リトライする。
+
+        Returns:
+            (items: List[dict], all_timed_out: bool)
+              items が空 + all_timed_out=True  → 全試行がタイムアウト（スキップ推奨）
+              items が空 + all_timed_out=False → リトライ後も確認済み空ページ
+              items 非空                       → 取得成功
+        """
+        all_timed_out = True
+
+        for attempt in range(max_retries + 1):  # 0, 1, 2
+            if attempt > 0:
+                wait_sec = random.uniform(2.0, 3.0)
+                logger.info(
+                    f"  [リトライ {attempt}/{max_retries}]"
+                    f" リロード (待機 {wait_sec:.1f}秒) ..."
+                )
+                time.sleep(wait_sec)
+                try:
+                    self.driver.refresh()
+                except Exception as e:
+                    logger.warning(f"  リロード失敗: {e}")
+                    continue  # all_timed_out は True のまま
+
+            content_status = self._wait_for_page_content(timeout=15)
+
+            if content_status == "timeout":
+                logger.warning(
+                    f"  読み込みタイムアウト"
+                    f" (試行 {attempt + 1}/{max_retries + 1})"
+                )
+                continue  # all_timed_out は True のまま
+
+            # "items" または "empty" → DOM は確定している
+            all_timed_out = False
+            items = self._parse_list_page()
+
+            if items:
+                if attempt > 0:
+                    logger.info(f"  リトライ成功: {len(items)}件取得")
+                return (items, False)
+
+            # 0件
+            if content_status == "empty":
+                logger.info(
+                    f"  商品なし確認"
+                    f" (試行 {attempt + 1}/{max_retries + 1})"
+                )
+            else:
+                logger.warning(
+                    f"  0件（DOM確認済み）"
+                    f" (試行 {attempt + 1}/{max_retries + 1})"
+                )
+            # 次のリトライへ
+
+        return ([], all_timed_out)
+
+    # ─────────────────────────────────────────────
+    # ページコンテンツ待機
+    # ─────────────────────────────────────────────
+
+    def _wait_for_page_content(self, timeout: int = 15) -> str:
+        """
+        商品カードのDOMが出現するまで待機する。
+
+        readyState=complete だけでは JS レンダリングが完了していない場合があるため、
+        実際の商品カードセレクタが出現するまで最大 timeout 秒待つ。
+
+        Returns:
+            "items"   : 商品カードDOM検出（正常）
+            "empty"   : AucFanの「商品がありません」ページを確認
+            "timeout" : タイムアウト（DOM未確定）→ 呼び出し元でスキップ処理すること
+        """
+        # まず readyState=complete を待つ
+        try:
+            WebDriverWait(self.driver, config.PAGE_LOAD_TIMEOUT).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+        except Exception:
+            return "timeout"
+
+        # 商品カードセレクタが出現するまで最大 timeout 秒待つ
+        card_selectors = config.SELECTORS["list"]["item_cards"]
+        css = ", ".join(card_selectors)
+        try:
+            WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, css))
+            )
+            return "items"
+        except TimeoutException:
+            pass
+
+        # タイムアウト後: AucFanの「商品なし」状態かどうかを確認
+        try:
+            if self._detect_empty_page(self.driver.page_source):
+                return "empty"
+        except Exception:
+            pass
+
+        return "timeout"
+
+    # AucFanが「商品がありません」を表示するときの典型的なテキストパターン
+    _EMPTY_PAGE_PATTERNS = [
+        "商品がありません",
+        "見つかりませんでした",
+        "一致する商品は見つかりませんでした",
+        "検索条件に一致する商品はありませんでした",
+    ]
+
+    def _detect_empty_page(self, html: str) -> bool:
+        """AucFanの「商品がありません」ページを検出する"""
+        for pattern in self._EMPTY_PAGE_PATTERNS:
+            if pattern in html:
+                return True
+        return False
 
     def _scroll_to_load_images(self):
         """
@@ -291,6 +463,10 @@ class AucFanScraper:
         except Exception as e:
             logger.debug(f"スクロール中エラー（無視）: {e}")
 
+    # 診断用: 「0件」が何件発生したか（HTMLダンプは最初の3件のみ）
+    _zero_item_dump_count = 0
+    _ZERO_ITEM_DUMP_MAX = 3
+
     def _parse_list_page(self) -> List[dict]:
         """現在のページをパースして商品リストを返す"""
         try:
@@ -302,32 +478,105 @@ class AucFanScraper:
             self._scroll_to_load_images()
             html = self.driver.page_source
         except Exception as e:
-            logger.warning(f"ページソース取得エラー: {e}")
+            logger.warning(f"ページソース取得エラー (条件C): {e}")
             return []
 
         soup = BeautifulSoup(html, "lxml")
         items = []
+        current_url = ""
+        try:
+            current_url = self.driver.current_url
+        except Exception:
+            pass
 
         # 商品カードを探す（複数セレクターを試す）
         cards = self._find_elements_soup(soup, config.SELECTORS["list"]["item_cards"])
 
         if not cards:
-            logger.debug("商品カードが見つかりません（セレクターを確認してください）")
+            # ── 診断ログ: 条件A（セレクター不一致）──
+            # どんな section タグがあるか / ページのサイズも記録
+            sections = soup.find_all("section")
+            section_classes = [
+                " ".join(s.get("class", [])) for s in sections[:10]
+            ]
+            logger.warning(
+                f"[診断 条件A] 商品カードセレクター不一致 URL={current_url}"
+                f" | HTMLサイズ={len(html)}文字"
+                f" | section数={len(sections)}"
+                f" | sectionクラス={section_classes}"
+            )
+            self._dump_html_on_zero(current_url, html, "条件A_セレクター不一致")
             return []
 
-        current_url = self.driver.current_url
         keyword = self._extract_keyword_from_url(current_url)
 
+        # カードごとにパースしてフィルタ理由を集計
+        filtered_no_title = 0
+        filtered_price = 0
         for card in cards:
             try:
-                item = self._parse_item_card(card, keyword, current_url)
+                item, reject_reason = self._parse_item_card_debug(card, keyword, current_url)
                 if item:
                     items.append(item)
+                elif reject_reason == "no_title":
+                    filtered_no_title += 1
+                elif reject_reason == "price":
+                    filtered_price += 1
             except Exception as e:
                 logger.debug(f"カードパースエラー: {e}")
                 continue
 
+        if not items and cards:
+            # ── 診断ログ: 条件B（カードはあるが全フィルタアウト）──
+            logger.warning(
+                f"[診断 条件B] カード{len(cards)}枚あるが全フィルタアウト"
+                f" | タイトル空={filtered_no_title}"
+                f" | 価格フィルタ={filtered_price}"
+                f" | URL={current_url}"
+            )
+            self._dump_html_on_zero(current_url, html, "条件B_全フィルタアウト")
+
         return items
+
+    def _dump_html_on_zero(self, url: str, html: str, reason: str):
+        """
+        0件原因の診断用に HTML の先頭部分をファイルに保存する。
+        最初の _ZERO_ITEM_DUMP_MAX 件のみ保存（ディスク節約）。
+        """
+        if self._zero_item_dump_count >= self._ZERO_ITEM_DUMP_MAX:
+            return
+        try:
+            dump_dir = self.img.images_dir.parent / "debug_html"
+            dump_dir.mkdir(exist_ok=True)
+            fname = f"zero_items_{self._zero_item_dump_count + 1}_{reason[:30]}.html"
+            fpath = dump_dir / fname
+            # 先頭 50KB のみ保存
+            fpath.write_text(html[:50_000], encoding="utf-8")
+            logger.info(f"[診断] HTML保存: {fpath}  (URL={url})")
+            self.__class__._zero_item_dump_count += 1
+        except Exception as e:
+            logger.debug(f"HTML保存失敗: {e}")
+
+    def _parse_item_card_debug(
+        self, card, keyword: str, base_url: str
+    ) -> tuple:
+        """
+        _parse_item_card の診断版。フィルタ理由も返す。
+        Returns: (item_dict | None, reject_reason: str)
+          reject_reason: "" | "no_title" | "price"
+        """
+        item = self._parse_item_card(card, keyword, base_url)
+        if item is not None:
+            return (item, "")
+
+        # どの条件で弾かれたか判定
+        title_el = self._find_element_soup(card, config.SELECTORS["list"]["title"])
+        title = title_el.get_text(strip=True) if title_el else ""
+        if not title:
+            return (None, "no_title")
+
+        # タイトルはあるが None → 価格フィルタ
+        return (None, "price")
 
     def _parse_item_card(self, card, keyword: str, base_url: str) -> Optional[dict]:
         """個別の商品カードをパースして辞書を返す"""
@@ -338,13 +587,39 @@ class AucFanScraper:
         if not title:
             return None
 
+        # タイトルキーワード除外（チケット・金券・商品券など）
+        for kw in config.EXCLUDE_TITLE_KEYWORDS:
+            if kw in title:
+                logger.debug(f"キーワード除外 [{kw}]: {title[:60]}")
+                return None
+
+        # タイトル先頭メーカー名除外
+        # 「送料無料 HITACHI 冷蔵庫...」のような先頭1〜2トークンにメーカー名が来るパターンを検出
+        # ただし自動車・バイク・カー用品カテゴリ（AUTOMOTIVE_KEYWORDS にヒット）はスキップ
+        _is_automotive = any(kw in title for kw in config.AUTOMOTIVE_KEYWORDS)
+        if not _is_automotive:
+            _title_tokens = title.split()
+            _check_tokens = []
+            for _tok in _title_tokens[:3]:
+                if _tok in config.TITLE_STATUS_WORDS:
+                    continue          # 状態ワードはスキップ
+                _check_tokens.append(_tok)
+                if len(_check_tokens) >= 2:
+                    break             # 先頭から最大2トークン（状態ワード除く）を検査
+            for _tok in _check_tokens:
+                if _tok.lower() in config.EXCLUDE_MAKER_KEYWORDS:
+                    logger.debug(f"メーカー名除外 [{_tok}]: {title[:60]}")
+                    return None
+
         # 価格（数字を抽出）
         price_el = self._find_element_soup(card, config.SELECTORS["list"]["price"])
         price = self._extract_price(price_el.get_text(strip=True) if price_el else "0")
 
         # 価格フィルター（一覧段階で大まかに絞る）
-        if price > 0 and (price < config.MIN_PRICE or price > config.MAX_PRICE * 1.5):
-            return None
+        # skip_price_filter=True（セラー分析モード）では全件取得するためスキップ
+        if not self.skip_price_filter:
+            if price > 0 and (price < config.MIN_PRICE or price > config.MAX_PRICE * 1.5):
+                return None
 
         # セラーID + セラー検索URL（a.sellerLink の href を流用）
         seller_el = self._find_element_soup(card, config.SELECTORS["list"]["seller"])
@@ -396,7 +671,20 @@ class AucFanScraper:
         else:
             phash_str = ""
 
+        # 商品URLをキーにした安定ID（同一商品が異なるページで重複取得されたとき上書きになる）
+        stable_id = (
+            hashlib.md5(item_url.encode()).hexdigest()[:16]
+            if item_url
+            else None
+        )
+
+        # トレーディングカード関連フラグ（Gemini 判定で本体 vs アクセサリーを判別）
+        needs_card_check = any(kw in title for kw in config.TRADING_CARD_KEYWORDS)
+        if needs_card_check:
+            logger.debug(f"トレカフラグ付与: {title[:60]}")
+
         return {
+            "item_id": stable_id,       # URLベースの安定ID（None の場合は add_item が UUID を生成）
             "keyword": keyword,
             "title_short": title[:200],
             "price": price,
@@ -406,19 +694,45 @@ class AucFanScraper:
             "thumbnail_url": thumbnail_url,
             "thumbnail_local": thumbnail_local,
             "phash": phash_str,
+            "needs_card_check": needs_card_check,  # トレカ本体 vs アクセサリー判定フラグ
         }
 
     # ─────────────────────────────────────────────
     # Step2: 詳細ページ取得
     # ─────────────────────────────────────────────
 
-    def _scrape_detail_pages(self):
+    def _scrape_detail_pages(self, target_statuses=None, min_group_size=None):
         """
-        候補商品の詳細ページを取得する（グループ5件以上 or 全候補）。
+        候補商品の詳細ページを取得する。
+
+        Parameters
+        ----------
+        target_statuses : list[str] | None
+            絞り込むステータスリスト。None の場合は STATUS_NG 以外の全候補。
+        min_group_size : int | None
+            グループ件数の下限フィルタ。None の場合は絞り込まない。
+            セラー分析で min_group_size=1 により全件 candidate になる場合に
+            group_size >= N の商品だけ詳細取得・Gemini判定するために使用。
+            例: config.SELLER_DETAIL_MIN_GROUP (デフォルト 3)
         """
-        # 詳細取得対象: 候補または確認待ちで未取得のもの
-        targets = self.dm.get_unscraped_candidates()
-        logger.info(f"詳細ページ取得対象: {len(targets)}件")
+        all_targets = self.dm.get_unscraped_candidates()
+
+        targets = all_targets
+        if target_statuses is not None:
+            targets = [item for item in targets if item.get("status") in target_statuses]
+        if min_group_size is not None:
+            targets = [item for item in targets if item.get("group_size", 1) >= min_group_size]
+
+        if target_statuses is not None or min_group_size is not None:
+            logger.info(
+                f"詳細ページ取得対象: {len(targets)}件"
+                f" (全候補: {len(all_targets)}件"
+                + (f", ステータス絞り込み: {target_statuses}" if target_statuses else "")
+                + (f", group_size >= {min_group_size}" if min_group_size else "")
+                + ")"
+            )
+        else:
+            logger.info(f"詳細ページ取得対象: {len(targets)}件")
 
         self.dm.update_progress(
             detail_pages_total=len(targets),
@@ -575,6 +889,95 @@ class AucFanScraper:
             logger.error(f"pHashグループ化エラー: {e}")
             self.dm.add_error(f"pHashグループ化: {e}")
 
+    def _run_vision_group_check(self):
+        """
+        pHashグループ化後に Gemini Vision API でグループ代表画像を判定。
+        group_size >= config.VISION_MIN_GROUP_SIZE のグループを対象とする。
+        詳細ページ取得済みアイテムは既に classify_item_full() 済みのためスキップ。
+        """
+        if not self.gemini.available:
+            return
+
+        try:
+            groups = self.dm.get_groups()
+        except Exception as e:
+            logger.error(f"Vision判定: get_groups() 失敗: {e}")
+            return
+
+        targets = [
+            (gid, members)
+            for gid, members in groups.items()
+            if len(members) >= config.VISION_MIN_GROUP_SIZE
+        ]
+        logger.info(
+            f"=== Vision判定: {len(targets)}グループ対象 "
+            f"(group_size>={config.VISION_MIN_GROUP_SIZE}) ==="
+        )
+
+        for gid, members in targets:
+            if self.stop_event.is_set():
+                break
+
+            # 既に全員 NG or OK なら Vision 判定不要
+            non_ng = [m for m in members if m.get("status") != config.STATUS_NG]
+            if not non_ng:
+                continue
+
+            # 詳細取得済み（Gemini テキスト判定済み）アイテムがある場合はスキップ
+            # （detail_done フラグがあるものが1件以上いればグループ判定は済んでいる）
+            if any(m.get("detail_done") for m in members):
+                continue
+
+            # 代表アイテム：thumbnail_local がある最初のもの
+            rep = next(
+                (m for m in members if m.get("thumbnail_local")),
+                None,
+            )
+            if rep is None:
+                continue
+
+            title = rep.get("title_short", "")
+            thumb = Path(rep["thumbnail_local"])
+
+            logger.info(
+                f"  Vision判定: グループ {gid} ({len(members)}件) "
+                f"代表='{title[:30]}'"
+            )
+
+            result = self.gemini.classify_item_full(title, thumb)
+
+            gemini_source = result.get("gemini_source", "vision")
+            gemini_reason = result.get("gemini_reason", "")
+
+            if result.get("excluded") or result.get("is_branded"):
+                reason = result.get("exclude_reason", "Vision除外判定")
+                logger.info(f"    → NG: {reason}")
+                for m in members:
+                    self.dm.update_item(
+                        m["item_id"],
+                        {
+                            "status": config.STATUS_NG,
+                            "exclude_reason": reason,
+                            "gemini_source": gemini_source,
+                            "gemini_reason": gemini_reason or reason,
+                        },
+                    )
+            elif result.get("needs_review"):
+                reason = result.get("review_reason", "Vision要確認判定")
+                logger.info(f"    → 要確認: {reason}")
+                for m in members:
+                    # 既に NG のものは上書きしない
+                    if m.get("status") != config.STATUS_NG:
+                        self.dm.update_item(
+                            m["item_id"],
+                            {
+                                "status": config.STATUS_REVIEW,
+                                "needs_review": True,
+                                "gemini_source": gemini_source,
+                                "gemini_reason": gemini_reason or reason,
+                            },
+                        )
+
     # ─────────────────────────────────────────────
     # ナビゲーション・待機
     # ─────────────────────────────────────────────
@@ -602,26 +1005,68 @@ class AucFanScraper:
     def _get_next_page_url(self, current_url: str, current_page: int) -> Optional[str]:
         """
         次ページのURLを取得する。
-        1. 「次へ」ボタンを探す
-        2. なければURL パラメータを page+1 に変更
+        1. 「次へ」ボタンの CSS セレクターを探す
+        2. AucFan 固有: ?o=p{next} を含むリンクを探す
+        3. どちらも見つからなければフォールバック（?o=pN を付与）
+           ※ フォールバックは stable item_id + new_count==0 検出で安全に停止できる
+
+        【URL マージの注意】
+        AucFan のページャーリンクが ?o=p2 形式（クエリ相対URL）の場合、
+        urljoin では ?seller=XYZ が失われるため _merge_next_url を使う。
         """
         try:
-            # HTMLから次ページリンクを探す
             html = self.driver.page_source
             soup = BeautifulSoup(html, "lxml")
 
+            # 1. CSS セレクターで「次へ」ボタンを探す
             for sel in config.SELECTORS["list"]["next_page"]:
                 el = soup.select_one(sel)
                 if el and el.get("href"):
                     href = el["href"]
-                    if not href.startswith("http"):
-                        href = urljoin(current_url, href)
-                    return href
-        except Exception:
-            pass
+                    merged = self._merge_next_url(current_url, href)
+                    logger.debug(f"次ページリンク発見 (CSS): {merged}")
+                    return merged
 
-        # フォールバック: AucFan形式 ?p=N で次ページ生成
-        return self._build_page_url_aucfan(current_url, current_page + 1)
+            # 2. AucFan 固有: ?o=p{N+1} を含む <a> を探す
+            next_o_param = f"o=p{current_page + 1}"
+            for a in soup.find_all("a", href=True):
+                if next_o_param in a["href"]:
+                    href = a["href"]
+                    merged = self._merge_next_url(current_url, href)
+                    logger.debug(f"次ページリンク発見 (o=pN): {merged}")
+                    return merged
+
+        except Exception as e:
+            logger.debug(f"次ページURL取得エラー: {e}")
+
+        # 3. フォールバック: AucFan形式 ?o=pN で次ページ生成
+        #    （stable item_id + new_count==0 検出で同一ページ無限ループは防止済み）
+        fallback = self._build_page_url_aucfan(current_url, current_page + 1)
+        logger.debug(f"次ページリンクなし → フォールバック: {fallback}")
+        return fallback
+
+    def _merge_next_url(self, current_url: str, href: str) -> str:
+        """
+        AucFan のページャーリンク href を現在の URL とマージして次ページ URL を返す。
+
+        【問題】href が ?o=p2 形式（クエリ文字列のみ）のとき urljoin を使うと
+                ?seller=XYZ など現在URLのクエリパラメータが失われる。
+        【解決】href が ? 始まりのときは現在URLのクエリと href のクエリをマージする。
+        """
+        if not href:
+            return current_url
+        if href.startswith("http"):
+            return href
+        if href.startswith("?"):
+            # クエリ相対URL: 現在URLのパラメータに href のパラメータを上書きマージ
+            parsed = urlparse(current_url)
+            base_params = parse_qs(parsed.query)
+            new_params = parse_qs(href.lstrip("?"))
+            merged = {**base_params, **new_params}  # href 側が優先
+            new_query = urlencode({k: v[0] for k, v in merged.items()})
+            return urlunparse(parsed._replace(query=new_query))
+        # パス相対URL または /-始まり: 通常の urljoin
+        return urljoin(current_url, href)
 
     def _build_page_url(self, base_url: str, page: int) -> str:
         """URLにページ番号を付与"""
@@ -785,14 +1230,24 @@ class AucFanScraper:
         return ""
 
     def _build_page_url_aucfan(self, base_url: str, page: int) -> str:
-        """AucFan 専用ページネーション: ?p=N パラメータを付与"""
+        """AucFan 専用ページネーション: ?o=pN パラメータを付与
+
+        AucFan のページネーション形式:
+          1ページ目: パラメータなし（o= を除去）
+          2ページ目以降: ?o=p2, ?o=p3, ...
+        ※ 旧実装は ?p=N を使っていたが、AucFan は ?o=pN が正しい形式。
+        """
         try:
             parsed = urlparse(base_url)
             params = parse_qs(parsed.query)
-            params["p"] = [str(page)]
-            # p=1 の場合は除去（1ページ目はパラメータなし）
-            if page == 1 and "p" in params:
-                del params["p"]
+            # 古い p= パラメータは必ず除去
+            params.pop("p", None)
+            if page <= 1:
+                # 1ページ目は o= パラメータを除去
+                params.pop("o", None)
+            else:
+                # 2ページ目以降は o=p2, o=p3, ...
+                params["o"] = [f"p{page}"]
             new_query = urlencode({k: v[0] for k, v in params.items()})
             return urlunparse(parsed._replace(query=new_query))
         except Exception:
