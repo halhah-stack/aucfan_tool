@@ -217,6 +217,7 @@ FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
 # 出力設定
 # ─────────────────────────────────────────────
 OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", "リサーチ結果")
+SELLERS_MASTER_PATH = os.getenv("SELLERS_MASTER_PATH", "data/sellers_master.json")
 
 # ─────────────────────────────────────────────
 # 商品ステータス定義

@@ -199,10 +199,12 @@ class SellerAnalyzer(AucFanScraper):
 
             final_status = "stopped" if self.stop_event.is_set() else "done"
             self.dm.update_progress(status=final_status)
+            logger.info("=" * 50)
             logger.info(
-                f"=== セラー分析完了 ({final_status}): "
-                f"{self.dm.total_items} 件 ==="
+                f"=== セラー分析スクレイピング完了 === 全{self.dm.total_items}件処理"
+                f" ({final_status})"
             )
+            logger.info("=" * 50)
 
         except Exception as e:
             logger.error(

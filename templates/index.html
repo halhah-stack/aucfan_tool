@@ -118,6 +118,13 @@
         <div class="progress-bar" id="progressBar" style="width:0%"></div>
       </div>
       <div class="progress-sub" id="progressSub"></div>
+      <!-- 進捗カウンター: X件中Y件処理済み -->
+      <div id="progressCounter" style="display:none;font-size:12px;color:#374151;margin-top:4px;font-weight:500"></div>
+    </div>
+    <!-- STEP 1 完了バナー -->
+    <div id="step1CompletionBanner" style="display:none;background:#dcfce7;border:1px solid #16a34a;border-radius:8px;padding:8px 14px;margin-top:6px;font-size:13px;align-items:center;justify-content:space-between">
+      <span>✅ スクレイピング完了　<span id="step1CompletionCount" style="font-weight:600"></span></span>
+      <button onclick="document.getElementById('step1CompletionBanner').style.display='none'" style="background:none;border:none;cursor:pointer;color:#15803d;font-size:15px;padding:0;margin-left:12px;line-height:1" title="閉じる">✕</button>
     </div>
 
     <!-- 統計 -->
@@ -260,6 +267,13 @@
             <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
               <div id="sellerProgressBar" style="background:#16a34a;height:100%;width:0%;transition:width .3s"></div>
             </div>
+            <!-- 商品件数カウンター -->
+            <div id="step2ItemCounter" style="display:none;font-size:12px;color:#374151;margin-top:4px;font-weight:500"></div>
+          </div>
+          <!-- STEP 2 完了バナー -->
+          <div id="step2CompletionBanner" style="display:none;background:#dcfce7;border:1px solid #16a34a;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:13px;align-items:center;justify-content:space-between">
+            <span>✅ セラー分析完了　<span id="step2CompletionCount" style="font-weight:600"></span></span>
+            <button onclick="document.getElementById('step2CompletionBanner').style.display='none'" style="background:none;border:none;cursor:pointer;color:#15803d;font-size:15px;padding:0;margin-left:12px;line-height:1" title="閉じる">✕</button>
           </div>
 
           <!-- セラーIDリスト -->
@@ -348,6 +362,13 @@
           <div id="masterProgressBar" style="background:#7c3aed;height:100%;width:0%;transition:width .3s"></div>
         </div>
         <div id="masterProgressSeller" style="font-size:12px;color:#6b7280;margin-top:4px"></div>
+        <!-- 商品件数カウンター -->
+        <div id="step3ItemCounter" style="display:none;font-size:12px;color:#374151;margin-top:4px;font-weight:500"></div>
+      </div>
+      <!-- STEP 3 完了バナー -->
+      <div id="step3CompletionBanner" style="display:none;background:#ede9fe;border:1px solid #7c3aed;border-radius:8px;padding:8px 14px;margin-top:6px;font-size:13px;align-items:center;justify-content:space-between">
+        <span>✅ マスター分析完了　<span id="step3CompletionCount" style="font-weight:600"></span></span>
+        <button onclick="document.getElementById('step3CompletionBanner').style.display='none'" style="background:none;border:none;cursor:pointer;color:#6d28d9;font-size:15px;padding:0;margin-left:12px;line-height:1" title="閉じる">✕</button>
       </div>
 
       <!-- 過去のSTEP 3セッション -->
@@ -378,6 +399,19 @@
           📂 CSV読み込み
           <input type="file" id="masterCsvInput" accept=".csv" style="display:none" onchange="importMasterCsv(this)">
         </label>
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="別MacのsellerS_master.jsonをマージ（seller_idで重複排除）">
+          📥 別Macのリストをマージ
+          <input type="file" id="masterMergeInput" accept=".json" style="display:none" onchange="mergeMasterList(this)">
+        </label>
+      </div>
+    </div>
+
+    <!-- マージ結果 -->
+    <div id="masterMergeResult" style="display:none;margin-bottom:8px">
+      <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:8px 14px;font-size:13px;display:flex;align-items:center;justify-content:space-between">
+        <span id="masterMergeMessage"></span>
+        <button onclick="document.getElementById('masterMergeResult').style.display='none'"
+                style="background:none;border:none;cursor:pointer;color:#3b82f6;font-size:15px;padding:0;margin-left:12px;line-height:1" title="閉じる">✕</button>
       </div>
     </div>
 
@@ -442,7 +476,10 @@
         📈 分析レポート
       </button>
       <button class="btn btn-secondary btn-sm" id="btnExportHtml" onclick="exportHtml()">
-        📱 HTML書き出し
+        💻 HTMLで保存（Mac用）
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btnExportOfflineHtml" onclick="exportOfflineHtml()">
+        📱 HTMLで保存（iPhone/iPad用）
       </button>
       <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="results.csv を読み込んでグリッドに表示します">
         📂 CSV読み込み

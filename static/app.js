@@ -300,6 +300,7 @@ function startSSE() {
 
 function updateProgressUI(data) {
   const { progress, stats, is_running } = data;
+  const wasRunning = state.isRunning;   // 完了遷移を検出するため先に保存
   state.isRunning = is_running;
 
   // Gemini レート制限ポーリング: スクレイピング中は開始、停止後は終了してから最終確認
@@ -371,6 +372,43 @@ function updateProgressUI(data) {
   } else if (progress.status === 'grouping') {
     if (progLabel) progLabel.textContent = 'グループ化中...';
     if (progBar) progBar.style.width = '70%';
+  }
+
+  // ── 進捗カウンター (#progressCounter) ──
+  const progCounter = document.getElementById('progressCounter');
+  const step1Banner = document.getElementById('step1CompletionBanner');
+  const step1Count  = document.getElementById('step1CompletionCount');
+  if (is_running) {
+    // 新規スクレイピング開始時は完了バナーを隠す
+    if (step1Banner) step1Banner.style.display = 'none';
+
+    if (progress.status === 'scraping_list') {
+      const pi = progress.processed_items || progress.total_items || 0;
+      if (progCounter) {
+        progCounter.style.display = '';
+        progCounter.textContent = `処理済み: ${pi.toLocaleString()}件`;
+      }
+    } else if (progress.status === 'scraping_detail') {
+      const pi = progress.processed_items || progress.detail_pages_done || 0;
+      const ti = progress.detail_pages_total || 0;
+      if (progCounter) {
+        progCounter.style.display = '';
+        progCounter.textContent = ti > 0
+          ? `${pi.toLocaleString()}件 / ${ti.toLocaleString()}件処理済み`
+          : `処理済み: ${pi.toLocaleString()}件`;
+      }
+    } else {
+      if (progCounter) progCounter.style.display = 'none';
+    }
+  } else {
+    if (progCounter) progCounter.style.display = 'none';
+    // running → 停止 の瞬間に完了バナーを表示
+    if (wasRunning && (progress.status === 'done' || progress.status === 'stopped')) {
+      if (step1Banner && step1Count) {
+        step1Count.textContent = `${(progress.total_items || 0).toLocaleString()}件処理`;
+        step1Banner.style.display = 'flex';
+      }
+    }
   }
 
   // ボタン状態
@@ -967,12 +1005,13 @@ function exportCsv() {
 }
 
 // ─────────────────────────────────────────────
-// HTML エクスポート（iPhone/iPad 持ち出し用）
+// HTML エクスポート（Mac用・ブラウザで開く用）
 // ─────────────────────────────────────────────
 async function exportHtml() {
   const btn = document.getElementById('btnExportHtml');
+  const origLabel = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 書き出し中...'; }
-  showToast('📱 HTMLを生成中... 画像埋め込みのため少し時間がかかります');
+  showToast('💻 HTMLを生成中...');
 
   try {
     const res = await fetch('/api/export/html');
@@ -981,9 +1020,8 @@ async function exportHtml() {
       showToast('❌ ' + (err.error || '書き出し失敗'), 'error');
       return;
     }
-    // Content-Disposition からファイル名を取得
     const disposition = res.headers.get('Content-Disposition') || '';
-    let filename = 'aucfan_result.html';
+    let filename = 'aucfan_Mac用.html';
     const match = disposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
     if (match) filename = decodeURIComponent(match[1].replace(/"/g, '').trim());
 
@@ -994,11 +1032,47 @@ async function exportHtml() {
     document.body.appendChild(a); a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('✅ HTMLを書き出しました。AirDropやiCloudでiPhone / iPadへ送れます。');
+    showToast('✅ Mac用HTMLを保存しました（' + filename + '）');
   } catch (e) {
     showToast('❌ 書き出しエラー: ' + e, 'error');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '📱 HTML書き出し'; }
+    if (btn) { btn.disabled = false; btn.textContent = origLabel || '💻 HTMLで保存（Mac用）'; }
+  }
+}
+
+// ─────────────────────────────────────────────
+// HTML エクスポート（iPhone/iPad オフライン用）
+// ─────────────────────────────────────────────
+async function exportOfflineHtml() {
+  const btn = document.getElementById('btnExportOfflineHtml');
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 生成中...'; }
+  showToast('📱 iPhone/iPad用HTMLを生成中... 画像を埋め込んでいます');
+
+  try {
+    const res = await fetch('/api/export/html_offline');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast('❌ ' + (err.error || '書き出し失敗'), 'error');
+      return;
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    let filename = 'aucfan_iPhone_iPad用.html';
+    const match = disposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
+    if (match) filename = decodeURIComponent(match[1].replace(/"/g, '').trim());
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('✅ iPhone/iPad用HTMLを保存しました。AirDropまたはiCloudで転送できます（' + filename + '）');
+  } catch (e) {
+    showToast('❌ 書き出しエラー: ' + e, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel || '📱 HTMLで保存（iPhone/iPad用）'; }
   }
 }
 
@@ -1552,9 +1626,35 @@ async function loadLatestCsv() {
   }
 }
 
+/**
+ * HTMLファイルが誤ってアップロードされた場合に警告を表示し、trueを返す。
+ * 正常なCSVファイルの場合はfalseを返す。
+ */
+function validateNotHtmlFile(input) {
+  const file = input.files[0];
+  if (!file) return false;
+  const name = file.name;
+  const ext = name.split('.').pop().toLowerCase();
+  if (ext !== 'html' && ext !== 'htm') return false;
+
+  let msg;
+  if (name.includes('_iPhone_iPad用')) {
+    msg = '⚠️ このファイルはiPhone/iPad閲覧用のHTMLです。データの読み込みにはCSVファイルを選択してください。';
+  } else if (name.includes('_Mac用')) {
+    msg = '⚠️ このファイルはMac閲覧用のHTMLです。データの読み込みにはCSVファイルを選択してください。';
+  } else {
+    msg = '⚠️ HTMLファイルは読み込めません。CSVファイルを選択してください。';
+  }
+
+  input.value = '';
+  showToast(msg, 'error');
+  return true;
+}
+
 async function importSellerCsv(input) {
   const file = input.files[0];
   if (!file) return;
+  if (validateNotHtmlFile(input)) return;
 
   const formData = new FormData();
   formData.append('file', file);
@@ -1623,6 +1723,9 @@ async function startSellerScraping() {
   document.getElementById('btnSellerStart').disabled = true;
   document.getElementById('btnSellerStop').disabled = false;
   document.getElementById('sellerProgressWrap').style.display = 'block';
+  // 新規スクレイピング開始時に完了バナーを隠す
+  const s2b = document.getElementById('step2CompletionBanner');
+  if (s2b) s2b.style.display = 'none';
   // 完了後の「メイン画面で結果を見る」ボタンを非表示に
   const viewBtn = document.getElementById('btnViewSellerResult');
   if (viewBtn) viewBtn.style.display = 'none';
@@ -1691,7 +1794,7 @@ async function fetchSellerStatus(silent = false) {
       document.getElementById('sellerProgressWrap').style.display = 'block';
       document.getElementById('sellerProgressBar').style.width = pct + '%';
       document.getElementById('sellerProgressCount').textContent =
-        `セラー ${data.done} / ${data.total} 件 | 商品 ${data.total_items || 0} 件取得`;
+        `セラー ${data.done} / ${data.total} 件`;
 
       const currentSeller = data.current_index >= 0
         ? data.sellers[data.current_index]?.seller_id || ''
@@ -1700,6 +1803,24 @@ async function fetchSellerStatus(silent = false) {
         data.running
           ? sellerPhaseLabel(data.phase, currentSeller, data)
           : sellerPhaseLabel(data.phase, '', data);
+    }
+
+    // ── 商品件数カウンター (#step2ItemCounter) ──
+    const s2Counter = document.getElementById('step2ItemCounter');
+    const s2Banner  = document.getElementById('step2CompletionBanner');
+    const s2Count   = document.getElementById('step2CompletionCount');
+    if (data.running) {
+      if (s2Banner) s2Banner.style.display = 'none';
+      if (s2Counter) {
+        s2Counter.style.display = '';
+        s2Counter.textContent = `商品取得済み: ${(data.total_items || 0).toLocaleString()}件`;
+      }
+    } else {
+      if (s2Counter) s2Counter.style.display = 'none';
+      if ((data.phase === 'done' || data.phase === 'stopped') && s2Banner && s2Count) {
+        s2Count.textContent = `${(data.total_items || 0).toLocaleString()}件処理`;
+        s2Banner.style.display = 'flex';
+      }
     }
 
     // ボタン状態
@@ -1918,6 +2039,9 @@ async function startMasterScraping() {
   document.getElementById('btnMasterStart').disabled = true;
   document.getElementById('btnMasterStop').disabled = false;
   document.getElementById('masterProgressWrap').style.display = '';
+  // 新規スクレイピング開始時に完了バナーを隠す
+  const s3b = document.getElementById('step3CompletionBanner');
+  if (s3b) s3b.style.display = 'none';
   showToast(`▶ STEP 3 スクレイピング開始（${data.total}件）`);
 
   clearInterval(masterPollTimer);
@@ -1943,6 +2067,24 @@ async function fetchMasterStatus(silent = false) {
     setText('masterProgressLabel', phaseLabel3(data.phase));
     setText('masterProgressCount', `${data.done} / ${data.total} セラー`);
     setText('masterProgressSeller', data.current_seller ? `処理中: ${data.current_seller}` : '');
+
+    // ── 商品件数カウンター (#step3ItemCounter) ──
+    const s3Counter = document.getElementById('step3ItemCounter');
+    const s3Banner  = document.getElementById('step3CompletionBanner');
+    const s3Count   = document.getElementById('step3CompletionCount');
+    if (data.running) {
+      if (s3Banner) s3Banner.style.display = 'none';
+      if (s3Counter) {
+        s3Counter.style.display = '';
+        s3Counter.textContent = `商品取得済み: ${(data.total_items || 0).toLocaleString()}件`;
+      }
+    } else {
+      if (s3Counter) s3Counter.style.display = 'none';
+      if ((data.phase === 'done' || data.phase === 'stopped') && s3Banner && s3Count) {
+        s3Count.textContent = `${(data.total_items || 0).toLocaleString()}件処理`;
+        s3Banner.style.display = 'flex';
+      }
+    }
 
     if (!data.running) {
       clearInterval(masterPollTimer);
@@ -1990,6 +2132,7 @@ function phaseLabel3(phase) {
 async function loadGridFromCsv(input) {
   const file = input.files[0];
   if (!file) return;
+  if (validateNotHtmlFile(input)) return;
 
   const label = input.closest('label');
   const origText = label ? label.childNodes[0]?.textContent?.trim() : '';
@@ -2058,6 +2201,7 @@ async function exportMasterHtml() {
 async function importMasterCsv(input) {
   const file = input.files[0];
   if (!file) return;
+  if (validateNotHtmlFile(input)) return;
 
   const formData = new FormData();
   formData.append('file', file);
@@ -2081,6 +2225,43 @@ async function importMasterCsv(input) {
     showToast('❌ インポートエラー: ' + e.message, 'error');
   } finally {
     input.value = '';
+  }
+}
+
+// ─── 別Macのリストをマージ ───
+async function mergeMasterList(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append('file', file);
+  showToast('⏳ マスターリストをマージ中...');
+
+  // 結果エリアをいったん非表示にリセット
+  const resultEl = document.getElementById('masterMergeResult');
+  const msgEl    = document.getElementById('masterMergeMessage');
+  if (resultEl) resultEl.style.display = 'none';
+
+  try {
+    const res  = await fetch('/api/master/merge', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      showToast('❌ ' + (data.error || 'マージ失敗'), 'error');
+      return;
+    }
+
+    // 結果バナーを表示
+    if (msgEl)    msgEl.textContent    = '✅ ' + data.message;
+    if (resultEl) resultEl.style.display = '';
+
+    showToast(`✅ マージ完了: ${data.message}`);
+    loadMasterSellers();   // リスト表示を最新化
+
+  } catch (e) {
+    showToast('❌ マージエラー: ' + e.message, 'error');
+  } finally {
+    input.value = '';   // 同じファイルを再選択できるようにリセット
   }
 }
 

@@ -57,6 +57,9 @@ class AucFanScraper:
         # キーワードリサーチ: False（デフォルト）
         # セラー分析: True（SellerAnalyzer.__init__ で設定）
         self.skip_price_filter: bool = False
+        # 進捗カウンター（アプリ画面の「X件中Y件処理済み」表示用）
+        self._total_items: int = 0      # スクレイピング対象の総件数（既知の場合）
+        self._processed_items: int = 0  # 処理済み件数
 
     # ─────────────────────────────────────────────
     # Chrome 接続
@@ -186,7 +189,9 @@ class AucFanScraper:
 
             final_status = "stopped" if self.stop_event.is_set() else "done"
             self.dm.update_progress(status=final_status)
-            logger.info(f"=== スクレイピング完了 ({final_status}) ===")
+            logger.info("=" * 50)
+            logger.info(f"=== STEP 1 スクレイピング完了 === 全{self.dm.total_items}件処理 ({final_status})")
+            logger.info("=" * 50)
 
             # ── マスターセラーリストへ seller_id を追記 ──
             # group_size >= MASTER_SELLER_MIN_GROUP_SIZE のグループに属するセラーのみ対象
@@ -297,6 +302,7 @@ class AucFanScraper:
                         break
 
                     consecutive_errors = 0
+                    self._processed_items = self.dm.total_items
                     logger.info(
                         f"[一覧] ページ {page}: {len(items)}件取得"
                         f" (新規: {new_count}件, 累計: {self.dm.total_items}件)"
@@ -304,6 +310,7 @@ class AucFanScraper:
                     self.dm.update_progress(
                         pages_done=page,
                         total_items=self.dm.total_items,
+                        processed_items=self._processed_items,
                     )
 
                 # 定期保存（10ページごと）
@@ -336,7 +343,7 @@ class AucFanScraper:
                 self._random_wait()
                 continue
 
-        logger.info(f"一覧取得完了: {self.dm.total_items}件")
+        logger.info(f"一覧ページ取得完了: {self.dm.total_items}件")
         self.dm.save_all()
 
     # ─────────────────────────────────────────────
@@ -754,9 +761,12 @@ class AucFanScraper:
         else:
             logger.info(f"詳細ページ取得対象: {len(targets)}件")
 
+        self._total_items = len(targets)
+        self._processed_items = 0
         self.dm.update_progress(
             detail_pages_total=len(targets),
             detail_pages_done=0,
+            processed_items=0,
         )
 
         done = 0
@@ -814,8 +824,9 @@ class AucFanScraper:
 
                 done += 1
                 errors = 0
+                self._processed_items = done
 
-                self.dm.update_progress(detail_pages_done=done)
+                self.dm.update_progress(detail_pages_done=done, processed_items=done)
 
                 # 定期保存
                 if done % 20 == 0:

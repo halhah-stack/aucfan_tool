@@ -23,10 +23,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+import config
+
 logger = logging.getLogger(__name__)
 
 # デフォルト保存パス
-_DEFAULT_PATH = Path("data/sellers_master.json")
+_DEFAULT_PATH = Path(config.SELLERS_MASTER_PATH)
 
 
 class SellersMaster:
@@ -155,3 +157,60 @@ class SellersMaster:
             self._save(new_records)
         logger.info(f"sellers_master: {seller_id} を削除")
         return True
+
+    def merge_from_file(self, import_path: str) -> dict:
+        """
+        外部の sellers_master.json をインポートしてマージする。
+        seller_id で重複排除し、新しい ID だけを追加する。
+        既存データは上書きしない（first_seen_date などを保持）。
+        戻り値: {"added": N, "skipped": N, "total": N}
+        """
+        import_path = Path(import_path)
+        if not import_path.exists():
+            raise FileNotFoundError(f"インポートファイルが見つかりません: {import_path}")
+
+        try:
+            with open(import_path, encoding="utf-8") as f:
+                import_data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"JSONの解析に失敗しました: {e}")
+
+        if not isinstance(import_data, list):
+            raise ValueError("インポートファイルの形式が不正です（配列である必要があります）")
+
+        added = 0
+        skipped = 0
+
+        with self._lock:
+            records = self._load()
+            existing = {r["seller_id"] for r in records}
+
+            for item in import_data:
+                if not isinstance(item, dict):
+                    continue
+                sid = item.get("seller_id", "").strip()
+                if not sid:
+                    continue
+                if sid in existing:
+                    skipped += 1
+                else:
+                    records.append({
+                        "seller_id": sid,
+                        "first_seen_date": item.get("first_seen_date"),
+                        "last_scraped_date": item.get("last_scraped_date"),
+                        "source_keyword": item.get("source_keyword", ""),
+                        "candidates_count": item.get("candidates_count"),
+                    })
+                    existing.add(sid)
+                    added += 1
+
+            if added:
+                self._save(records)
+
+        total = len(records) if added else None
+        if total is None:
+            with self._lock:
+                total = len(self._load())
+
+        logger.info(f"sellers_master merge: {added}件追加、{skipped}件スキップ（合計 {total}件）")
+        return {"added": added, "skipped": skipped, "total": total}

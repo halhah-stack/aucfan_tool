@@ -447,6 +447,275 @@ def _generate_export_html(dm, images_dir: Path) -> str:
     return _build_export_html(groups_data, keyword, exported_at, len(items), len(groups_data))
 
 
+def _generate_offline_html(dm, images_dir: Path) -> str:
+    """
+    iPhone/iPad向けオフライン用HTML。画像をすべてbase64埋め込み、外部リソース参照なし。
+    シンプルな縦1カラムレイアウトでモバイル画面に最適化。
+    """
+    import base64
+    from collections import defaultdict
+
+    items = dm.get_all_items()
+    if not items:
+        return ""
+
+    # グループ化
+    group_map = defaultdict(list)
+    for item in items:
+        gid = item.get("group_id") or item["item_id"]
+        group_map[gid].append(item)
+    groups = sorted(group_map.values(), key=lambda g: len(g), reverse=True)
+
+    # 1x1 グレープレースホルダー GIF (base64)
+    PLACEHOLDER = (
+        "data:image/gif;base64,R0lGODlhAQABAIAAAMLCwgAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw=="
+    )
+
+    def encode_image(local_path):
+        if not local_path or not images_dir:
+            return PLACEHOLDER
+        try:
+            img_path = images_dir / Path(local_path).name
+            if img_path.exists():
+                with open(img_path, "rb") as f:
+                    raw = f.read()
+                ext = img_path.suffix.lower().lstrip(".")
+                mime = {
+                    "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "png": "image/png", "gif": "image/gif",
+                    "webp": "image/webp",
+                }.get(ext, "image/jpeg")
+                return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+        except Exception as e:
+            logger.debug(f"オフラインHTML画像変換エラー: {e}")
+        return PLACEHOLDER
+
+    # カードHTMLを組み立て
+    STATUS_LABEL = {
+        "candidate": "🔵 仕入れ候補",
+        "waiting":   "⏳ 確認待ち",
+        "review":    "⚠️ 要確認",
+        "ok":        "✅ OK",
+        "ng":        "❌ NG",
+    }
+    STATUS_COLOR = {
+        "candidate": "#2563eb",
+        "waiting":   "#6b7280",
+        "review":    "#7c3aed",
+        "ok":        "#16a34a",
+        "ng":        "#dc2626",
+    }
+    STATUS_BG = {
+        "candidate": "#eff6ff",
+        "waiting":   "#f9fafb",
+        "review":    "#f5f3ff",
+        "ok":        "#f0fdf4",
+        "ng":        "#fef2f2",
+    }
+
+    cards_html = ""
+    for group in groups:
+        first = group[0]
+        status   = first.get("status", "waiting")
+        title    = (first.get("title_full") or first.get("title_short", ""))[:100]
+        price    = first.get("price", 0)
+        shipping = first.get("shipping", 0)
+        total    = first.get("total", price + shipping)
+        count    = len(group)
+        seller_ids = list({i.get("seller_id", "") for i in group if i.get("seller_id")})[:3]
+
+        # サムネイル（最大3枚）
+        thumbs = []
+        for item in group[:3]:
+            src = encode_image(item.get("thumbnail_local", ""))
+            thumbs.append(src)
+
+        thumb_imgs = "".join(
+            f'<img src="{src}" alt="" style="width:80px;height:80px;object-fit:cover;border-radius:6px;flex-shrink:0;">'
+            for src in thumbs
+        )
+        if not thumb_imgs:
+            thumb_imgs = '<div style="width:80px;height:80px;background:#e5e7eb;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;">📦</div>'
+
+        label_color = STATUS_COLOR.get(status, "#6b7280")
+        card_bg     = STATUS_BG.get(status, "#f9fafb")
+        label_text  = STATUS_LABEL.get(status, status)
+        shipping_str = "無料" if shipping == 0 else f"¥{shipping:,}"
+        sellers_str  = "　".join(seller_ids) if seller_ids else "—"
+        count_str    = f'<span style="background:#dbeafe;color:#2563eb;border-radius:4px;padding:2px 7px;font-weight:700;font-size:12px;">{count}件</span>' if count > 1 else ""
+        ng_opacity   = "opacity:0.5;" if status == "ng" else ""
+
+        # 元URLがあればリンクを追加
+        import html as _html
+        url       = first.get("url", "")
+        url_link  = f'<a href="{_html.escape(url)}" style="display:inline-block;padding:6px 14px;background:#e5e7eb;border-radius:6px;font-size:13px;color:#374151;text-decoration:none;font-weight:600;">🔗 元ページ</a>' if url else ""
+
+        cards_html += f"""
+<div style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.1);margin-bottom:12px;overflow:hidden;border-left:4px solid {label_color};{ng_opacity}background:{card_bg};">
+  <div style="background:{label_color};color:#fff;padding:5px 12px;font-size:12px;font-weight:700;display:flex;justify-content:space-between;align-items:center;">
+    <span>{_html.escape(label_text)}</span>
+    <span>{count_str}</span>
+  </div>
+  <div style="display:flex;gap:6px;padding:8px;overflow-x:auto;background:#f9fafb;">
+    {thumb_imgs}
+  </div>
+  <div style="padding:10px 12px;">
+    <div style="font-size:13px;font-weight:600;line-height:1.4;margin-bottom:8px;color:#111827;">{_html.escape(title or '（タイトルなし）')}</div>
+    <div style="display:flex;gap:16px;margin-bottom:6px;flex-wrap:wrap;">
+      <div><div style="font-size:10px;color:#6b7280;">合計</div><div style="font-size:18px;font-weight:700;color:#dc2626;">¥{total:,}</div></div>
+      <div><div style="font-size:10px;color:#6b7280;">落札価格</div><div style="font-size:14px;font-weight:600;">¥{price:,}</div></div>
+      <div><div style="font-size:10px;color:#6b7280;">送料</div><div style="font-size:14px;font-weight:600;">{shipping_str}</div></div>
+    </div>
+    <div style="font-size:11px;color:#6b7280;margin-bottom:8px;">出品者: {_html.escape(sellers_str)}</div>
+    {url_link}
+  </div>
+</div>"""
+
+    progress    = dm.get_progress()
+    keyword     = progress.get("keyword", "")
+    total_items = len(items)
+    total_groups = len(groups)
+    exported_at = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+
+    return f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>AucFan {keyword} - オフライン閲覧用</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+      font-size: 14px; background: #f3f4f6; color: #111827;
+      line-height: 1.5; -webkit-text-size-adjust: 100%;
+    }}
+    .header {{
+      background: #2563eb; color: #fff;
+      position: sticky; top: 0; z-index: 100;
+      padding: 10px 14px; box-shadow: 0 2px 6px rgba(0,0,0,.2);
+    }}
+    .header h1 {{ font-size: 15px; font-weight: 700; }}
+    .header-meta {{ font-size: 11px; opacity: .85; margin-top: 2px; }}
+    .filter-bar {{
+      background: #fff; border-bottom: 1px solid #e5e7eb;
+      padding: 8px 12px; overflow-x: auto; white-space: nowrap;
+      -webkit-overflow-scrolling: touch;
+    }}
+    .filter-bar button {{
+      display: inline-block; padding: 5px 13px; margin-right: 6px;
+      border: 1px solid #d1d5db; border-radius: 20px;
+      background: #fff; font-size: 13px; cursor: pointer;
+      font-family: inherit;
+    }}
+    .filter-bar button.active {{ background: #2563eb; color: #fff; border-color: #2563eb; }}
+    .search-wrap {{ padding: 8px 12px; background: #f3f4f6; border-bottom: 1px solid #e5e7eb; }}
+    .search-wrap input {{
+      width: 100%; padding: 8px 14px; border: 1px solid #d1d5db;
+      border-radius: 20px; font-size: 14px; outline: none;
+      font-family: inherit; background: #fff;
+    }}
+    .count-bar {{ padding: 6px 14px; font-size: 12px; color: #6b7280; background: #f9fafb; }}
+    .cards {{ padding: 12px; max-width: 680px; margin: 0 auto; }}
+    .empty {{ text-align:center; padding:60px 20px; color:#6b7280; font-size:14px; }}
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🔍 AucFan リサーチ結果</h1>
+  <div class="header-meta">
+    {_html.escape(keyword)} ／ {total_items}件 / {total_groups}グループ ／ {exported_at}
+  </div>
+</div>
+
+<div class="filter-bar" id="filterBar">
+  <button class="active" data-filter="">すべて</button>
+  <button data-filter="candidate">🔵 仕入れ候補</button>
+  <button data-filter="ok">✅ OK</button>
+  <button data-filter="waiting">⏳ 確認待ち</button>
+  <button data-filter="review">⚠️ 要確認</button>
+  <button data-filter="ng">❌ NG</button>
+</div>
+
+<div class="search-wrap">
+  <input type="search" id="searchInput" placeholder="タイトルで絞り込み..."
+         autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+</div>
+
+<div class="count-bar" id="countBar"></div>
+<div class="cards" id="cards">{cards_html}</div>
+
+<script>
+(function() {{
+  var allCards = Array.from(document.querySelectorAll('#cards > div'));
+  var currentFilter = '';
+
+  // フィルターボタン
+  document.getElementById('filterBar').addEventListener('click', function(e) {{
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    document.querySelectorAll('#filterBar button').forEach(function(b) {{ b.classList.remove('active'); }});
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    document.getElementById('searchInput').value = '';
+    applyFilter();
+  }});
+
+  // 検索
+  document.getElementById('searchInput').addEventListener('input', applyFilter);
+
+  function applyFilter() {{
+    var kw = document.getElementById('searchInput').value.trim().toLowerCase();
+    var shown = 0;
+    allCards.forEach(function(card) {{
+      var statusDiv = card.querySelector('[data-status]');
+      var status = card.dataset ? card.dataset.status : '';
+      // data-status 属性が取れない場合はボーダー色から判定しない → タイトルテキストで検索
+      var titleEl = card.querySelectorAll('div')[5]; // 6番目のdivがtitle
+      var titleText = titleEl ? titleEl.textContent.toLowerCase() : '';
+
+      var matchFilter = !currentFilter || card.dataset.status === currentFilter;
+      var matchSearch = !kw || titleText.includes(kw);
+
+      if (matchFilter && matchSearch) {{
+        card.style.display = '';
+        shown++;
+      }} else {{
+        card.style.display = 'none';
+      }}
+    }});
+    document.getElementById('countBar').textContent = '表示中: ' + shown + ' グループ';
+  }}
+
+  // 各カードに data-status を付与
+  // (status はCSSボーダー色から取れないため、カード順序から推定できないので
+  //  カードのヘッダーテキストからstatus文字列を逆引き)
+  var labelToStatus = {{
+    '仕入れ候補': 'candidate', '確認待ち': 'waiting',
+    '要確認': 'review', 'OK': 'ok', 'NG': 'ng'
+  }};
+  allCards.forEach(function(card) {{
+    var hdr = card.querySelector('div > span');
+    if (hdr) {{
+      var txt = hdr.textContent.trim().replace(/[🔵⏳⚠️✅❌]/gu, '').trim();
+      for (var lbl in labelToStatus) {{
+        if (txt.indexOf(lbl) >= 0) {{
+          card.dataset.status = labelToStatus[lbl];
+          break;
+        }}
+      }}
+    }}
+  }});
+
+  applyFilter();
+}})();
+</script>
+</body>
+</html>"""
+
+
 def _save_export_files(dm, output_dir: Path):
     """
     CSV と HTML をセッションフォルダに自動保存する。
@@ -472,7 +741,7 @@ def _save_export_files(dm, output_dir: Path):
 
 @app.route("/api/export/html")
 def api_export_html():
-    """スタンドアロンHTMLエクスポート（iPhone/iPad 持ち出し用）"""
+    """スタンドアロンHTMLエクスポート（Mac用・ブラウザで開く用）"""
     from urllib.parse import quote
 
     dm = get_dm()
@@ -484,9 +753,44 @@ def api_export_html():
     if not html:
         return jsonify({"error": "商品データがありません"}), 400
 
-    keyword = dm.get_progress().get("keyword", "")
-    safe_kw = "".join(c for c in keyword if c.isalnum() or c in ("_", "-"))[:20] or "result"
-    filename = f"aucfan_{safe_kw}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+    # セッションIDをファイル名に使う（例: S1_20260507_01_バフ_Mac用.html）
+    if _session_output_dir:
+        session_id = _session_output_dir.name
+    else:
+        keyword = dm.get_progress().get("keyword", "")
+        safe_kw = "".join(c for c in keyword if c.isalnum() or c in ("_", "-"))[:20] or "result"
+        session_id = f"aucfan_{safe_kw}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    filename = f"{session_id}_Mac用.html"
+
+    response = Response(html, mimetype="text/html; charset=utf-8")
+    response.headers["Content-Disposition"] = (
+        f"attachment; filename*=UTF-8''{quote(filename)}"
+    )
+    return response
+
+
+@app.route("/api/export/html_offline")
+def api_export_html_offline():
+    """iPhone/iPad向けオフライン自己完結HTMLエクスポート（画像base64埋め込み、モバイル最適化）"""
+    from urllib.parse import quote
+
+    dm = get_dm()
+    if not dm:
+        return jsonify({"error": "データがありません"}), 400
+
+    images_dir = _session_output_dir / "images" if _session_output_dir else None
+    html = _generate_offline_html(dm, images_dir)
+    if not html:
+        return jsonify({"error": "商品データがありません"}), 400
+
+    # セッションIDをファイル名に使う（例: S1_20260507_01_バフ_iPhone_iPad用.html）
+    if _session_output_dir:
+        session_id = _session_output_dir.name
+    else:
+        keyword = dm.get_progress().get("keyword", "")
+        safe_kw = "".join(c for c in keyword if c.isalnum() or c in ("_", "-"))[:20] or "result"
+        session_id = f"aucfan_{safe_kw}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    filename = f"{session_id}_iPhone_iPad用.html"
 
     response = Response(html, mimetype="text/html; charset=utf-8")
     response.headers["Content-Disposition"] = (
@@ -1062,6 +1366,58 @@ def api_master_import_csv():
     except Exception as e:
         logger.error(f"マスターCSVインポートエラー: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/master/merge", methods=["POST"])
+def api_master_merge():
+    """
+    別Macで蓄積した sellers_master.json をアップロードしてマージする。
+    seller_id で重複排除し、新しいIDだけを追加する。
+    既存データ（first_seen_date等）は上書きしない。
+    """
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "ファイルがありません"}), 400
+
+    # 一時ファイルに書き出してから merge_from_file を呼ぶ
+    import tempfile
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="wb"
+        ) as tmp:
+            tmp_path = tmp.name
+            file.save(tmp)
+
+        result = _sellers_master.merge_from_file(tmp_path)
+
+        logger.info(
+            f"マスターリストマージ: {result['added']}件追加、"
+            f"{result['skipped']}件スキップ、合計{result['total']}件"
+        )
+        return jsonify({
+            "success": True,
+            "added": result["added"],
+            "skipped": result["skipped"],
+            "total": result["total"],
+            "message": (
+                f"{result['added']}件追加、"
+                f"{result['skipped']}件スキップ（重複）、"
+                f"合計{result['total']}件"
+            ),
+        })
+
+    except (ValueError, FileNotFoundError) as e:
+        logger.warning(f"マスターリストマージエラー: {e}")
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"マスターリストマージ予期せぬエラー: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            import os
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────────
@@ -1772,9 +2128,9 @@ def _run_seller_analysis(stop_ev: threading.Event):
         _seller_state["current_index"] = -1
         _seller_state["phase"] = final_status
 
-    logger.info(
-        f"セラー分析完了: {dm.total_items}件 → {out_dir} (status={final_status})"
-    )
+    logger.info("=" * 50)
+    logger.info(f"=== STEP 2 スクレイピング完了 === 全{dm.total_items}件処理 ({final_status})")
+    logger.info("=" * 50)
 
 
 @app.route("/api/seller_scrape/stop", methods=["POST"])
@@ -1936,9 +2292,11 @@ def api_master_scrape_status():
         dm = _master_state["dm"]
 
     total_items = 0
+    processed_items = 0
     if dm is not None:
         try:
             total_items = dm.total_items
+            processed_items = dm.get_progress().get("processed_items", total_items)
         except Exception:
             pass
 
@@ -1950,6 +2308,7 @@ def api_master_scrape_status():
         "current_seller": current_seller,
         "session_id": session_id,
         "total_items": total_items,
+        "processed_items": processed_items,
     })
 
 
@@ -2045,7 +2404,9 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
         _master_state["current_seller"] = ""
         _master_state["phase"] = final_status
 
-    logger.info(f"STEP 3 完了: {dm.total_items}件 → {out_dir}")
+    logger.info("=" * 50)
+    logger.info(f"=== STEP 3 スクレイピング完了 === 全{dm.total_items}件処理 ({final_status})")
+    logger.info("=" * 50)
 
 
 # ─────────────────────────────────────────────
