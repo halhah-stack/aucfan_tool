@@ -28,7 +28,8 @@ const state = {
 document.addEventListener('DOMContentLoaded', () => {
   startSSE();
   loadGroups();
-  loadKeywordSessions(); // STEP 1 セッション一覧を初期表示
+  loadKeywordSessions();   // STEP 1 セッション一覧を初期表示
+  refreshCurrentSession(); // 表示中セッションバーを初期化
   setInterval(loadGroups, 8000); // 8秒ごとに自動更新
 });
 
@@ -38,19 +39,24 @@ document.addEventListener('DOMContentLoaded', () => {
 function switchStep(step) {
   state.activeStep = step;
 
-  const p1 = document.getElementById('step1Panel');
-  const p2 = document.getElementById('step2Panel');
-  const p3 = document.getElementById('step3Panel');
-  const t1 = document.getElementById('stepTab1');
-  const t2 = document.getElementById('stepTab2');
-  const t3 = document.getElementById('stepTab3');
+  const p1  = document.getElementById('step1Panel');
+  const p2  = document.getElementById('step2Panel');
+  const p3  = document.getElementById('step3Panel');
+  const pm  = document.getElementById('masterPanel');
+  const t1  = document.getElementById('stepTab1');
+  const t2  = document.getElementById('stepTab2');
+  const t3  = document.getElementById('stepTab3');
+  const tm  = document.getElementById('stepTabMaster');
 
-  if (p1) p1.style.display = step === 1 ? '' : 'none';
-  if (p2) p2.style.display = step === 2 ? '' : 'none';
-  if (p3) p3.style.display = step === 3 ? '' : 'none';
+  if (p1) p1.style.display = step === 1        ? '' : 'none';
+  if (p2) p2.style.display = step === 2        ? '' : 'none';
+  if (p3) p3.style.display = step === 3        ? '' : 'none';
+  if (pm) pm.style.display = step === 'master' ? '' : 'none';
+
   if (t1) t1.classList.toggle('active', step === 1);
   if (t2) t2.classList.toggle('active', step === 2);
   if (t3) t3.classList.toggle('active', step === 3);
+  if (tm) tm.classList.toggle('active', step === 'master');
 
   if (step === 1) {
     loadKeywordSessions();
@@ -61,8 +67,18 @@ function switchStep(step) {
     fetchSellerStatus(/* silent */ true);
   }
   if (step === 3) {
-    loadMasterSellers();
     fetchMasterStatus(/* silent */ true);
+    loadStep3History();
+    // STEP 3パネルのミニ統計を更新
+    fetchJSON('/api/master_sellers/stats').then(d => {
+      const el1 = document.getElementById('step3MasterTotal');
+      const el2 = document.getElementById('step3MasterUnscraped');
+      if (el1) el1.textContent = d.total ?? '—';
+      if (el2) el2.textContent = d.unscraped ?? '—';
+    }).catch(() => {});
+  }
+  if (step === 'master') {
+    loadMasterSellers();
   }
 }
 
@@ -71,18 +87,36 @@ function switchStep(step) {
 // ─────────────────────────────────────────────
 
 /**
- * セッション名 "キーワード_YYYYMMDD_HHMMSS" を分解して表示用オブジェクトを返す。
- * seller_analysis_ プレフィックスは除去してラベル化する。
+ * セッション名を分解して表示用オブジェクトを返す。
+ * 新命名規則 S1_YYYYMMDD_NN_keyword・旧命名規則 keyword_YYYYMMDD_HHMMSS の両方に対応。
  */
 function parseSessionName(name) {
+  if (!name) return { label: '—', dateStr: '', step: 1, num: 0 };
+
+  // 新命名規則: S1_20260506_01_バフ / S2_20260506_01 / S3_20260506_01
+  const mNew = name.match(/^S(\d)_(\d{4})(\d{2})(\d{2})_(\d+)(?:_(.+))?$/);
+  if (mNew) {
+    const [, s, y, mo, d, num, kw] = mNew;
+    const stepNum = parseInt(s);
+    const lbl = stepNum === 1 ? (kw || 'STEP 1')
+              : stepNum === 2 ? 'セラー分析'
+              : 'マスター分析';
+    return { label: lbl, dateStr: `${y}/${mo}/${d} #${num}`, step: stepNum, num: parseInt(num) };
+  }
+
+  // 旧命名規則: keyword_YYYYMMDD_HHMMSS
   const m = name.match(/^(.+?)_(\d{8})_(\d{6})$/);
-  if (!m) return { label: name, dateStr: '' };
+  if (!m) return { label: name, dateStr: '', step: 1, num: 0 };
   let [, kw, date, time] = m;
-  const y  = date.slice(0, 4), mo = date.slice(4, 6), d = date.slice(6, 8);
-  const h  = time.slice(0, 2), mi = time.slice(2, 4);
+  const y = date.slice(0,4), mo = date.slice(4,6), d = date.slice(6,8);
+  const h = time.slice(0,2), mi = time.slice(2,4);
+  const stepMap = { seller_analysis: 2, master_analysis: 3 };
+  const lblMap  = { seller_analysis: 'セラー分析', master_analysis: 'マスター分析' };
   return {
-    label: kw === 'seller_analysis' ? 'セラー分析' : kw,
+    label:   lblMap[kw] || kw,
     dateStr: `${y}/${mo}/${d} ${h}:${mi}`,
+    step:    stepMap[kw] || 1,
+    num:     0,
   };
 }
 
@@ -107,8 +141,8 @@ async function loadKeywordSessions() {
   if (!el) return;
   el.innerHTML = '<span style="color:#9ca3af;font-size:13px">読み込み中...</span>';
 
-  const data = await fetchJSON('/api/sessions');
-  const sessions = (data.sessions || []).filter(s => s.session_type === 'keyword');
+  const data = await fetchJSON('/api/sessions?step=1');
+  const sessions = data.sessions || [];
 
   if (sessions.length === 0) {
     el.innerHTML = '<span style="color:#9ca3af;font-size:13px">過去のSTEP 1セッションはありません</span>';
@@ -116,27 +150,29 @@ async function loadKeywordSessions() {
   }
 
   el.innerHTML = sessions.map(s => {
-    const { label, dateStr } = parseSessionName(s.name);
+    const dis = s.is_running ? 'disabled' : '';
+    const disTitle = s.is_running ? 'スクレイピング中は選択できません' : '';
     return `
     <div class="session-row">
       <div class="session-row-info">
-        <div class="session-row-keyword">${escHtml(label)}</div>
+        <div class="session-row-keyword">${escHtml(s.label || s.keyword)}</div>
         <div class="session-row-meta">
           <span class="meta-count">${(s.total_items || 0).toLocaleString()}件</span>
-          <span class="meta-date">${dateStr}</span>
+          <span class="meta-date">${escHtml(s.date_str)}</span>
           ${sessionStatusSpan(s.status)}
+          ${s.is_running ? '<span class="meta-running">🔄 実行中</span>' : ''}
         </div>
       </div>
       <div class="session-row-actions">
+        <button class="btn btn-primary btn-sm session-load-btn"
+                title="${disTitle || 'グリッドに表示'}"
+                ${dis} onclick="loadSessionToGrid('${escHtml(s.name)}')">📂 表示</button>
         <button class="btn btn-secondary btn-sm"
-                title="このセッションをメイン画面に表示"
-                onclick="loadSession('${escHtml(s.name)}')">📂 ロード</button>
-        <button class="btn btn-success btn-sm"
-                title="このセッションのセラーIDをSTEP 2にセット"
-                onclick="sellerIdsFromSession('${escHtml(s.name)}')">→ STEP 2</button>
+                title="${disTitle || 'STEP 2にセット'}"
+                ${dis} onclick="sellerIdsFromSession('${escHtml(s.name)}')">→ S2</button>
         <button class="btn-delete"
                 title="このセッションを削除（復元不可）"
-                onclick="deleteSession('${escHtml(s.name)}', 'keyword')">🗑</button>
+                onclick="deleteSession('${escHtml(s.name)}', 1)">🗑</button>
       </div>
     </div>`;
   }).join('');
@@ -151,23 +187,21 @@ async function loadStep2KeywordSessions() {
   if (!el) return;
   el.innerHTML = '<span style="color:#9ca3af;font-size:12px">読み込み中...</span>';
 
-  const data = await fetchJSON('/api/sessions');
-  const sessions = (data.sessions || []).filter(s => s.session_type === 'keyword');
+  const data = await fetchJSON('/api/sessions?step=1');
+  const sessions = data.sessions || [];
 
   if (sessions.length === 0) {
     el.innerHTML = '<span style="color:#9ca3af;font-size:12px">過去のSTEP 1セッションはありません</span>';
     return;
   }
 
-  el.innerHTML = sessions.map(s => {
-    const { label, dateStr } = parseSessionName(s.name);
-    return `
+  el.innerHTML = sessions.map(s => `
     <div class="session-row" style="margin-bottom:4px;padding:6px 8px">
       <div class="session-row-info">
-        <div class="session-row-keyword" style="font-size:12px">${escHtml(label)}</div>
+        <div class="session-row-keyword" style="font-size:12px">${escHtml(s.label || s.keyword)}</div>
         <div class="session-row-meta">
           <span class="meta-count">${(s.total_items || 0).toLocaleString()}件</span>
-          <span class="meta-date">${dateStr}</span>
+          <span class="meta-date">${escHtml(s.date_str)}</span>
         </div>
       </div>
       <div class="session-row-actions">
@@ -175,8 +209,7 @@ async function loadStep2KeywordSessions() {
                 style="font-size:11px;padding:4px 10px"
                 onclick="sellerIdsFromSession('${escHtml(s.name)}')">このセッションを使用</button>
       </div>
-    </div>`;
-  }).join('');
+    </div>`).join('');
 }
 
 // ─────────────────────────────────────────────
@@ -211,7 +244,7 @@ async function sellerIdsFromSession(sessionName) {
 // セッション削除
 // ─────────────────────────────────────────────
 
-async function deleteSession(sessionName, sessionType) {
+async function deleteSession(sessionName, step) {
   const { label, dateStr } = parseSessionName(sessionName);
   const displayName = `${label}（${dateStr}）`;
 
@@ -227,15 +260,19 @@ async function deleteSession(sessionName, sessionType) {
 
   showToast(`🗑 「${displayName}」を削除しました`);
 
-  // 種別に応じてリストを再読み込み
-  if (sessionType === 'keyword') {
+  // ステップに応じてリストを再読み込み（数値・旧文字列どちらにも対応）
+  const stepNum = typeof step === 'number' ? step
+                : step === 'keyword' ? 1 : step === 'seller' ? 2 : 3;
+  if (stepNum === 1) {
     loadKeywordSessions();
     loadStep2KeywordSessions();
-  } else {
+  } else if (stepNum === 2) {
     loadSellerHistory();
+  } else {
+    loadStep3History();
   }
-  // 削除したセッションが現在表示中なら画面をリフレッシュ
   loadGroups();
+  refreshCurrentSession();
 }
 
 // ─────────────────────────────────────────────
@@ -1290,8 +1327,8 @@ async function loadSellerHistory() {
   if (!listEl) return;
   listEl.innerHTML = '<span style="color:#6b7280">読み込み中...</span>';
 
-  const data = await fetchJSON('/api/sessions');
-  const sessions = (data.sessions || []).filter(s => s.session_type === 'seller');
+  const data = await fetchJSON('/api/sessions?step=2');
+  const sessions = data.sessions || [];
 
   if (sessions.length === 0) {
     listEl.innerHTML = '<span style="color:#9ca3af">過去のセラー分析セッションはありません</span>';
@@ -1299,39 +1336,109 @@ async function loadSellerHistory() {
   }
 
   listEl.innerHTML = sessions.map(s => {
-    const { dateStr } = parseSessionName(s.name);
+    const dis = s.is_running ? 'disabled' : '';
+    const disTitle = s.is_running ? 'スクレイピング中は選択できません' : '';
     return `
     <div class="session-row">
       <div class="session-row-info">
         <div class="session-row-keyword" style="font-size:12px">🏪 セラー分析</div>
         <div class="session-row-meta">
           <span class="meta-count">${(s.total_items || 0).toLocaleString()}件</span>
-          <span class="meta-date">${dateStr}</span>
+          <span class="meta-date">${escHtml(s.date_str)}</span>
           ${sessionStatusSpan(s.status)}
+          ${s.is_running ? '<span class="meta-running">🔄 実行中</span>' : ''}
         </div>
       </div>
       <div class="session-row-actions">
         <button class="btn btn-secondary btn-sm"
                 style="font-size:11px;padding:4px 10px;white-space:nowrap"
-                title="このセッションの分析結果をメイン画面に表示します"
-                onclick="loadSellerSession('${escHtml(s.name)}')">📊 結果を表示</button>
+                title="${disTitle || '分析結果をグリッドに表示'}"
+                ${dis}
+                onclick="loadSessionToGrid('${escHtml(s.name)}')">📂 表示</button>
         <button class="btn-delete"
                 title="このセッションを削除（復元不可）"
-                onclick="deleteSession('${escHtml(s.name)}', 'seller')">🗑</button>
+                onclick="deleteSession('${escHtml(s.name)}', 2)">🗑</button>
       </div>
     </div>`;
   }).join('');
 }
 
-async function loadSellerSession(sessionName) {
-  const res = await fetchJSON(`/api/sessions/${sessionName}/load`, 'POST');
-  if (res.success) {
-    showToast(`セラー分析「${sessionName}」を読み込みました（${res.total_items}件）`);
-    // モーダルではなくインライン表示のためクローズ不要
-    loadGroups();
-  } else {
-    showToast('❌ 読み込み失敗', 'error');
+// ─────────────────────────────────────────────
+// STEP 3: 過去セッション一覧
+// ─────────────────────────────────────────────
+async function loadStep3History() {
+  const el = document.getElementById('step3SessionsList');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#9ca3af;font-size:13px">読み込み中...</span>';
+
+  const data = await fetchJSON('/api/sessions?step=3');
+  const sessions = data.sessions || [];
+
+  if (sessions.length === 0) {
+    el.innerHTML = '<span style="color:#9ca3af;font-size:13px">過去のSTEP 3セッションはありません</span>';
+    return;
   }
+
+  el.innerHTML = sessions.map(s => {
+    const dis = s.is_running ? 'disabled' : '';
+    const disTitle = s.is_running ? 'スクレイピング中は選択できません' : '';
+    return `
+    <div class="session-row">
+      <div class="session-row-info">
+        <div class="session-row-keyword" style="font-size:12px">⚡ マスターセラーリサーチ</div>
+        <div class="session-row-meta">
+          <span class="meta-count">${(s.total_items || 0).toLocaleString()}件</span>
+          <span class="meta-date">${escHtml(s.date_str)}</span>
+          ${sessionStatusSpan(s.status)}
+          ${s.is_running ? '<span class="meta-running">🔄 実行中</span>' : ''}
+        </div>
+      </div>
+      <div class="session-row-actions">
+        <button class="btn btn-secondary btn-sm"
+                title="${disTitle || '結果をグリッドに表示'}"
+                ${dis}
+                onclick="loadSessionToGrid('${escHtml(s.name)}')">📂 表示</button>
+        <button class="btn-delete"
+                title="このセッションを削除（復元不可）"
+                onclick="deleteSession('${escHtml(s.name)}', 3)">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// セッションをグリッドにロード（STEP 1/2/3 共通）
+// ─────────────────────────────────────────────
+async function loadSessionToGrid(sessionName) {
+  showToast('⏳ セッションを読み込み中...');
+  const res = await fetchJSON(`/api/sessions/${encodeURIComponent(sessionName)}/load`, 'POST');
+  if (!res.success) {
+    showToast('❌ ' + (res.message || '読み込み失敗'), 'error');
+    return;
+  }
+  showToast(`✅ ${(res.total_items || 0).toLocaleString()}件を読み込みました`);
+  await loadGroups();
+  refreshCurrentSession();
+}
+
+// ─────────────────────────────────────────────
+// 表示中セッションバー
+// ─────────────────────────────────────────────
+async function refreshCurrentSession() {
+  const data = await fetchJSON('/api/current_session');
+  updateCurrentSessionDisplay(data.session);
+}
+
+function updateCurrentSessionDisplay(session) {
+  const bar   = document.getElementById('currentSessionBar');
+  if (!bar) return;
+  if (!session) { bar.style.display = 'none'; return; }
+  const nameEl  = document.getElementById('currentSessionName');
+  const countEl = document.getElementById('currentSessionCount');
+  const { label, dateStr } = parseSessionName(session.name);
+  if (nameEl)  nameEl.textContent  = `${label}（${dateStr}）`;
+  if (countEl) countEl.textContent = session.total_items ? ` — ${session.total_items.toLocaleString()}件` : '';
+  bar.style.display = '';
 }
 
 // ─────────────────────────────────────────────
@@ -1673,18 +1780,25 @@ let masterPollTimer = null;
 
 // ─── マスターリスト取得・表示 ───
 async function loadMasterSellers() {
-  const data = await fetchJSON('/api/master_sellers?sort_order=desc&limit=0');
-  if (!data || !data.sellers) return;
+  const [data, stats] = await Promise.all([
+    fetchJSON('/api/master_sellers?sort_order=desc&limit=0'),
+    fetchJSON('/api/master_sellers/stats'),
+  ]);
 
-  // 統計
-  const stats = await fetchJSON('/api/master_sellers/stats');
+  // ヘッダー情報更新
   if (stats) {
     setText('masterTotal', stats.total ?? '—');
     setText('masterUnscraped', stats.unscraped ?? '—');
+    setText('masterLastModified',
+      stats.last_modified ? `最終更新: ${stats.last_modified}` : '最終更新: —'
+    );
+    // 全削除ボタンは件数0のとき無効化
+    const delAllBtn = document.querySelector('.master-delete-all-btn');
+    if (delAllBtn) delAllBtn.disabled = (stats.total === 0);
   }
 
   const list = document.getElementById('masterSellerList');
-  if (!list) return;
+  if (!list || !data || !data.sellers) return;
 
   if (!data.sellers.length) {
     list.innerHTML = '<span style="color:#9ca3af;font-size:13px">セラーがいません（STEP 1実行後に自動追加されます）</span>';
@@ -1698,17 +1812,71 @@ async function loadMasterSellers() {
       : `<span class="master-badge-new">未</span>`;
     const cands = s.candidates_count != null
       ? `<span class="master-cands">${s.candidates_count}件</span>` : '';
+    // seller_id を data 属性にエンコードして保持（クリック時に取得）
+    const sidAttr = escHtml(s.seller_id);
     return `
       <div class="master-seller-row">
-        <span class="master-seller-id">${escHtml(s.seller_id)}</span>
+        <span class="master-seller-id" title="${sidAttr}">${sidAttr}</span>
         <span class="master-first-date">${s.first_seen_date || '—'}</span>
         <span class="master-scraped-label">${scraped}</span>
         ${cands}
         <span class="master-keyword">${escHtml(s.source_keyword || '')}</span>
+        <button class="master-row-del-btn" title="このセラーを削除"
+                onclick="deleteMasterSeller('${sidAttr}', this)">🗑</button>
       </div>`;
   }).join('');
 
   updateMasterBatchPreview();
+}
+
+// ─── 全件削除 ───
+async function deleteAllMasterSellers() {
+  const total = parseInt(document.getElementById('masterTotal')?.textContent || '0', 10);
+  if (!confirm(`マスターセラーリスト（${total}件）を全て削除しますか？\nこの操作は元に戻せません。`)) return;
+
+  const res = await fetchJSON('/api/master_sellers/all', 'DELETE');
+  if (res.success) {
+    showToast(`🗑 マスターリスト ${res.deleted}件を全削除しました`);
+    loadMasterSellers();
+  } else {
+    showToast('❌ 削除失敗: ' + (res.error || '不明なエラー'), 'error');
+  }
+}
+
+// ─── 個別削除 ───
+async function deleteMasterSeller(sellerId, btnEl) {
+  // ボタンを一時無効化（二重クリック防止）
+  if (btnEl) btnEl.disabled = true;
+
+  const res = await fetchJSON(`/api/master_sellers/${encodeURIComponent(sellerId)}`, 'DELETE');
+  if (res.success) {
+    // 行をフェードアウトして削除
+    const row = btnEl?.closest('.master-seller-row');
+    if (row) {
+      row.style.transition = 'opacity .2s';
+      row.style.opacity = '0';
+      setTimeout(() => { row.remove(); updateMasterHeaderCount(-1); }, 220);
+    }
+  } else {
+    showToast('❌ ' + (res.error || '削除失敗'), 'error');
+    if (btnEl) btnEl.disabled = false;
+  }
+}
+
+// ─── ヘッダーの合計件数をインクリメント調整（再取得不要） ───
+function updateMasterHeaderCount(delta) {
+  const totalEl = document.getElementById('masterTotal');
+  const unscrapedEl = document.getElementById('masterUnscraped');
+  if (totalEl) {
+    const n = parseInt(totalEl.textContent || '0', 10) + delta;
+    totalEl.textContent = Math.max(0, n);
+  }
+  // 全削除ボタンの有効/無効を更新
+  const delAllBtn = document.querySelector('.master-delete-all-btn');
+  if (delAllBtn) {
+    const cur = parseInt(document.getElementById('masterTotal')?.textContent || '0', 10);
+    delAllBtn.disabled = (cur === 0);
+  }
 }
 
 async function updateMasterBatchPreview() {

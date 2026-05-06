@@ -117,10 +117,41 @@ class SellersMaster:
         """last_scraped_date が null のレコードのみ返す"""
         return [r for r in self.get_all(sort_order) if not r.get("last_scraped_date")]
 
+    def get_last_modified(self) -> Optional[str]:
+        """sellers_master.json の最終更新日時を文字列で返す（ファイル未存在時は None）"""
+        if not self.path.exists():
+            return None
+        mtime = self.path.stat().st_mtime
+        return datetime.fromtimestamp(mtime).strftime("%Y/%m/%d %H:%M")
+
     def stats(self) -> dict:
-        """合計件数・未スクレイピング件数を返す"""
+        """合計件数・未スクレイピング件数・最終更新日時を返す"""
         with self._lock:
             records = self._load()
         total = len(records)
         unscraped = sum(1 for r in records if not r.get("last_scraped_date"))
-        return {"total": total, "unscraped": unscraped}
+        return {
+            "total": total,
+            "unscraped": unscraped,
+            "last_modified": self.get_last_modified(),
+        }
+
+    def clear_all(self) -> int:
+        """全件削除（空配列にリセット）。削除前の件数を返す"""
+        with self._lock:
+            records = self._load()
+            count = len(records)
+            self._save([])
+        logger.info(f"sellers_master: 全件削除（{count}件）")
+        return count
+
+    def delete_seller(self, seller_id: str) -> bool:
+        """指定 seller_id を削除。削除できたら True を返す"""
+        with self._lock:
+            records = self._load()
+            new_records = [r for r in records if r["seller_id"] != seller_id]
+            if len(new_records) == len(records):
+                return False
+            self._save(new_records)
+        logger.info(f"sellers_master: {seller_id} を削除")
+        return True

@@ -364,14 +364,50 @@ class DataManager:
 # ─────────────────────────────────────────────
 
 def make_session_id(keyword: str) -> str:
+    """後方互換のため保持。新コードは make_output_dir(step=) を直接呼ぶこと。"""
     date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_kw = "".join(c for c in keyword if c.isalnum() or c in ("_", "-"))[:20]
     return f"{safe_kw}_{date_str}"
 
 
-def make_output_dir(keyword: str) -> Path:
-    session_id = make_session_id(keyword)
+def make_output_dir(keyword: str, step: int = 1) -> tuple:
+    """
+    新命名規則でセッションフォルダを作成して (out_dir, session_id) を返す。
+
+      step=1: リサーチ結果/S1_YYYYMMDD_NN_keyword/
+      step=2: リサーチ結果/S2_YYYYMMDD_NN/
+      step=3: リサーチ結果/S3_YYYYMMDD_NN/
+
+    NN は同日・同ステップの通番（01, 02, ...）。
+    旧フォルダ（keyword_YYYYMMDD_HHMMSS 形式）は後方互換として読み込めるが、
+    新規作成は常に新命名規則を使う。
+    """
+    import re as _re
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    step_prefix = f"S{step}_{date_str}_"
     base = Path(config.OUTPUT_BASE_DIR)
+    base.mkdir(parents=True, exist_ok=True)
+
+    # 通番: 同日・同ステップの既存フォルダ中の最大番号 + 1
+    try:
+        existing_nums = []
+        for d in base.iterdir():
+            if d.is_dir() and d.name.startswith(step_prefix):
+                m = _re.match(rf'^S{step}_\d{{8}}_(\d+)', d.name)
+                if m:
+                    existing_nums.append(int(m.group(1)))
+        num = max(existing_nums, default=0) + 1
+    except Exception:
+        num = 1
+
+    if step == 1:
+        # OS で使えない文字を除去してキーワードをフォルダ名に含める
+        safe_kw = _re.sub(r'[/\\:*?"<>|\t\n\r]', '', keyword).strip()[:15]
+        session_id = f"S1_{date_str}_{num:02d}_{safe_kw}"
+    else:
+        session_id = f"S{step}_{date_str}_{num:02d}"
+
     out_dir = base / session_id
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir, session_id

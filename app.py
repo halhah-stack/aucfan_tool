@@ -131,8 +131,8 @@ def api_start():
         resume    = data.get("resume", False)
         start_url = data.get("start_url", "").strip()  # iPhoneから貼り付けたURL（任意）
 
-        # セッション初期化
-        out_dir, session_id = make_output_dir(keyword)
+        # セッション初期化 (S1_YYYYMMDD_NN_keyword)
+        out_dir, session_id = make_output_dir(keyword, step=1)
         _session_output_dir = out_dir
         _data_manager = DataManager(session_id, out_dir)
         _image_processor = ImageProcessor(out_dir / "images")
@@ -835,7 +835,7 @@ def api_load_csv():
             if first_kw and first_kw.lower() not in ("nan", ""):
                 keyword_val = first_kw
 
-        out_dir, session_id = make_output_dir(keyword_val)
+        out_dir, session_id = make_output_dir(keyword_val, step=1)
         dm = DataManager(session_id, out_dir)
 
         # CSV行をアイテムとして追加
@@ -1120,8 +1120,28 @@ def api_tabs():
 
 @app.route("/api/sessions")
 def api_sessions():
-    """過去のセッション一覧"""
-    return jsonify({"sessions": _list_sessions()})
+    """過去のセッション一覧。?step=1|2|3 でフィルタ可能。"""
+    step_param = request.args.get("step")
+    step_int = int(step_param) if step_param and step_param.isdigit() else None
+    return jsonify({"sessions": _list_sessions(step=step_int)})
+
+
+@app.route("/api/current_session")
+def api_current_session():
+    """現在グリッドに表示中のセッション情報を返す"""
+    if _session_output_dir is None or _data_manager is None:
+        return jsonify({"session": None})
+    info = _parse_session_info(_session_output_dir.name)
+    return jsonify({
+        "session": {
+            "name": _session_output_dir.name,
+            "label": info["label"],
+            "date_str": info["date_str"],
+            "step": info["step"],
+            "total_items": _data_manager.total_items,
+            "status": _data_manager.get_progress().get("status", ""),
+        }
+    })
 
 
 @app.route("/api/sessions/<session_name>", methods=["DELETE"])
@@ -1270,33 +1290,97 @@ def api_load_session(session_name):
     })
 
 
-def _list_sessions():
-    """過去セッションの一覧を返す"""
+def _parse_session_info(name: str) -> dict:
+    """フォルダ名から表示用情報を解析する（新旧両命名規則対応）。"""
+    import re
+
+    # 新命名規則: S1_20260506_01_バフ / S2_20260506_01 / S3_20260506_01
+    m = re.match(r'^S(\d)_(\d{4})(\d{2})(\d{2})_(\d+)(?:_(.+))?$', name)
+    if m:
+        s, y, mo, d, num, kw = m.groups()
+        step = int(s)
+        st_map = {1: "keyword", 2: "seller", 3: "master"}
+        lbl_map = {1: "STEP 1", 2: "セラー分析", 3: "マスター分析"}
+        label = kw if (step == 1 and kw) else lbl_map.get(step, f"STEP {s}")
+        return {
+            "step": step,
+            "session_type": st_map.get(step, "keyword"),
+            "label": label,
+            "date_str": f"{y}/{mo}/{d}",
+            "num": int(num),
+        }
+
+    # 旧命名規則: keyword_YYYYMMDD_HHMMSS
+    m = re.match(r'^(.+?)_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})\d{2}$', name)
+    if m:
+        kw, y, mo, d, h, mi = m.groups()
+        if kw.startswith("seller_analysis"):
+            step, st, label = 2, "seller", "セラー分析"
+        elif kw.startswith("master_analysis"):
+            step, st, label = 3, "master", "マスター分析"
+        else:
+            step, st, label = 1, "keyword", kw
+        return {
+            "step": step,
+            "session_type": st,
+            "label": label,
+            "date_str": f"{y}/{mo}/{d} {h}:{mi}",
+            "num": 0,
+        }
+
+    return {"step": 1, "session_type": "keyword", "label": name, "date_str": "", "num": 0}
+
+
+def _list_sessions(step: int = None):
+    """過去セッションの一覧を返す。step を指定するとそのステップのみ返す。"""
     base = Path(config.OUTPUT_BASE_DIR)
     if not base.exists():
         return []
+
+    # 現在スクレイピング中のセッション名（is_running フラグ用）
+    running_names: set = set()
+    if _scraper_thread and _scraper_thread.is_alive() and _session_output_dir:
+        running_names.add(_session_output_dir.name)
+    with _seller_lock:
+        if _seller_state["running"] and _seller_state.get("output_dir"):
+            running_names.add(Path(_seller_state["output_dir"]).name)
+    with _master_lock:
+        if _master_state["running"] and _master_state.get("output_dir"):
+            running_names.add(Path(_master_state["output_dir"]).name)
+
     sessions = []
     for d in sorted(base.iterdir(), reverse=True):
-        if d.is_dir():
-            progress_file = d / "progress.json"
-            if progress_file.exists():
-                try:
-                    with open(progress_file) as f:
-                        p = json.load(f)
-                    name = d.name
-                    # seller_analysis_ で始まるセッションかどうかで種別を判定
-                    session_type = "seller" if name.startswith("seller_analysis") else "keyword"
-                    sessions.append({
-                        "name": name,
-                        "session_type": session_type,
-                        "keyword": p.get("keyword", ""),
-                        "status": p.get("status", ""),
-                        "total_items": p.get("total_items", 0),
-                        "updated_at": p.get("updated_at", ""),
-                        "has_csv": (d / "results.csv").exists(),
-                    })
-                except Exception:
-                    sessions.append({"name": d.name, "session_type": "unknown"})
+        if not d.is_dir():
+            continue
+        info = _parse_session_info(d.name)
+        if step is not None and info["step"] != step:
+            continue
+
+        p = {}
+        progress_file = d / "progress.json"
+        if progress_file.exists():
+            try:
+                with open(progress_file) as f:
+                    p = json.load(f)
+            except Exception:
+                pass
+
+        sessions.append({
+            "name": d.name,
+            "step": info["step"],
+            "session_type": info["session_type"],   # 後方互換
+            "label": info["label"],
+            "date_str": info["date_str"],
+            "num": info["num"],
+            "keyword": p.get("keyword", info["label"]),
+            "status": p.get("status", "unknown"),
+            "total_items": p.get("total_items", 0),
+            "started_at": p.get("started_at", ""),
+            "updated_at": p.get("updated_at", ""),
+            "has_csv": (d / "results.csv").exists(),
+            "is_running": d.name in running_names,
+        })
+
     return sessions[:100]
 
 
@@ -1639,8 +1723,8 @@ def _run_seller_analysis(stop_ev: threading.Event):
     with _seller_lock:
         sellers = list(_seller_state["sellers"])
 
-    # 1 セッションフォルダを作成
-    out_dir, session_id = make_output_dir("seller_analysis")
+    # 1 セッションフォルダを作成 (S2_YYYYMMDD_NN)
+    out_dir, session_id = make_output_dir("seller_analysis", step=2)
     dm = DataManager(session_id, out_dir)
     img = ImageProcessor(out_dir / "images")
     gc = GeminiClient()
@@ -1869,11 +1953,28 @@ def api_master_scrape_status():
     })
 
 
+@app.route("/api/master_sellers/all", methods=["DELETE"])
+def api_master_delete_all():
+    """マスターリスト全件削除"""
+    deleted = _sellers_master.clear_all()
+    logger.info(f"マスターリスト全削除: {deleted}件")
+    return jsonify({"success": True, "deleted": deleted})
+
+
+@app.route("/api/master_sellers/<seller_id>", methods=["DELETE"])
+def api_master_delete_seller(seller_id):
+    """個別セラー削除"""
+    ok = _sellers_master.delete_seller(seller_id)
+    if not ok:
+        return jsonify({"success": False, "error": "seller_id が見つかりません"}), 404
+    return jsonify({"success": True, "seller_id": seller_id})
+
+
 def _run_master_analysis(targets: list, stop_ev: threading.Event):
     """STEP 3 バックグラウンドスレッド"""
     global _data_manager, _image_processor, _gemini_client, _session_output_dir
 
-    out_dir, session_id = make_output_dir("master_analysis")
+    out_dir, session_id = make_output_dir("master_analysis", step=3)
     dm = DataManager(session_id, out_dir)
     img = ImageProcessor(out_dir / "images")
     gc = GeminiClient()

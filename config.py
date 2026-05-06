@@ -194,6 +194,7 @@ MIN_GROUP_SIZE = int(os.getenv("MIN_GROUP_SIZE", "5"))   # 仕入れ候補とす
 MIN_NEXT_CANDIDATE_SIZE = int(os.getenv("MIN_NEXT_CANDIDATE_SIZE", "4"))  # 次期候補とする最小グループ件数
 SELLER_DETAIL_MIN_GROUP = int(os.getenv("SELLER_DETAIL_MIN_GROUP", "3"))  # セラー分析で詳細取得・Gemini判定する最小グループ件数
 VISION_MIN_GROUP_SIZE = int(os.getenv("VISION_MIN_GROUP_SIZE", "4"))     # pHash後にVision判定するグループの最小件数
+MASTER_SELLER_MIN_GROUP_SIZE = int(os.getenv("MASTER_SELLER_MIN_GROUP_SIZE", "2"))  # マスターリストに追加するセラーの最小グループサイズ
 PHASH_THRESHOLD = int(os.getenv("PHASH_THRESHOLD", "5"))   # pHash同一判定閾値(0=完全一致, 大きいほど緩い)
 IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "10"))  # 画像DLタイムアウト(秒)
 

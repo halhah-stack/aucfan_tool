@@ -189,16 +189,36 @@ class AucFanScraper:
             logger.info(f"=== スクレイピング完了 ({final_status}) ===")
 
             # ── マスターセラーリストへ seller_id を追記 ──
+            # group_size >= MASTER_SELLER_MIN_GROUP_SIZE のグループに属するセラーのみ対象
             try:
                 from sellers_master import SellersMaster
                 keyword = self.dm.get_progress().get("keyword", "")
-                all_sids = list({
+                min_gs = config.MASTER_SELLER_MIN_GROUP_SIZE
+                all_items = self.dm.get_all_items()
+                all_sids_total = {
                     str(i.get("seller_id", "")).strip()
-                    for i in self.dm.get_all_items()
+                    for i in all_items
                     if i.get("seller_id")
+                }
+                # group_size >= min_gs のアイテムに絞る
+                qualified_sids = list({
+                    str(i.get("seller_id", "")).strip()
+                    for i in all_items
+                    if i.get("seller_id")
+                    and int(i.get("group_size") or 1) >= min_gs
                 })
-                if all_sids:
-                    SellersMaster().upsert_sellers(all_sids, source_keyword=keyword)
+                if qualified_sids:
+                    added = SellersMaster().upsert_sellers(qualified_sids, source_keyword=keyword)
+                    logger.info(
+                        f"マスターリストに{added}件追加"
+                        f"（グループ{min_gs}件以上セラー{len(qualified_sids)}件"
+                        f" / 全セラー{len(all_sids_total)}件中）"
+                    )
+                else:
+                    logger.info(
+                        f"マスターリスト追加対象なし"
+                        f"（グループ{min_gs}件以上のセラーが存在しない / 全セラー{len(all_sids_total)}件）"
+                    )
             except Exception as _e:
                 logger.warning(f"sellers_master 更新スキップ: {_e}")
 

@@ -112,15 +112,32 @@ body {
   font-weight: 300;
   align-self: center;
 }
-
-/* ─── STEP 3 パネル ─── */
-.step3-grid {
-  display: grid;
-  grid-template-columns: 1fr 1.5fr;
-  gap: 16px;
+/* マスタータブ前の区切り線 */
+.step-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--gray-200);
+  margin: 8px 4px;
 }
-@media (max-width: 900px) {
-  .step3-grid { grid-template-columns: 1fr; }
+
+/* ─── STEP 3 パネル（単カラム） ─── */
+.step3-scrape-only {
+  max-width: 640px;
+}
+/* マスターリンク（STEP 3内ミニ統計） */
+.step3-master-link {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--gray-600);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* マスターパネル（独立タブ） */
+.control-inner#masterPanel {
+  max-width: 900px;
 }
 .step3-col {
   border: 1px solid var(--gray-200);
@@ -138,16 +155,47 @@ body {
 .step3-col-icon { font-size: 15px; flex-shrink: 0; }
 .step3-col-title { font-size: 14px; font-weight: 700; color: var(--gray-900); }
 
-/* 統計バー */
-.master-stats {
-  font-size: 13px;
-  color: var(--gray-700);
+/* 統計ヘッダーバー */
+.master-stats-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: #eff6ff;
   border: 1px solid #bfdbfe;
   border-radius: 6px;
   padding: 6px 10px;
   margin-bottom: 10px;
 }
+.master-stats-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--gray-700);
+  flex: 1;
+  min-width: 0;
+}
+.master-last-modified {
+  font-size: 11px;
+  color: var(--gray-500, #6b7280);
+  white-space: nowrap;
+}
+/* 全削除ボタン */
+.master-delete-all-btn {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid #fca5a5;
+  border-radius: 5px;
+  background: #fff1f2;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s;
+}
+.master-delete-all-btn:hover { background: #fee2e2; }
+.master-delete-all-btn:disabled { opacity: .4; cursor: default; }
 
 /* マスターセラー一覧 */
 .master-seller-list {
@@ -166,6 +214,24 @@ body {
   font-size: 12px;
 }
 .master-seller-row:last-child { border-bottom: none; }
+.master-seller-row:hover { background: #f9fafb; }
+.master-seller-row:hover .master-row-del-btn { opacity: 1; }
+/* 個別削除ボタン（ホバーで表示） */
+.master-row-del-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity .15s, background .15s, color .15s;
+}
+.master-row-del-btn:hover { background: #fee2e2; color: #dc2626; opacity: 1; }
+.master-row-del-btn:disabled { opacity: .3; cursor: default; }
 .master-seller-id {
   font-weight: 600;
   color: var(--primary);
@@ -601,6 +667,38 @@ body {
 .filter-group input:focus { border-color: var(--primary); }
 .price-range { display: flex; align-items: center; gap: 6px; }
 .price-range input { width: 90px; }
+
+/* ─── 表示中セッションバー ─── */
+.current-session-bar {
+  max-width: 1400px;
+  margin: 0 auto 0;
+  padding: 7px 20px;
+  background: #eff6ff;
+  border-bottom: 1px solid #bfdbfe;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.current-session-label {
+  font-weight: 700;
+  color: var(--primary);
+  white-space: nowrap;
+}
+.current-session-name {
+  font-weight: 600;
+  color: var(--gray-900);
+}
+.current-session-count {
+  color: var(--gray-600);
+}
+/* セッション行の「実行中」バッジ */
+.meta-running {
+  color: var(--primary);
+  font-weight: 600;
+  font-size: 11px;
+  white-space: nowrap;
+}
 
 /* ─── メインコンテンツ ─── */
 .main-content {

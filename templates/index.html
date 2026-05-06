@@ -33,8 +33,14 @@
     <div class="step-arrow">›</div>
     <button class="step-tab" id="stepTab3" onclick="switchStep(3)">
       <span class="step-num">STEP 3</span>
-      <span class="step-name">📋 マスターセラーリサーチ</span>
+      <span class="step-name">⚡ マスターセラーリサーチ</span>
       <span class="step-desc">マスターリストの未スクレイピングセラーをまとめて横断リサーチ</span>
+    </button>
+    <div class="step-sep"></div>
+    <button class="step-tab" id="stepTabMaster" onclick="switchStep('master')">
+      <span class="step-num">📋</span>
+      <span class="step-name">マスターリスト</span>
+      <span class="step-desc">セラーIDを管理・追加・削除・エクスポート</span>
     </button>
   </div>
 </nav>
@@ -268,95 +274,120 @@
 
   <!-- ══ STEP 3: マスターセラーリサーチ ══ -->
   <div id="step3Panel" class="control-inner" style="display:none">
-    <div class="step3-grid">
+    <div class="step3-scrape-only">
 
-      <!-- 左カラム: マスターリスト一覧 -->
-      <div class="step3-col step3-col-list">
-        <div class="step3-col-head">
-          <span class="step3-col-icon">📋</span>
-          <span class="step3-col-title">マスターセラーリスト</span>
-          <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-            <button class="btn btn-secondary btn-sm" onclick="loadMasterSellers()">🔄 更新</button>
-            <button class="btn btn-success btn-sm" onclick="exportMasterCsv()" title="マスターリストをCSVで保存">💾 CSV保存</button>
-            <button class="btn btn-secondary btn-sm" onclick="exportMasterHtml()" title="マスターリストをHTMLで書き出し">📄 HTML書き出し</button>
-            <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="seller_id列を含むCSVをインポート">
-              📂 CSV読み込み
-              <input type="file" id="masterCsvInput" accept=".csv" style="display:none" onchange="importMasterCsv(this)">
-            </label>
-          </div>
+      <div class="step3-col-head">
+        <span class="step3-col-icon">⚡</span>
+        <span class="step3-col-title">横断スクレイピング設定</span>
+        <span class="step3-master-link">
+          マスターリスト: <strong id="step3MasterTotal">—</strong>件 ／ 未スクレイピング: <strong id="step3MasterUnscraped">—</strong>件
+          <button class="btn btn-secondary btn-sm" style="margin-left:8px" onclick="switchStep('master')">📋 マスターリストを開く</button>
+        </span>
+      </div>
+
+      <p class="step2-col-desc">
+        マスターリストの<strong>未スクレイピング</strong>セラーを一括でリサーチします。
+        STEP 1実行のたびにマスターリストに新セラーが自動追加されます。
+      </p>
+
+      <div class="master-settings">
+        <!-- 並び順 -->
+        <div class="master-setting-row">
+          <span class="master-setting-label">並び順（first_seen_date）</span>
+          <label class="master-radio">
+            <input type="radio" name="masterSortOrder" value="desc" checked onchange="updateMasterBatchPreview()"> 新しい順
+          </label>
+          <label class="master-radio">
+            <input type="radio" name="masterSortOrder" value="asc" onchange="updateMasterBatchPreview()"> 古い順
+          </label>
         </div>
-        <div id="masterStats" class="master-stats">
-          合計 <strong id="masterTotal">—</strong>件 / 未スクレイピング <strong id="masterUnscraped">—</strong>件
+
+        <!-- バッチサイズ -->
+        <div class="master-setting-row">
+          <span class="master-setting-label">バッチサイズ（件数）</span>
+          <select id="masterBatchSize" class="master-select" onchange="updateMasterBatchPreview()">
+            <option value="50">50件</option>
+            <option value="100">100件</option>
+            <option value="200">200件</option>
+            <option value="0">上限なし</option>
+          </select>
         </div>
-        <div id="masterSellerList" class="master-seller-list">
+
+        <div class="master-batch-preview" id="masterBatchPreview">
+          対象: <strong id="masterBatchCount">—</strong>件
+        </div>
+      </div>
+
+      <!-- ボタン -->
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-success" id="btnMasterStart" onclick="startMasterScraping()">
+          ▶ スクレイピング開始
+        </button>
+        <button class="btn btn-warning" id="btnMasterStop" onclick="stopMasterScraping()" disabled>
+          ■ 停止
+        </button>
+      </div>
+
+      <!-- 進捗 -->
+      <div id="masterProgressWrap" style="display:none;margin-top:14px">
+        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+          <span id="masterProgressLabel">処理中...</span>
+          <span id="masterProgressCount"></span>
+        </div>
+        <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
+          <div id="masterProgressBar" style="background:#7c3aed;height:100%;width:0%;transition:width .3s"></div>
+        </div>
+        <div id="masterProgressSeller" style="font-size:12px;color:#6b7280;margin-top:4px"></div>
+      </div>
+
+      <!-- 過去のSTEP 3セッション -->
+      <div class="sessions-section" style="margin-top:16px">
+        <div class="sessions-section-header">
+          <span class="sessions-section-title">📂 過去のSTEP 3セッション</span>
+          <button class="btn btn-secondary btn-sm" onclick="loadStep3History()">🔄 更新</button>
+        </div>
+        <div id="step3SessionsList" class="sessions-list-wrap">
           <span style="color:#9ca3af;font-size:13px">「更新」を押してください</span>
         </div>
       </div>
 
-      <!-- 右カラム: スクレイピング設定 -->
-      <div class="step3-col step3-col-scrape">
-        <div class="step3-col-head">
-          <span class="step3-col-icon">⚡</span>
-          <span class="step3-col-title">横断スクレイピング設定</span>
-        </div>
-        <p class="step2-col-desc">
-          マスターリストの<strong>未スクレイピング</strong>セラーを一括でリサーチします。
-          STEP 1実行のたびにマスターリストに新セラーが自動追加されます。
-        </p>
-
-        <div class="master-settings">
-          <!-- 並び順 -->
-          <div class="master-setting-row">
-            <span class="master-setting-label">並び順（first_seen_date）</span>
-            <label class="master-radio">
-              <input type="radio" name="masterSortOrder" value="desc" checked onchange="updateMasterBatchPreview()"> 新しい順
-            </label>
-            <label class="master-radio">
-              <input type="radio" name="masterSortOrder" value="asc" onchange="updateMasterBatchPreview()"> 古い順
-            </label>
-          </div>
-
-          <!-- バッチサイズ -->
-          <div class="master-setting-row">
-            <span class="master-setting-label">バッチサイズ（件数）</span>
-            <select id="masterBatchSize" class="master-select" onchange="updateMasterBatchPreview()">
-              <option value="50">50件</option>
-              <option value="100">100件</option>
-              <option value="200">200件</option>
-              <option value="0">上限なし</option>
-            </select>
-          </div>
-
-          <div class="master-batch-preview" id="masterBatchPreview">
-            対象: <strong id="masterBatchCount">—</strong>件
-          </div>
-        </div>
-
-        <!-- ボタン -->
-        <div style="display:flex;gap:8px;margin-top:14px">
-          <button class="btn btn-success" id="btnMasterStart" onclick="startMasterScraping()">
-            ▶ スクレイピング開始
-          </button>
-          <button class="btn btn-warning" id="btnMasterStop" onclick="stopMasterScraping()" disabled>
-            ■ 停止
-          </button>
-        </div>
-
-        <!-- 進捗 -->
-        <div id="masterProgressWrap" style="display:none;margin-top:14px">
-          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-            <span id="masterProgressLabel">処理中...</span>
-            <span id="masterProgressCount"></span>
-          </div>
-          <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
-            <div id="masterProgressBar" style="background:#7c3aed;height:100%;width:0%;transition:width .3s"></div>
-          </div>
-          <div id="masterProgressSeller" style="font-size:12px;color:#6b7280;margin-top:4px"></div>
-        </div>
-      </div>
-
-    </div><!-- /step3-grid -->
+    </div><!-- /step3-scrape-only -->
   </div><!-- /step3Panel -->
+
+  <!-- ══ マスターリスト ══ -->
+  <div id="masterPanel" class="control-inner" style="display:none">
+
+    <div class="step3-col-head">
+      <span class="step3-col-icon">📋</span>
+      <span class="step3-col-title">マスターセラーリスト</span>
+      <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-secondary btn-sm" onclick="loadMasterSellers()">🔄 更新</button>
+        <button class="btn btn-success btn-sm" onclick="exportMasterCsv()" title="マスターリストをCSVで保存">💾 CSV保存</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportMasterHtml()" title="マスターリストをHTMLで書き出し">📄 HTML書き出し</button>
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="seller_id列を含むCSVをインポート">
+          📂 CSV読み込み
+          <input type="file" id="masterCsvInput" accept=".csv" style="display:none" onchange="importMasterCsv(this)">
+        </label>
+      </div>
+    </div>
+
+    <div id="masterStats" class="master-stats-header">
+      <div class="master-stats-info">
+        <span>合計: <strong id="masterTotal">—</strong>件</span>
+        <span>未スクレイピング: <strong id="masterUnscraped">—</strong>件</span>
+        <span id="masterLastModified" class="master-last-modified">最終更新: —</span>
+      </div>
+      <button class="master-delete-all-btn" onclick="deleteAllMasterSellers()"
+              title="マスターリストを全件削除します（確認あり）">
+        🗑 全削除
+      </button>
+    </div>
+
+    <div id="masterSellerList" class="master-seller-list" style="max-height:480px">
+      <span style="color:#9ca3af;font-size:13px">読み込み中...</span>
+    </div>
+
+  </div><!-- /masterPanel -->
 
 </section>
 
@@ -421,6 +452,14 @@
 
 <!-- メインコンテンツ：商品グループカード -->
 <main class="main-content">
+
+  <!-- 表示中セッションバー -->
+  <div id="currentSessionBar" class="current-session-bar" style="display:none">
+    <span class="current-session-label">📌 表示中:</span>
+    <span id="currentSessionName" class="current-session-name">—</span>
+    <span id="currentSessionCount" class="current-session-count"></span>
+  </div>
+
   <!-- ソートバー（セラー分析モード時のみ表示） -->
   <div class="sort-bar" id="sortBar" style="display:none">
     <span class="sort-label">📊 並び替え</span>
