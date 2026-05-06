@@ -45,6 +45,16 @@
   </div>
 </nav>
 
+<!-- Gemini 429 レート制限警告バナー -->
+<div id="geminiRateLimitBanner" class="gemini-rate-limit-banner" style="display:none">
+  <span class="gemini-banner-icon">⚠️</span>
+  <span class="gemini-banner-text">
+    Gemini API レート制限に達しました。無料枠超過の可能性があります。
+    <span id="geminiRateLimitTime" class="gemini-banner-time"></span>
+  </span>
+  <button class="gemini-banner-close" onclick="closeGeminiRateLimitBanner()" title="閉じる">✕ 閉じる</button>
+</div>
+
 <!-- スクレイピング進捗バナー（動作中のみ表示） -->
 <div id="scrapingBanner" class="scraping-banner" style="display:none">
   <span id="bannerIcon" class="banner-icon">⚡</span>

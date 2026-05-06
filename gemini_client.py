@@ -16,6 +16,37 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────
+# 429 レート制限フラグ（モジュールレベル）
+# ─────────────────────────────────────────────
+_rate_limit_hit: bool = False
+_rate_limit_time: Optional[str] = None
+_rate_limit_lock = threading.Lock()
+
+
+def get_rate_limit_status() -> dict:
+    """429 レート制限フラグと発生時刻を返す"""
+    with _rate_limit_lock:
+        return {"rate_limit_hit": _rate_limit_hit, "time": _rate_limit_time}
+
+
+def reset_rate_limit_flag():
+    """429 レート制限フラグをリセットする"""
+    global _rate_limit_hit, _rate_limit_time
+    with _rate_limit_lock:
+        _rate_limit_hit = False
+        _rate_limit_time = None
+
+
+def _set_rate_limit_flag():
+    """429 エラー発生時にフラグをセットする（内部用）"""
+    global _rate_limit_hit, _rate_limit_time
+    with _rate_limit_lock:
+        _rate_limit_hit = True
+        _rate_limit_time = time.strftime("%H:%M:%S")
+    logger.warning("Gemini API 429 レート制限を検出しました。フラグをセットしました。")
+
+
 # Gemini API が使えない場合のフォールバック用
 _GEMINI_AVAILABLE = False
 genai = None
@@ -269,6 +300,9 @@ class GeminiClient:
             resp = self._model_text.generate_content(prompt)
             return resp.text.strip()
         except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                _set_rate_limit_flag()
             logger.warning(f"Gemini テキストAPI エラー: {e}")
             return None
 
@@ -289,6 +323,9 @@ class GeminiClient:
             resp = self._model_vision.generate_content(parts)
             return resp.text.strip()
         except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                _set_rate_limit_flag()
             logger.warning(f"Gemini Vision API エラー: {e}")
             return None
 

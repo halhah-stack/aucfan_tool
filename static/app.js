@@ -302,6 +302,14 @@ function updateProgressUI(data) {
   const { progress, stats, is_running } = data;
   state.isRunning = is_running;
 
+  // Gemini レート制限ポーリング: スクレイピング中は開始、停止後は終了してから最終確認
+  if (is_running) {
+    startGeminiStatusPolling();
+  } else {
+    stopGeminiStatusPolling();
+    checkGeminiStatus();   // 停止直後に1回チェック
+  }
+
   // セラー分析モード切り替え
   const prevSellerMode = state.isSellerAnalysis;
   state.isSellerAnalysis = data.is_seller_analysis || false;
@@ -1621,6 +1629,7 @@ async function startSellerScraping() {
 
   clearInterval(sellerPollTimer);
   sellerPollTimer = setInterval(fetchSellerStatus, 3000);
+  startGeminiStatusPolling();
 }
 
 async function stopSellerScraping() {
@@ -1736,6 +1745,8 @@ async function fetchSellerStatus(silent = false) {
     // 完了 or 停止時: ポーリング停止 + メイン画面更新ボタンを表示
     if (!data.running) {
       clearInterval(sellerPollTimer);
+      stopGeminiStatusPolling();
+      checkGeminiStatus();   // 停止直後に最終確認
 
       if (data.phase === 'done' || data.phase === 'stopped') {
         // 「メイン画面で結果を見る」ボタンを表示
@@ -1911,6 +1922,7 @@ async function startMasterScraping() {
 
   clearInterval(masterPollTimer);
   masterPollTimer = setInterval(() => fetchMasterStatus(), 3000);
+  startGeminiStatusPolling();
 }
 
 // ─── 停止 ───
@@ -1934,6 +1946,8 @@ async function fetchMasterStatus(silent = false) {
 
     if (!data.running) {
       clearInterval(masterPollTimer);
+      stopGeminiStatusPolling();
+      checkGeminiStatus();   // 停止直後に最終確認
       document.getElementById('btnMasterStart').disabled = false;
       document.getElementById('btnMasterStop').disabled = true;
 
@@ -2068,6 +2082,53 @@ async function importMasterCsv(input) {
   } finally {
     input.value = '';
   }
+}
+
+// ─────────────────────────────────────────────
+// Gemini 429 レート制限バナー
+// ─────────────────────────────────────────────
+
+let _geminiStatusPollTimer = null;
+
+/** スクレイピング実行中に /api/gemini_status をポーリングしてバナーを制御する */
+function startGeminiStatusPolling() {
+  if (_geminiStatusPollTimer) return;   // 二重起動防止
+  _geminiStatusPollTimer = setInterval(checkGeminiStatus, 5000);
+}
+
+function stopGeminiStatusPolling() {
+  if (_geminiStatusPollTimer) {
+    clearInterval(_geminiStatusPollTimer);
+    _geminiStatusPollTimer = null;
+  }
+}
+
+async function checkGeminiStatus() {
+  try {
+    const res = await fetch('/api/gemini_status');
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.rate_limit_hit) {
+      showGeminiRateLimitBanner(data.time);
+    }
+  } catch (e) {
+    // ネットワークエラーは無視
+  }
+}
+
+function showGeminiRateLimitBanner(timeStr) {
+  const banner = document.getElementById('geminiRateLimitBanner');
+  if (!banner) return;
+  const timeEl = document.getElementById('geminiRateLimitTime');
+  if (timeEl && timeStr) timeEl.textContent = `（${timeStr} 検出）`;
+  banner.style.display = '';
+}
+
+function closeGeminiRateLimitBanner() {
+  const banner = document.getElementById('geminiRateLimitBanner');
+  if (banner) banner.style.display = 'none';
+  // サーバー側フラグもリセット
+  fetch('/api/gemini_status/reset', { method: 'POST' }).catch(() => {});
 }
 
 let toastTimer;

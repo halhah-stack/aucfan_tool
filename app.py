@@ -25,7 +25,7 @@ from flask import (
 import config
 from data_manager import DataManager, make_output_dir, make_session_id
 from image_processor import ImageProcessor
-from gemini_client import GeminiClient
+from gemini_client import GeminiClient, get_rate_limit_status, reset_rate_limit_flag
 from scraper import AucFanScraper
 from seller_analyzer import SellerAnalyzer
 from sellers_master import SellersMaster
@@ -2046,6 +2046,23 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
         _master_state["phase"] = final_status
 
     logger.info(f"STEP 3 完了: {dm.total_items}件 → {out_dir}")
+
+
+# ─────────────────────────────────────────────
+# Gemini レート制限ステータス API
+# ─────────────────────────────────────────────
+
+@app.route("/api/gemini_status")
+def api_gemini_status():
+    """Gemini 429 レート制限フラグの現在状態を返す"""
+    return jsonify(get_rate_limit_status())
+
+
+@app.route("/api/gemini_status/reset", methods=["POST"])
+def api_gemini_status_reset():
+    """Gemini 429 レート制限フラグをリセットする"""
+    reset_rate_limit_flag()
+    return jsonify({"success": True})
 
 
 # ─────────────────────────────────────────────

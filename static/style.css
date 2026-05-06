@@ -1420,3 +1420,46 @@ body {
   .stat-card { flex: 1; min-width: 60px; padding: 8px 10px; }
   .groups-header-right { flex-wrap: wrap; }
 }
+
+/* ─── Gemini 429 レート制限警告バナー ─── */
+.gemini-rate-limit-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff3cd;
+  border-left: 5px solid #f59e0b;
+  color: #92400e;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  flex-wrap: wrap;
+}
+.gemini-banner-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.gemini-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+.gemini-banner-time {
+  margin-left: 8px;
+  font-weight: 400;
+  font-size: 12px;
+  color: #b45309;
+}
+.gemini-banner-close {
+  background: #f59e0b;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.gemini-banner-close:hover {
+  background: #d97706;
+}
