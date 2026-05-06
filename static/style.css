@@ -1421,7 +1421,7 @@ body {
   .groups-header-right { flex-wrap: wrap; }
 }
 
-/* ─── Gemini 429 レート制限警告バナー ─── */
+/* ─── Gemini API エラーバナー（共通） ─── */
 .gemini-rate-limit-banner {
   display: flex;
   align-items: center;
@@ -1433,6 +1433,7 @@ body {
   font-size: 14px;
   font-weight: 600;
   flex-wrap: wrap;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
 .gemini-banner-icon {
   font-size: 18px;
@@ -1461,5 +1462,37 @@ body {
   white-space: nowrap;
 }
 .gemini-banner-close:hover {
+  background: #d97706;
+}
+
+/* ─── Gemini エラー種別カラー：要対応（rate_limit / permission） ─── */
+.gemini-rate-limit-banner.gemini-error-danger {
+  background: #fee2e2;
+  border-left-color: #ef4444;
+  color: #7f1d1d;
+}
+.gemini-rate-limit-banner.gemini-error-danger .gemini-banner-time {
+  color: #b91c1c;
+}
+.gemini-rate-limit-banner.gemini-error-danger .gemini-banner-close {
+  background: #ef4444;
+}
+.gemini-rate-limit-banner.gemini-error-danger .gemini-banner-close:hover {
+  background: #dc2626;
+}
+
+/* ─── Gemini エラー種別カラー：自動回復系（unavailable / internal / invalid_input） ─── */
+.gemini-rate-limit-banner.gemini-error-warn {
+  background: #fffbeb;
+  border-left-color: #f59e0b;
+  color: #92400e;
+}
+.gemini-rate-limit-banner.gemini-error-warn .gemini-banner-time {
+  color: #b45309;
+}
+.gemini-rate-limit-banner.gemini-error-warn .gemini-banner-close {
+  background: #f59e0b;
+}
+.gemini-rate-limit-banner.gemini-error-warn .gemini-banner-close:hover {
   background: #d97706;
 }

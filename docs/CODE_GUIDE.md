@@ -146,6 +146,29 @@ aucfan_tool/
 
 **レート制限**: `GEMINI_RPM_LIMIT=14` でリクエスト間隔を自動調整します（無料枠15RPMに対して安全マージンを設けています）。`GEMINI_ENABLED=false` または `GEMINI_API_KEY` 未設定の場合はAPI呼び出しをスキップしてpHashのみで動作します。
 
+**エラー処理とエラーステータス管理**:
+
+API呼び出し時に発生した例外メッセージを文字列で検査し、エラー種別（`type`）を判定して `_last_error` に格納します。判定ロジックは以下の優先順位で行います。
+
+```python
+# gemini_client.py 内のエラー種別判定ロジック（概略）
+error_str = str(e).lower()
+if "429" in error_str or "resource_exhausted" in error_str:
+    error_type = "rate_limit"
+elif "503" in error_str or "service_unavailable" in error_str:
+    error_type = "service_unavailable"
+elif "500" in error_str or "internal" in error_str:
+    error_type = "internal_error"
+elif "403" in error_str or "permission_denied" in error_str:
+    error_type = "permission_denied"
+elif "400" in error_str or "invalid_argument" in error_str:
+    error_type = "invalid_argument"
+else:
+    error_type = "unknown"
+```
+
+`_last_error` は辞書形式 `{"type": "...", "message": "...", "timestamp": "..."}` で保持されます。`get_last_error()` メソッドで取得・クリアできます。
+
 ---
 
 ### `sellers_master.py` — マスターリスト管理
@@ -218,6 +241,34 @@ _sellers_master      # SellersMasterシングルトン
 | `/api/master_list/clear` | POST | マスターリストを全件削除 |
 | `/api/export/csv` | GET | 現在セッションをCSVエクスポート |
 | `/api/export/html` | GET | 現在セッションをHTMLエクスポート |
+| `/api/gemini_status` | GET | 直近のGemini APIエラー情報を返す（フロントエンドのポーリング用） |
+
+**`/api/gemini_status` エンドポイント仕様**:
+
+`app.js` がスクレイピング中に定期ポーリング（約5秒間隔）するエンドポイントです。`GeminiClient.get_last_error()` の結果をそのままJSONで返します。エラーがない場合は `{"error": null}` を返します。
+
+```json
+// エラーあり時のレスポンス例
+{
+  "error": {
+    "type": "rate_limit",
+    "message": "429 RESOURCE_EXHAUSTED: ...",
+    "timestamp": "2026-05-06T12:34:56"
+  }
+}
+```
+
+エラー種別（`type`）とフロントエンドの表示内容の対応：
+
+| `type` | HTTPステータス / gRPCコード | バナー表示 | バナー色 |
+|---|---|---|---|
+| `rate_limit` | 429 / RESOURCE_EXHAUSTED | ⚠️ Gemini APIレート制限超過。無料枠使い切りの可能性があります | オレンジ〜赤 |
+| `service_unavailable` | 503 / SERVICE_UNAVAILABLE | ⚠️ Gemini APIが一時的に混雑しています。しばらく待って再試行してください | 黄色 |
+| `internal_error` | 500 / INTERNAL | ⚠️ Gemini API内部エラーが発生しました。判定スキップで続行中 | 黄色 |
+| `permission_denied` | 403 / PERMISSION_DENIED | 🔴 Gemini APIキーの権限エラー。APIキーを確認してください | 赤 |
+| `invalid_argument` | 400 / INVALID_ARGUMENT | ⚠️ Gemini API入力エラー（画像不正など）。スキップして続行中 | 黄色 |
+
+`app.js` 側では `pollGeminiStatus()` 関数がポーリングを担い、エラーを検出するとDOM上部に `#gemini-error-banner` 要素を動的に生成して表示します。✕ボタンのクリックでバナーを閉じます（次のポーリングで再度エラーが検出された場合は再表示されます）。
 
 **セッション一覧ヘルパー `_list_sessions(step=None)`**:
 `リサーチ結果/` 配下のフォルダを走査し、`_parse_session_info(name)` でメタデータを抽出したリストを返します。`is_running` フィールドは各グローバル状態変数を参照して動的にセットされます。

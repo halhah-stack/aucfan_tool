@@ -2109,26 +2109,57 @@ async function checkGeminiStatus() {
     if (!res.ok) return;
     const data = await res.json();
     if (data.rate_limit_hit) {
-      showGeminiRateLimitBanner(data.time);
+      showGeminiErrorBanner(data.type, data.time);
     }
   } catch (e) {
     // ネットワークエラーは無視
   }
 }
 
-function showGeminiRateLimitBanner(timeStr) {
-  const banner = document.getElementById('geminiRateLimitBanner');
+/** Gemini API エラーバナーを表示する（エラー種別に応じてメッセージ・色を変える）*/
+function showGeminiErrorBanner(type, timeStr) {
+  const banner = document.getElementById('geminiErrorBanner');
   if (!banner) return;
-  const timeEl = document.getElementById('geminiRateLimitTime');
-  if (timeEl && timeStr) timeEl.textContent = `（${timeStr} 検出）`;
+
+  // メッセージ定義
+  const messages = {
+    rate_limit:    { icon: '⚠️', text: 'Gemini APIレート制限超過。無料枠使い切りの可能性があります', cls: 'gemini-error-danger' },
+    permission:    { icon: '🔴', text: 'Gemini APIキーの権限エラー。APIキーを確認してください',       cls: 'gemini-error-danger' },
+    unavailable:   { icon: '⚠️', text: 'Gemini APIが一時的に混雑しています。しばらく待って再試行してください', cls: 'gemini-error-warn' },
+    internal:      { icon: '⚠️', text: 'Gemini API内部エラーが発生しました。判定スキップで続行中',     cls: 'gemini-error-warn' },
+    invalid_input: { icon: '⚠️', text: 'Gemini API入力エラー（画像不正など）。スキップして続行中',     cls: 'gemini-error-warn' },
+  };
+  const def = messages[type] || { icon: '⚠️', text: 'Gemini APIエラーが発生しました', cls: 'gemini-error-warn' };
+
+  // アイコン・メッセージ・時刻をセット
+  const iconEl = document.getElementById('geminiErrorIcon');
+  const msgEl  = document.getElementById('geminiErrorMessage');
+  const timeEl = document.getElementById('geminiErrorTime');
+  if (iconEl) iconEl.textContent = def.icon;
+  if (msgEl)  msgEl.textContent  = def.text;
+  if (timeEl) timeEl.textContent = timeStr ? `（${timeStr} 検出）` : '';
+
+  // 色クラスをリセットして付与
+  banner.classList.remove('gemini-error-danger', 'gemini-error-warn');
+  banner.classList.add(def.cls);
   banner.style.display = '';
 }
 
-function closeGeminiRateLimitBanner() {
-  const banner = document.getElementById('geminiRateLimitBanner');
+/** 後方互換: 旧名 showGeminiRateLimitBanner */
+function showGeminiRateLimitBanner(timeStr) {
+  showGeminiErrorBanner('rate_limit', timeStr);
+}
+
+function closeGeminiErrorBanner() {
+  const banner = document.getElementById('geminiErrorBanner');
   if (banner) banner.style.display = 'none';
   // サーバー側フラグもリセット
   fetch('/api/gemini_status/reset', { method: 'POST' }).catch(() => {});
+}
+
+/** 後方互換: 旧名 closeGeminiRateLimitBanner */
+function closeGeminiRateLimitBanner() {
+  closeGeminiErrorBanner();
 }
 
 let toastTimer;

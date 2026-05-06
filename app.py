@@ -2054,13 +2054,20 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
 
 @app.route("/api/gemini_status")
 def api_gemini_status():
-    """Gemini 429 レート制限フラグの現在状態を返す"""
-    return jsonify(get_rate_limit_status())
+    """Gemini API エラーフラグの現在状態を返す
+    Response: {"rate_limit_hit": bool, "type": str|null, "time": str|null}
+    """
+    status = get_rate_limit_status()
+    return jsonify({
+        "rate_limit_hit": status["rate_limit_hit"],
+        "type": status["type"],
+        "time": status["time"],
+    })
 
 
 @app.route("/api/gemini_status/reset", methods=["POST"])
 def api_gemini_status_reset():
-    """Gemini 429 レート制限フラグをリセットする"""
+    """Gemini API エラーフラグをリセットする"""
     reset_rate_limit_flag()
     return jsonify({"success": True})
 
