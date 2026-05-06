@@ -169,6 +169,20 @@ else:
 
 `_last_error` は辞書形式 `{"type": "...", "message": "...", "timestamp": "..."}` で保持されます。`get_last_error()` メソッドで取得・クリアできます。
 
+**レート制限フラグ管理**:
+
+`_last_error` とは別に、レート制限の発生を追跡する専用の状態変数を持ちます。
+
+| 変数 / メソッド | 型 | 役割 |
+|---|---|---|
+| `_rate_limit_hit` | `bool` | レート制限（429）が発生中かどうかのフラグ |
+| `_rate_limit_time` | `float \| None` | レート制限が最後に発生した時刻（`time.time()` の値） |
+| `_rate_limit_lock` | `threading.Lock` | 上記2変数への同時アクセスを防ぐロック |
+| `get_rate_limit_status()` | `dict` | `{"hit": bool, "since": str \| None}` 形式で現在の状態を返す。`app.py` の `/api/gemini_status` がこれを呼び出す |
+| `reset_rate_limit_flag()` | `None` | `_rate_limit_hit` を `False` に戻す。スクレイピング開始時・ユーザーによる手動リセット時に呼ばれる |
+
+`_rate_limit_hit` が `True` の間は新たなGemini APIリクエストを抑制し、レート制限エラーが連続してバナーが表示され続けることを防ぎます。一定時間（デフォルト60秒）が経過するか `reset_rate_limit_flag()` が呼ばれると次回リクエスト時に自動的にリセットされます。
+
 ---
 
 ### `sellers_master.py` — マスターリスト管理
@@ -198,6 +212,33 @@ else:
 | `clear_all()` | 全件削除 |
 
 すべての操作で `threading.Lock` が使われており、スレッドセーフです。
+
+**Google Drive連携における参照先**: `SellersMaster` は初期化時に `config.SELLERS_MASTER_PATH` を参照してJSONファイルのパスを決定します。`SELLERS_MASTER_PATH` が空文字の場合は `config.OUTPUT_BASE_DIR / "sellers_master.json"` をフォールバックとして使用します。これにより、`.env` の `OUTPUT_BASE_DIR` と `SELLERS_MASTER_PATH` を Google Drive のパスに変更するだけで、ファイルの読み書き先が自動的にGoogle Driveに切り替わります。
+
+---
+
+### Google Drive連携の技術的説明
+
+複数のMacでリサーチデータを共有するための仕組みです。コードの変更は不要で、`.env` の2変数を変更するだけで動作します。
+
+**`config.py` での読み込み**:
+
+`config.py` は `python-dotenv` 経由で `.env` を読み込み、`OUTPUT_BASE_DIR` と `SELLERS_MASTER_PATH` を `Path` オブジェクトとして公開します。`SELLERS_MASTER_PATH` が未設定の場合のフォールバックロジックも `config.py` 内で完結しています。
+
+```python
+# config.py 内のパス解決（概略）
+OUTPUT_BASE_DIR = Path(os.getenv("OUTPUT_BASE_DIR", "リサーチ結果"))
+_sellers_master_env = os.getenv("SELLERS_MASTER_PATH", "")
+SELLERS_MASTER_PATH = Path(_sellers_master_env) if _sellers_master_env else OUTPUT_BASE_DIR / "sellers_master.json"
+```
+
+**`data_manager.py` の `make_output_dir()`**:
+
+セッションフォルダを作成する `make_output_dir(keyword, step=1)` は `config.OUTPUT_BASE_DIR` を親ディレクトリとして使います。`OUTPUT_BASE_DIR` が存在しない場合は `mkdir(parents=True, exist_ok=True)` で自動作成されます。Google Driveのパスが設定されていれば、セッションフォルダはそのままGoogle Drive上に作成されます。
+
+**`sellers_master.py` の参照先**:
+
+`SellersMaster.__init__()` が `config.SELLERS_MASTER_PATH` を読み取り、そのパスに対して読み書きを行います。2台のMacが同じGoogle Driveパスを参照することで、マスターセラーリストが自動的に共有されます。
 
 ---
 
@@ -368,7 +409,8 @@ _sellers_master      # SellersMasterシングルトン
 | `MAX_BOX_H` | `20` | 除外する箱サイズ（高さcm） |
 | `FLASK_PORT` | `5001` | FlaskサーバーのListenポート |
 | `FLASK_HOST` | `0.0.0.0` | FlaskサーバーのListenホスト（`0.0.0.0`でLAN公開） |
-| `OUTPUT_BASE_DIR` | `リサーチ結果` | セッションフォルダの保存先ディレクトリ名 |
+| `OUTPUT_BASE_DIR` | `リサーチ結果` | セッションフォルダの保存先ディレクトリ名（絶対パス指定でGoogle Drive等の外部パスも可） |
+| `SELLERS_MASTER_PATH` | `""` | `sellers_master.json` のフルパス（省略時は `OUTPUT_BASE_DIR/sellers_master.json`） |
 | `EXCLUDE_TITLE_KEYWORDS` | `""` | 追加の除外タイトルキーワード（カンマ区切り） |
 | `EXCLUDE_MAKER_KEYWORDS` | `""` | 追加の除外メーカー名（カンマ区切り） |
 | `SELLER_SCRAPE_DETAIL` | `false` | `true` にするとSTEP 2でも詳細ページを取得する（非推奨・低速） |
@@ -410,6 +452,14 @@ _sellers_master      # SellersMasterシングルトン
 **補足**:
 - `GEMINI_ENABLED=false` の場合は④⑤をスキップ。pHashグループ化まで実行し、グループサイズによるステータス昇格のみ行います
 - `needs_review=True` になった商品はグリッドに「要確認」バッジが表示されますが除外はされません。ユーザーが手動でOK/NGを判断します
+
+**AUTOMOTIVE_KEYWORDS によるバイパスの技術的詳細**:
+
+`_parse_item_card()` 内で②のメーカー名チェック（Tier 1除外）を行う前に、商品タイトルが `config.AUTOMOTIVE_KEYWORDS` のいずれかのキーワードに一致するかを検査します。一致した場合はメーカー名チェックをスキップ（バイパス）し、次の判定ステップへ進みます。
+
+- **管理場所**: `config.py` 内の `AUTOMOTIVE_KEYWORDS` リスト（例：`["トヨタ", "ホンダ", "ヤマハ", "カー用品", "バイク用品", ...]`）
+- **追加方法**: `config.py` の `AUTOMOTIVE_KEYWORDS` に直接追記するか、`.env` の `EXCLUDE_MAKER_KEYWORDS` の除外対象から該当車種名を外す形で調整します
+- **意図**: カー用品・バイク用品はメーカー互換品・汎用品が多く、タイトルにブランド名が含まれていても仕入れ対象になりうるため、メーカー名除外の例外として設けています
 
 ---
 
