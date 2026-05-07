@@ -105,6 +105,10 @@ aucfan_tool/
 5. `scrape_detail_pages()` — 候補商品の詳細ページを個別取得（STEP 1でのみ使用）
 6. `_run_gemini_checks()` — グループサイズが `VISION_MIN_GROUP_SIZE` 以上のグループに対してGemini Vision判定を実行
 
+**進捗カウンター**:
+
+`_total_items` と `_processed_items` の2つのインスタンス変数でスクレイピング対象の総件数と処理済み件数をそれぞれ追跡します。`app.py` の `scrape_status` レスポンスに `processed_items` フィールドとして公開され、フロントエンドの `updateProgressUI()` で「X件 / Y件処理済み」カウンター表示に使われます。スクレイピング完了時には `=== STEP 1 スクレイピング完了 === 全N件処理` というログをターミナルに出力します。
+
 `stop_event: threading.Event` が set されると各ループで検知して安全に停止します。
 
 ---
@@ -119,6 +123,7 @@ aucfan_tool/
 - `skip_price_filter = True` に設定されるため価格フィルタは無効（セラーの全商品を対象とする）
 - セラーごとに `on_seller_progress(index, status)` コールバックが呼ばれ、フロントエンドの進捗表示に使われます
 - STEP 2の `min_group_size=1` で `promote_candidates()` を呼ぶため、全商品が `candidate` になります（単品でも表示対象）
+- スクレイピング完了時には `=== STEP 2 スクレイピング完了 === 全N件処理` というログをターミナルに出力します。STEP 3（マスターリスト横断）の場合は `=== STEP 3 スクレイピング完了 === 全N件処理` が同様に出力されます
 
 ---
 
@@ -208,8 +213,16 @@ else:
 | `upsert_sellers(seller_ids, source_keyword)` | 新規セラーを追記（重複はスキップ） |
 | `update_scraped(seller_id, candidates_count)` | STEP 3完了後に `last_scraped_date` と `candidates_count` を書き込む |
 | `get_unscraped()` | `last_scraped_date` が null のセラーのみ返す（STEP 3の対象リスト） |
+| `merge_from_file(file_path)` | 外部の `sellers_master.json` を読み込んで現在のリストにマージする |
 | `delete_seller(seller_id)` | 指定セラーを削除 |
 | `clear_all()` | 全件削除 |
+
+**`merge_from_file(file_path)` の仕様**:
+
+- **引数**: `file_path: str | Path` — インポートするJSONファイルのパス
+- **戻り値**: `dict` — `{"added": int, "skipped": int, "total": int}` 形式。`added` は新規追加件数、`skipped` は既存エントリとの重複によりスキップした件数、`total` はマージ後の全件数
+- **重複処理**: `seller_id` をキーとして照合。既存エントリが存在する場合はスキップし、インポート元の値で上書きしません（`first_seen_date` 等の初期データを保持するため）
+- **スレッドセーフ**: 内部の `threading.Lock` を使って処理します
 
 すべての操作で `threading.Lock` が使われており、スレッドセーフです。
 
@@ -280,9 +293,19 @@ _sellers_master      # SellersMasterシングルトン
 | `/api/master_list` | GET | マスターセラーリスト取得 |
 | `/api/master_list/delete` | POST | マスターリストから指定セラーを削除 |
 | `/api/master_list/clear` | POST | マスターリストを全件削除 |
+| `/api/master/merge` | POST | 外部の `sellers_master.json` をマージ。`multipart/form-data` でファイルを受け取り `SellersMaster.merge_from_file()` に委譲する。レスポンス: `{"added": int, "skipped": int, "total": int}` |
 | `/api/export/csv` | GET | 現在セッションをCSVエクスポート |
-| `/api/export/html` | GET | 現在セッションをHTMLエクスポート |
+| `/api/export/html` | GET | 現在セッションをHTMLエクスポート（Mac用・画像はサーバー経由） |
+| `/api/export/html_offline` | GET | 現在セッションをオフラインHTML（iPhone/iPad用）としてエクスポート。`_generate_offline_html()` を呼び出し、すべての商品画像をBase64エンコードしてHTMLに直接埋め込む |
 | `/api/gemini_status` | GET | 直近のGemini APIエラー情報を返す（フロントエンドのポーリング用） |
+
+**進捗レスポンスへの `processed_items` フィールド**:
+
+`scrape_status`（STEP 1）、`seller_status`（STEP 2）、`master_status`（STEP 3）の各ステータスレスポンスには `processed_items` フィールドが含まれます。これはスクレイパー側の `_processed_items` カウンター値であり、`app.js` の `updateProgressUI()` / `fetchSellerStatus()` / `fetchMasterStatus()` がこの値を読み取って「X件 / Y件処理済み」カウンターを画面上に更新します。スクレイピング完了時には `app.js` がこのフィールドをもとに緑色の「✅ スクレイピング完了（N件処理）」バナーを表示します（✕ボタンで閉じられます）。
+
+**`_generate_offline_html(session_data)` 関数**:
+
+`/api/export/html_offline` から呼び出されるヘルパー関数です。通常のHTMLエクスポートと異なり、商品画像をすべて `requests` でダウンロードし `base64.b64encode()` でBase64文字列に変換して `<img src="data:image/jpeg;base64,...">` として直接埋め込みます。ネットワーク接続なしでiPhoneのSafariから閲覧できるよう、レイアウトはモバイル向けに最適化されています（フォントサイズ・余白の拡大、タッチ操作を考慮したボタンサイズ等）。Base64埋め込みのため通常の Mac 用 HTML よりファイルサイズが大きくなります。
 
 **`/api/gemini_status` エンドポイント仕様**:
 
@@ -551,3 +574,28 @@ node --check static/app.js
 **フロントエンドのステップ切り替え**: `app.js` の `switchStep(step)` が各パネルの表示/非表示を管理します。`step` は `'1'`, `'2'`, `'3'`, `'master'` の4値です。
 
 **セッション読み込み**: `loadSessionToGrid(sessionName)` が `/api/sessions/<name>/load` を呼び出し、`loadGroups()` でグリッドを更新し、`refreshCurrentSession()` で「📌 表示中:」バーを更新します。この3ステップのシーケンスが重要です。
+
+---
+
+### `app.js` — フロントエンドの主要関数
+
+`static/app.js` はバニラJSで書かれたフロントエンドロジックです。以下は改修に関連する主要関数をまとめています。
+
+**進捗・完了バナー制御**:
+
+| 関数 | 説明 |
+|---|---|
+| `updateProgressUI(data)` | STEP 1のポーリングレスポンス（`scrape_status`）を受け取り、`data.processed_items` を読んで画面上のカウンターを更新する。`data.phase === 'done'` の場合に緑色の完了バナーを表示する |
+| `fetchSellerStatus()` | STEP 2の進捗をポーリングして `seller_status.processed_items` からカウンターを更新し、完了時に完了バナーを表示する |
+| `fetchMasterStatus()` | STEP 3の進捗をポーリングして `master_status.processed_items` からカウンターを更新し、完了時に完了バナーを表示する |
+
+完了バナーは `<div class="scrape-complete-banner">✅ スクレイピング完了（N件処理）</div>` として動的に生成され、✕ボタンのクリックで `remove()` されます。
+
+**`validateNotHtmlFile(file)` ヘルパー関数**:
+
+CSV読み込み系のファイル選択イベントで呼び出されるバリデーション関数です。
+
+- **引数**: `file: File` — `<input type="file">` の選択ファイルオブジェクト
+- **戻り値**: `boolean` — `true` の場合は正常（HTMLでない）、`false` の場合は不正なHTMLファイル
+- **動作**: ファイル名が `_iPhone_iPad用.html` で終わる場合は「このファイルはiPhone/iPad閲覧用のHTMLです」、`_Mac用.html` で終わる場合は「このファイルはMac閲覧用のHTMLです」という赤いトーストメッセージを表示してアップロードを中断します
+- **適用箇所**: STEP 2・STEP 3のCSV読み込みボタン、マスターリストの📂 CSV読み込みボタンのすべての `change` イベントハンドラーから呼び出されます

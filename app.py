@@ -90,6 +90,14 @@ _sellers_master = SellersMaster()   # シングルトン
 
 
 def get_dm() -> DataManager:
+    """
+    グローバルな DataManager インスタンスを返すヘルパー。
+
+    スクレイピングスレッドと Flask ルートハンドラが同一の DataManager を
+    共有するためのシングルトンアクセスポイント。
+    読み取り専用アクセスのためロック不要で呼び出せる。
+    スクレイピング未開始・データ未ロード時は None を返す。
+    """
     global _data_manager
     return _data_manager
 
@@ -189,6 +197,24 @@ def api_resume():
 def api_stream():
     """Server-Sent Events で進捗をリアルタイム配信"""
     def generate():
+        # SSEペイロード構造（クライアントの updateProgressUI が期待するフィールド）:
+        #   progress          : DataManager.get_progress() の戻り値（dict）
+        #     .status         : 'idle'|'scraping_list'|'scraping_detail'|'grouping'|
+        #                       'vision_check'|'done'|'stopped'|'error'
+        #     .keyword        : スクレイピング対象キーワード
+        #     .pages_done     : 取得済み一覧ページ数
+        #     .total_pages    : 推定総ページ数
+        #     .total_items    : 取得済み商品数（累計）
+        #     .detail_pages_done  : 詳細取得済み件数
+        #     .detail_pages_total : 詳細取得対象の総件数
+        #     .candidates_found   : 仕入れ候補として検出された件数
+        #     .processed_items    : 処理（判定）済みアイテム数
+        #   stats             : DataManager.get_stats() の戻り値（dict）
+        #     .total          : 全アイテム数
+        #     .by_status      : {candidate, next_candidate, ok, ng, review, waiting} 各件数
+        #   is_running        : スクレイパースレッドが生存中かどうか (bool)
+        #   gemini_enabled    : Gemini API が有効かどうか (bool)
+        #   is_seller_analysis: セラー分析モード中かどうか（keyword == 'seller_analysis'）(bool)
         last_total = -1
         while True:
             try:

@@ -36,6 +36,15 @@ document.addEventListener('DOMContentLoaded', () => {
 // ─────────────────────────────────────────────
 // ステップ切り替え
 // ─────────────────────────────────────────────
+/**
+ * 指定ステップのパネル・タブを切り替える。
+ * 各ステップへの切り替え時に以下の副作用を伴う:
+ *   step=1      : キーワードセッション一覧を再読み込み
+ *   step=2      : セラー履歴・STEP 1セッションリスト・現在のスクレイピングステータスを再取得
+ *   step=3      : マスター分析ステータス・セッション履歴・統計ミニ表示を再取得
+ *   step='master': マスターセラーリスト管理画面を表示・再読み込み
+ * @param {number|string} step - 切り替え先ステップ (1 / 2 / 3 / 'master')
+ */
 function switchStep(step) {
   state.activeStep = step;
 
@@ -278,6 +287,13 @@ async function deleteSession(sessionName, step) {
 // ─────────────────────────────────────────────
 // SSE（リアルタイム進捗）
 // ─────────────────────────────────────────────
+/**
+ * サーバーとの SSE（Server-Sent Events）接続を開始する。
+ * /api/stream に接続して進捗データをリアルタイムで受信し、
+ * パースした JSON を updateProgressUI() に渡してUIを更新する。
+ * 接続エラー（onerror）時は5秒後に自動再接続する。
+ * 既存の接続がある場合は先に close() してから新規接続する（二重接続防止）。
+ */
 function startSSE() {
   if (state.sseSource) state.sseSource.close();
 
@@ -298,6 +314,32 @@ function startSSE() {
   };
 }
 
+/**
+ * SSEから受信した進捗データをUIに反映する。
+ * - ヘッダーステータス文字列・進捗バー・進捗カウンター・統計バッジを更新する。
+ * - status 値に応じて進捗バーの表示内容を切り替える:
+ *     'scraping_list'   : 一覧ページ取得の進捗（pages_done / total_pages）
+ *     'scraping_detail' : 詳細ページ取得の進捗（detail_pages_done / detail_pages_total）
+ *     'grouping'        : グループ化中（バー固定70%）
+ *     'done'            : 完了（バー100%、完了バナーを表示）
+ * - is_running の変化でGeminiポーリングの開始・停止を制御する。
+ *
+ * @param {object}  data                    - SSEペイロード（/api/stream からのJSONオブジェクト）
+ * @param {object}  data.progress           - スクレイピング進捗オブジェクト
+ * @param {string}  data.progress.status    - 'idle'|'scraping_list'|'scraping_detail'|
+ *                                            'grouping'|'vision_check'|'done'|'stopped'|'error'
+ * @param {string}  data.progress.keyword   - スクレイピング対象キーワード
+ * @param {number}  data.progress.pages_done          - 取得済み一覧ページ数
+ * @param {number}  data.progress.total_items         - 取得済み商品総数
+ * @param {number}  data.progress.detail_pages_done   - 詳細取得済み件数
+ * @param {number}  data.progress.detail_pages_total  - 詳細取得対象の総件数
+ * @param {number}  data.progress.processed_items     - 処理（判定）済みアイテム数
+ * @param {object}  data.stats              - 集計統計オブジェクト
+ * @param {number}  data.stats.total        - 全アイテム数
+ * @param {object}  data.stats.by_status    - ステータス別件数 {candidate, ok, ng, review, waiting}
+ * @param {boolean} data.is_running         - スクレイパースレッドが実行中かどうか
+ * @param {boolean} data.is_seller_analysis - セラー分析モード中かどうか
+ */
 function updateProgressUI(data) {
   const { progress, stats, is_running } = data;
   const wasRunning = state.isRunning;   // 完了遷移を検出するため先に保存
@@ -564,6 +606,14 @@ async function stopScraping() {
 // ─────────────────────────────────────────────
 // 商品グループ取得・描画
 // ─────────────────────────────────────────────
+/**
+ * サーバーから商品グループ一覧を取得してグリッドに描画する。
+ * state のフィルター条件（filterStatus / filterKeyword / filterMinPrice 等）を
+ * クエリパラメータに変換して /api/items に GET リクエストを送る。
+ * セラー分析モード時は per_page=300 で全件取得し、クライアント側でソートする。
+ * ページ切り替え時はグリッド先頭へスクロールする。
+ * @param {number} [page] - 表示するページ番号（省略時は state.currentPage を維持）
+ */
 async function loadGroups(page) {
   const isPageChange = !!page;   // ユーザーがページボタンを押したか
   if (page) state.currentPage = page;
@@ -1043,6 +1093,14 @@ async function exportHtml() {
 // ─────────────────────────────────────────────
 // HTML エクスポート（iPhone/iPad オフライン用）
 // ─────────────────────────────────────────────
+/**
+ * iPhone / iPad 向けオフライン閲覧用 HTML をエクスポートする。
+ * /api/export/html_offline から、画像をすべて base64 埋め込みにした
+ * 自己完結（外部リソース参照なし）HTML ファイルをダウンロードする。
+ * ダウンロード後は AirDrop や iCloud 経由でデバイスに転送して
+ * オフライン閲覧用として利用することを想定している。
+ * 生成中はボタンを無効化してスピナーラベルを表示する。
+ */
 async function exportOfflineHtml() {
   const btn = document.getElementById('btnExportOfflineHtml');
   const origLabel = btn ? btn.textContent : '';
@@ -1629,6 +1687,9 @@ async function loadLatestCsv() {
 /**
  * HTMLファイルが誤ってアップロードされた場合に警告を表示し、trueを返す。
  * 正常なCSVファイルの場合はfalseを返す。
+ * ファイル名に "_iPhone_iPad用" / "_Mac用" が含まれる場合は専用のエラーメッセージを表示する。
+ * @param {HTMLInputElement} input - ファイル選択 <input type="file"> 要素
+ * @returns {boolean} HTMLファイルだった場合 true（呼び出し元は処理を中断すべき）、CSVなら false
  */
 function validateNotHtmlFile(input) {
   const file = input.files[0];
@@ -1776,6 +1837,14 @@ function sellerPhaseLabel(phase, currentSeller, data) {
   }
 }
 
+/**
+ * STEP 2 セラー分析のスクレイピング進捗を取得してUIに反映する。
+ * /api/seller_scrape/status をポーリング呼び出しし、
+ * セラーテーブル・進捗バー・スクレイピングバナー・ボタン状態を更新する。
+ * 完了または停止を検出したらポーリングタイマー（sellerPollTimer）を停止し、
+ * 「メイン画面で結果を見る」ボタンを表示してグリッドをバックグラウンドで先読みする。
+ * @param {boolean} [silent=false] - true のとき完了・停止時のトーストを表示しない（タブ切り替え時の静的チェックに使用）
+ */
 async function fetchSellerStatus(silent = false) {
   try {
     const res = await fetch('/api/seller_scrape/status');
@@ -2056,6 +2125,14 @@ async function stopMasterScraping() {
 }
 
 // ─── 進捗ポーリング ───
+/**
+ * STEP 3 マスターセラーリサーチのスクレイピング進捗を取得してUIに反映する。
+ * /api/master_sellers/scrape/status をポーリング呼び出しし、
+ * 進捗バー・ラベル・現在処理中セラー名・ボタン状態を更新する。
+ * 完了または停止を検出したらポーリングタイマー（masterPollTimer）を停止し、
+ * マスターリスト表示とメイングリッドを再読み込みする。
+ * @param {boolean} [silent=false] - true のとき完了・停止時のトーストを表示しない（タブ切り替え時の静的チェックに使用）
+ */
 async function fetchMasterStatus(silent = false) {
   try {
     const data = await fetchJSON('/api/master_sellers/scrape/status');
@@ -2229,6 +2306,13 @@ async function importMasterCsv(input) {
 }
 
 // ─── 別Macのリストをマージ ───
+/**
+ * 別の Mac で蓄積した sellers_master.json をアップロードしてマスターリストにマージする。
+ * /api/master/merge にファイルを POST し、サーバー側で seller_id を重複排除して新規IDのみを追加する。
+ * マージ結果（追加件数・スキップ件数）を画面のメッセージエリア（#masterMergeResult）に表示し、
+ * マスターセラーリストを再描画する。
+ * @param {HTMLInputElement} input - ファイル選択 <input type="file"> 要素（.json ファイルを期待）
+ */
 async function mergeMasterList(input) {
   const file = input.files[0];
   if (!file) return;
@@ -2271,12 +2355,21 @@ async function mergeMasterList(input) {
 
 let _geminiStatusPollTimer = null;
 
-/** スクレイピング実行中に /api/gemini_status をポーリングしてバナーを制御する */
+/**
+ * Gemini API エラー状態を5秒ごとにポーリングし、レート制限などのエラーが発生した場合に
+ * バナー（#geminiErrorBanner）を表示する。
+ * スクレイピング開始時（startSellerScraping / startMasterScraping / updateProgressUI）から呼ばれる。
+ * 既にタイマーが動作中の場合は何もしない（二重起動防止）。
+ */
 function startGeminiStatusPolling() {
   if (_geminiStatusPollTimer) return;   // 二重起動防止
   _geminiStatusPollTimer = setInterval(checkGeminiStatus, 5000);
 }
 
+/**
+ * Gemini APIエラー監視のポーリングタイマーを停止してクリアする。
+ * スクレイピング完了・停止時に呼ばれ、その直後に checkGeminiStatus() で最終確認を行う。
+ */
 function stopGeminiStatusPolling() {
   if (_geminiStatusPollTimer) {
     clearInterval(_geminiStatusPollTimer);
