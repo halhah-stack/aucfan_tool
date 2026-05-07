@@ -516,9 +516,10 @@
         <select id="sortCount" onchange="applySort()">
           <option value="desc">多い順 ↓</option>
           <option value="asc">少ない順 ↑</option>
+          <option value="">指定なし</option>
         </select>
       </div>
-      <div class="sort-group">
+      <div class="sort-group" id="sortPriceGroup">
         <label for="sortPrice">価格（最安）</label>
         <select id="sortPrice" onchange="applySort()">
           <option value="">指定なし</option>

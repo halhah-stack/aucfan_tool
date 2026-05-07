@@ -1,8 +1,25 @@
 """
-app.py - AucFan リサーチツール メインエントリーポイント
-- Flask Webアプリ起動
-- Seleniumスクレイパーをバックグラウンドスレッドで実行
-- リアルタイム進捗をSSEで配信
+app.py — AucFan リサーチツール メインエントリーポイント
+
+【役割】
+  - Flask Webアプリ起動（ポート 5001、0.0.0.0 バインドで iPhone/iPad からも接続可能）
+  - AucFanScraper / SellerAnalyzer をバックグラウンドスレッドで実行
+  - スクレイピング進捗を SSE（Server-Sent Events）でリアルタイム配信
+  - STEP 1（キーワードリサーチ）/ STEP 2（セラーリサーチ）/ STEP 3（マスターリサーチ）
+    の3ステップ分の API エンドポイントを提供
+
+【グローバル状態】
+  _data_manager      : STEP 1 用 DataManager（スクレイパースレッドと共有）
+  _scraper_thread    : STEP 1 スクレイピングスレッド
+  _stop_event        : 停止シグナル（set() で全スレッドに停止を通知）
+  _seller_state      : STEP 2（セラーリサーチ）の実行状態
+  _master_state      : STEP 3（マスターセラーリサーチ）の実行状態
+  _sellers_master    : SellersMaster シングルトン（data/sellers_master.json を管理）
+
+【werkzeug ログ抑制】
+  werkzeug のアクセスログ（ポーリング系 GET /api/... 200 の大量ログ）は
+  Warning レベルに抑制済み。スクレイピング完了後は logger.info で
+  「待機中」メッセージをターミナルに表示する。
 """
 import json
 import logging
@@ -43,42 +60,51 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# werkzeug のアクセスログを抑制（ポーリング系の大量ログを非表示にする）
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
 # ─────────────────────────────────────────────
 # Flask アプリ
 # ─────────────────────────────────────────────
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["SECRET_KEY"] = os.urandom(24)
 
-# グローバル状態（キーワードスクレイピング）
+# ─── STEP 1: キーワードリサーチ グローバル状態 ───
+# スクレイパースレッドと Flask ルートハンドラが同一オブジェクトを共有する。
+# 操作は _lock でスレッドセーフに保護する。
 _scraper_thread: threading.Thread = None
-_stop_event = threading.Event()
-_data_manager: DataManager = None
-_image_processor: ImageProcessor = None
-_gemini_client: GeminiClient = None
-_session_output_dir: Path = None
+_stop_event = threading.Event()          # set() でスクレイパーに停止を通知
+_data_manager: DataManager = None        # 現在アクティブな DataManager
+_image_processor: ImageProcessor = None  # 画像ダウンロード・pHash 計算
+_gemini_client: GeminiClient = None      # Gemini API クライアント
+_session_output_dir: Path = None         # 現セッションの出力ディレクトリ
 _lock = threading.Lock()
 
-# ─── セラー分析スクレイピング状態 ───
+# ─── STEP 2: セラーリサーチ グローバル状態 ───
+# SellerAnalyzer スレッドと Flask ルートハンドラが共有する辞書。
+# 操作は _seller_lock でスレッドセーフに保護する。
 _seller_state = {
-    "sellers": [],        # [{"seller_id", "seller_url", "status": pending/running/done/error}]
-    "current_index": -1,  # 現在処理中のセラーインデックス
-    "running": False,
-    "phase": "idle",      # idle/scraping_list/grouping/scraping_detail/done/stopped/error
-    "stop_event": None,   # threading.Event（実行中のみ有効）
-    "thread": None,
-    "dm": None,           # 実行中 DataManager（進捗ポーリング用）
-    "session_id": None,   # 完了セッションID
+    "sellers": [],        # [{"seller_id": str, "seller_url": str, "status": "pending"|"running"|"done"|"error"}]
+    "current_index": -1,  # 現在処理中のセラーインデックス（-1 = 未開始）
+    "running": False,     # SellerAnalyzer スレッドが実行中かどうか
+    "phase": "idle",      # "idle"|"scraping_list"|"grouping"|"vision_check"|"done"|"stopped"|"error"
+    "stop_event": None,   # threading.Event（実行中のみ有効、停止リクエスト用）
+    "thread": None,       # SellerAnalyzer スレッド
+    "dm": None,           # 実行中の DataManager（/api/seller/status でのポーリング用）
+    "session_id": None,   # 完了セッション ID（履歴表示用）
     "output_dir": None,   # 完了セッション出力ディレクトリ（Path）
 }
 _seller_lock = threading.Lock()
 
-# ─── STEP 3: マスターセラーリサーチ状態 ───
+# ─── STEP 3: マスターセラーリサーチ グローバル状態 ───
+# _seller_state と同じ構造。SellersMaster からセラーを自動取得して
+# SellerAnalyzer を順次実行する。
 _master_state = {
     "running": False,
-    "phase": "idle",       # idle/scraping_list/grouping/vision_check/done/stopped/error
-    "stop_event": None,
-    "thread": None,
-    "dm": None,
+    "phase": "idle",       # "idle"|"scraping_list"|"grouping"|"vision_check"|"done"|"stopped"|"error"
+    "stop_event": None,    # threading.Event（実行中のみ有効）
+    "thread": None,        # SellerAnalyzer スレッド
+    "dm": None,            # 実行中の DataManager
     "session_id": None,
     "output_dir": None,
     "total": 0,
@@ -315,8 +341,8 @@ def api_items():
             "items": group,
             "status": group[0].get("status", ""),
             "title": (group[0].get("title_full") or group[0].get("title_short", ""))[:100],
-            "min_price": min(i.get("price", 0) for i in group),
-            "max_price": max(i.get("price", 0) for i in group),
+            "min_price": min((int(i.get("price") or 0) for i in group if int(i.get("price") or 0) > 0), default=0),
+            "max_price": max((int(i.get("price") or 0) for i in group if int(i.get("price") or 0) > 0), default=0),
             "seller_ids": list(set(i.get("seller_id", "") for i in group if i.get("seller_id"))),
         })
 
@@ -2157,6 +2183,7 @@ def _run_seller_analysis(stop_ev: threading.Event):
     logger.info("=" * 50)
     logger.info(f"=== STEP 2 スクレイピング完了 === 全{dm.total_items}件処理 ({final_status})")
     logger.info("=" * 50)
+    logger.info(">>> 待機中 (アプリは起動中) <<<  次の操作をブラウザから行ってください")
 
 
 @app.route("/api/seller_scrape/stop", methods=["POST"])

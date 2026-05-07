@@ -1,33 +1,35 @@
 """
-seller_analyzer.py - セラー分析スクレイピング
+seller_analyzer.py — セラーリサーチ スクレイピング
 
-複数セラーの商品を 1 セッションにまとめてスクレイピングし、
-セラーをまたいで pHash グループ化する。
-
-【設計】
-  AucFanScraper を継承して run() / _run_phash_grouping() をオーバーライド。
-  既存の _scrape_list_pages を流用。詳細ページ取得はデフォルトでスキップ。
+【役割】
+  STEP 2 / STEP 3 で使用するセラー分析クラス。
+  AucFanScraper を継承し、run() と _run_phash_grouping() をオーバーライドして
+  複数セラーの商品を 1 セッションにまとめて収集・グループ化する。
 
 【フロー（デフォルト: scrape_detail=False）】
-  1. Chrome に 1 回接続
-  2. 各セラー URL に現在タブで直接ナビゲート → 一覧取得 → 次のセラーへ
-     ※ window.open/close は使わない（セッションが切れるため）
-  3. 全セラー完了後、全商品まとめて pHash グループ化（min_group_size=1）
-  → サムネイル・pHash は一覧取得時に完了しているため詳細取得は不要。
-  → 結果は 1 つの DataManager / セッションフォルダに集約
+  1. Chrome に 1 回接続（start.sh で起動したデバッグポート付き Chrome）
+  2. セラーリストを順番に処理:
+       各セラー URL に「現在タブで直接ナビゲート」→ _scrape_list_pages() → 次のセラーへ
+       ★ window.open / driver.close() は使わない（セッション切れの原因になるため）
+  3. 全セラー完了後、まとめて pHash グループ化（min_group_size=1 で全件 candidate 化）
+     → サムネイル・pHash は一覧取得時に完了しているため詳細取得は不要
+     → Gemini Vision 判定も実行（グループ代表画像+タイトルで判定）
+  4. 結果を 1 つの DataManager / セッションフォルダに集約
 
-【scrape_detail=True の場合のフロー（旧動作）】
-  3. pHash グループ化
-  4. 候補商品の詳細ページ取得（45,000件では数十時間かかるため非推奨）
-  5. 最終グループ化
+【フロー（scrape_detail=True の場合）】
+  上記フローに加え:
+  3b. group_size >= SELLER_DETAIL_MIN_GROUP の候補商品だけ詳細ページ取得
+      （全商品が candidate になるため group_size フィルターで対象を絞る）
+  3c. 詳細取得後に再グループ化 + Gemini Vision 判定
 
-【主な変更点 v2】
-  - window.open + driver.close() を廃止（invalid session id の原因だった）
-  - セラー分析では MIN_GROUP_SIZE を 1 に固定（全商品を候補として表示）
+【skip_price_filter=True】
+  親クラスの価格フィルター（MIN_PRICE / MAX_PRICE）をオフにして全商品を取得する。
+  セラーが繰り返し出品している商品を漏れなく検出するため。
 
-【主な変更点 v3】
-  - scrape_detail=False をデフォルトに変更（詳細ページ取得をスキップ）
-  - .env の SELLER_SCRAPE_DETAIL=true で有効化可能
+【主な変更履歴】
+  v2: window.open + driver.close() 廃止（invalid session id の原因だった）
+      MIN_GROUP_SIZE を 1 に固定して全商品を候補として表示
+  v3: scrape_detail=False をデフォルトに変更（詳細取得は .env で SELLER_SCRAPE_DETAIL=true 時のみ）
 """
 import logging
 import os

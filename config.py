@@ -1,5 +1,20 @@
 """
-config.py - オークファンリサーチツール設定
+config.py — AucFan リサーチツール 全設定値
+
+【変更方法】
+  .env ファイルに KEY=VALUE 形式で記述すると上書き可能。
+  コードの変更なしに設定を切り替えられる。
+
+【主な設定カテゴリ】
+  Chrome 接続      : CHROME_DEBUG_HOST / CHROME_DEBUG_PORT（start.sh と一致させること）
+  スクレイピング   : MIN_DELAY / MAX_DELAY / MAX_PAGES / PAGE_LOAD_TIMEOUT
+  価格フィルター   : MIN_PRICE / MAX_PRICE（一覧取得時に大まかに絞る）
+  グループサイズ   : MIN_GROUP_SIZE / MIN_NEXT_CANDIDATE_SIZE 等
+  pHash            : PHASH_THRESHOLD（類似度閾値、大きいほど緩い判定）
+  Gemini API       : GEMINI_API_KEY / GEMINI_MODEL_VISION / GEMINI_RPM_LIMIT
+  Flask            : FLASK_PORT=5001 / FLASK_HOST=0.0.0.0
+  除外キーワード   : EXCLUDE_TITLE_KEYWORDS（カンマ区切りで追加可能）
+  CSS セレクター   : SELECTORS（AucFan のサイト改修時にここを更新する）
 """
 import os
 from dotenv import load_dotenv
@@ -240,7 +255,9 @@ STATUS_LABELS = {
 
 # ─────────────────────────────────────────────
 # AucFan CSS セレクター設定
-# サイトのデザイン変更時はここを更新してください
+#
+# AucFan のサイト改修時にセレクターが変わる場合はここを更新する。
+# 各セレクターはリスト形式で複数候補を持ち、先頭から順に試みる（フォールバック）。
 # ─────────────────────────────────────────────
 SELECTORS = {
     # ───── 一覧ページ（AucFan 2026年版） ─────

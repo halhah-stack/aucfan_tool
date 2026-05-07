@@ -2,26 +2,43 @@
    AucFan リサーチツール フロントエンド
 ───────────────────────────────────────────── */
 
-// ─── 状態管理 ───
+// ─── アプリ全体の状態管理 ───
+// すべての UI 状態をここで一元管理する。
+// React のような仮想 DOM は使わず、各関数が必要なタイミングで DOM を直接更新する。
 const state = {
-  isRunning: false,
-  currentPage: 1,
-  totalPages: 1,
-  totalGroups: 0,
-  filterStatus: '',
-  filterKeyword: '',
-  filterMinPrice: 0,
-  filterMaxPrice: 99999,
-  filterMinGroup: 1,
-  refreshInterval: null,
-  sseSource: null,
-  isSellerAnalysis: false,   // セラー分析モードかどうか
-  sellerDetailMinGroup: 3,   // Gemini判定対象の最小グループ件数（サーバーから取得）
-  activeStep: 1,             // 現在アクティブなステップ (1 or 2)
-  showNgList: false,         // NG一覧の表示/非表示
-  sortCount: 'desc',         // 'desc'=件数多い順 / 'asc'=件数少ない順
-  sortPrice: '',             // ''=指定なし / 'desc'=価格高い順 / 'asc'=価格安い順
-  allGroups: [],             // クライアントサイドソート用キャッシュ
+  // ── スクレイピング状態 ──
+  isRunning: false,          // バックエンドのスクレイパースレッドが実行中かどうか（SSE で更新）
+
+  // ── ページネーション ──
+  currentPage: 1,            // 現在表示中のページ番号
+  totalPages: 1,             // 総ページ数（API レスポンスから更新）
+  totalGroups: 0,            // 総グループ数（API レスポンスから更新）
+
+  // ── フィルター ──
+  filterStatus: '',          // ステータスフィルター（'candidate'|'ok'|'ng'等、''=全て）
+  filterKeyword: '',         // タイトル・キーワードの部分一致フィルター
+  filterMinPrice: 0,         // 価格下限（円）
+  filterMaxPrice: 99999,     // 価格上限（円）
+  filterMinGroup: 1,         // 最小グループ件数フィルター
+
+  // ── タイマー・接続 ──
+  refreshInterval: null,     // 自動更新タイマー（スクレイピング中のみ動作）
+  sseSource: null,           // SSE（EventSource）接続オブジェクト
+
+  // ── モード ──
+  isSellerAnalysis: false,   // セラー分析モード（STEP 2 / STEP 3 時は true）
+                             // → true 時のみ価格ソートバーを表示
+  sellerDetailMinGroup: 3,   // Gemini 判定対象の最小グループ件数（サーバーの SELLER_DETAIL_MIN_GROUP）
+  activeStep: 1,             // 現在アクティブなステップ (1 / 2 / 3 / 'master')
+  showNgList: false,         // NG一覧セクションの表示/非表示
+
+  // ── クライアントサイドソート ──
+  // API からのデータを再取得せずに並び替えるためにキャッシュする。
+  // セラー分析モードは 300 件まで一括取得してここに保持する。
+  sortCount: 'desc',         // 件数ソート: 'desc'=多い順 / 'asc'=少ない順 / ''=指定なし
+  sortPrice: '',             // 価格ソート: 'desc'=高い順 / 'asc'=安い順 / ''=指定なし
+                             // ※ STEP 2（セラー分析）のみ表示。件数同値時の第2キーとして機能。
+  allGroups: [],             // ソート用グループキャッシュ（loadGroups で更新）
 };
 
 // ─── 初期化 ───
@@ -30,7 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadGroups();
   loadKeywordSessions();   // STEP 1 セッション一覧を初期表示
   refreshCurrentSession(); // 表示中セッションバーを初期化
-  setInterval(loadGroups, 8000); // 8秒ごとに自動更新
+  setInterval(() => {
+    if (state.isRunning) loadGroups(); // スクレイピング中のみ自動更新
+  }, 8000);
 });
 
 // ─────────────────────────────────────────────
@@ -66,6 +85,10 @@ function switchStep(step) {
   if (t2) t2.classList.toggle('active', step === 2);
   if (t3) t3.classList.toggle('active', step === 3);
   if (tm) tm.classList.toggle('active', step === 'master');
+
+  // ソートバーの価格グループをステップに応じて表示切替
+  const _sortPriceGroup = document.getElementById('sortPriceGroup');
+  if (_sortPriceGroup) _sortPriceGroup.style.display = state.isSellerAnalysis ? '' : 'none';
 
   if (step === 1) {
     loadKeywordSessions();
@@ -643,15 +666,15 @@ async function loadGroups(page) {
     state.isSellerAnalysis = data.is_seller_analysis;
     const saFilter = document.getElementById('sellerAnalysisFilter');
     if (saFilter) saFilter.style.display = state.isSellerAnalysis ? '' : 'none';
-    // ソートバーの表示切替
+    // ソートバーの表示切替（Step1でも件数ソートを使えるよう常に表示）
     const sortBar = document.getElementById('sortBar');
-    if (sortBar) sortBar.style.display = state.isSellerAnalysis ? '' : 'none';
-    // セラー分析モードなら STEP 2 タブへ自動切り替え
-    if (state.isSellerAnalysis && state.activeStep === 1) {
-      switchStep(2);
-    }
-    // セラー分析モードを初めて検出したとき per_page=300 で再取得
+    if (sortBar) sortBar.style.display = '';
+    // 価格ソートはセラー分析モード時のみ表示
+    const priceGroup = document.getElementById('sortPriceGroup');
+    if (priceGroup) priceGroup.style.display = state.isSellerAnalysis ? '' : 'none';
+    // セラー分析モードを初めて検出したときのみ STEP 2 タブへ自動切り替え
     if (!wasSellerAnalysis && state.isSellerAnalysis) {
+      switchStep(2);
       loadGroups(1);
       return;
     }
@@ -706,7 +729,10 @@ function renderGroups(groups) {
 // クライアントサイド ソート
 // ─────────────────────────────────────────────
 
-/** グループの「最安合計価格（送料込み）」を返すヘルパー */
+/**
+ * グループの「最安合計価格（送料込み）」を返すヘルパー。
+ * カード上の価格表示には使わず、将来的な合計値ソート用の予備関数。
+ */
 function getGroupMinTotal(group) {
   if (!group.items || group.items.length === 0) return group.min_price || 0;
   return Math.min(
@@ -714,18 +740,59 @@ function getGroupMinTotal(group) {
   );
 }
 
-/** state.sortCount / state.sortPrice に従いグループ配列をソートして返す */
+/**
+ * グループの代表価格を返す（ソートキーとして使用）。
+ *
+ * 価格の取得優先順位:
+ *   1. items[0].price  — カード表示と同じ値でソートするため優先
+ *   2. group.min_price — Python 側が全アイテムの非ゼロ価格から計算した最小値
+ *      （items[0].price が 0 または未設定の場合のフォールバック）
+ *
+ * Note: price=0 の商品が先頭に来るケースを防ぐため、0 の場合は min_price を使う。
+ */
+function getGroupRepPrice(group) {
+  const itemPrice = group.items && group.items[0] ? Number(group.items[0].price) : 0;
+  const minPrice  = Number(group.min_price) || 0;
+  const p = itemPrice > 0 ? itemPrice : minPrice;
+  return isNaN(p) ? 0 : p;
+}
+
+/**
+ * state.sortCount / state.sortPrice の設定に従いグループ配列をソートして返す。
+ *
+ * ソートキーの優先順位:
+ *   第1キー: 件数（group.count）— sortCount が '' の場合はスキップ
+ *   第2キー: 価格（getGroupRepPrice）— sortPrice が '' の場合はスキップ
+ *
+ * 使用上の注意:
+ *   全グループの件数がすべて異なる場合、第2キーの価格ソートは実質無効になる。
+ *   価格だけで並び替えたい場合は sortCount を '' (指定なし) にすること。
+ *
+ * デバッグ用コンソールログ:
+ *   ソート前に件数上位5件・価格上位5件をコンソールに出力する（開発用）。
+ */
 function sortGroups(groups) {
   if (!groups || groups.length === 0) return groups || [];
-  const countDir = state.sortCount === 'asc' ? 1 : -1;
-  const priceDir = state.sortPrice === 'asc' ? 1 : -1;
+  if (groups.length > 0) {
+    const counts = [...new Set(groups.map(g => g.count || 0))].sort((a,b) => b-a).slice(0,5);
+    const prices = groups.map(g => getGroupRepPrice(g)).filter(p => p > 0).sort((a,b) => b-a).slice(0,5);
+    console.log(`[sort] ${groups.length}グループ, sortCount="${state.sortCount}", sortPrice="${state.sortPrice}"`);
+    console.log(`[sort] count上位: ${counts.join(',')}  price上位: ${prices.join(',')}`);
+  }
   return [...groups].sort((a, b) => {
-    // 1st key: 件数
-    const cd = ((a.count || 0) - (b.count || 0)) * countDir;
-    if (cd !== 0) return cd;
-    // 2nd key: 価格（指定があれば）
-    if (!state.sortPrice) return 0;
-    return (getGroupMinTotal(a) - getGroupMinTotal(b)) * priceDir;
+    // 第1キー: 件数ソート（sortCount='' の「指定なし」のときはこのブロックをスキップ）
+    if (state.sortCount) {
+      const countDir = state.sortCount === 'asc' ? 1 : -1;
+      const cd = ((a.count || 0) - (b.count || 0)) * countDir;
+      if (cd !== 0) return cd;
+      // 件数が同値の場合は第2キー（価格）へ進む
+    }
+    // 第2キー: 価格ソート（件数同値のとき、または件数ソートが「指定なし」のとき）
+    if (state.sortPrice) {
+      const priceDir = state.sortPrice === 'asc' ? 1 : -1;
+      return (getGroupRepPrice(a) - getGroupRepPrice(b)) * priceDir;
+    }
+    return 0; // ソート指定なし: 取得順を維持
   });
 }
 
@@ -745,12 +812,12 @@ function applySort() {
 function updateSortHint() {
   const hint = document.getElementById('sortHint');
   if (!hint) return;
-  const countLabel = state.sortCount === 'asc' ? '件数 少ない順' : '件数 多い順';
+  const countLabel = state.sortCount === 'desc' ? '件数 多い順'
+    : state.sortCount === 'asc' ? '件数 少ない順' : '';
   const priceLabel = state.sortPrice === 'asc' ? '価格 安い順'
     : state.sortPrice === 'desc' ? '価格 高い順' : '';
-  hint.textContent = priceLabel
-    ? `${countLabel} → ${priceLabel}`
-    : countLabel;
+  const parts = [countLabel, priceLabel].filter(Boolean);
+  hint.textContent = parts.length ? parts.join(' → ') : '並び替えなし';
 }
 
 function renderNgList(ngGroups) {
@@ -859,9 +926,10 @@ function renderGroupCard(group) {
   //     return thumb ? `<img class="card-thumb" ...>` : `<div class="card-thumb-placeholder">📦</div>`;
   //   }).join('');
   const thumbItems = group.items.filter(item => item.thumbnail_local).slice(0, 20);
-  const thumbCount = thumbItems.length;
-  const countLabel = thumbCount > 1
-    ? `同一商品 <span class="group-badge">${thumbCount}件</span>`
+  // バッジはソートと同じ group.count（全アイテム数）を使う
+  const realCount = group.count || group.items.length;
+  const countLabel = realCount > 1
+    ? `同一商品 <span class="group-badge">${realCount}件</span>`
     : '単品';
 
   const thumbs = thumbItems.map(item => {
@@ -903,6 +971,7 @@ function renderGroupCard(group) {
     <div class="card-status-bar ${statusClass}">
       <span>${statusLabel}</span>
       <span>${countLabel}</span>
+      <span style="font-size:10px;opacity:.6">件数:${group.count} ¥${getGroupRepPrice(group).toLocaleString()}</span>
     </div>
     <div class="card-images-wrap">
       <div class="card-images">${thumbs}</div>
@@ -913,17 +982,18 @@ function renderGroupCard(group) {
       ${sellerGroupBadge}
       <div class="card-price-row">
         <div>
-          <div class="card-price-label">合計</div>
-          <div class="card-price">¥${total.toLocaleString()}</div>
+          <div class="card-price-label">${shipping > 0 ? '合計' : '価格'}</div>
+          <div class="card-price">¥${(shipping > 0 ? total : price).toLocaleString()}</div>
         </div>
+        ${shipping > 0 ? `
         <div class="card-price-sub">
-          <div class="card-price-label">落札価格</div>
+          <div class="card-price-label">価格</div>
           <div class="price-val">¥${price.toLocaleString()}</div>
         </div>
         <div class="card-price-sub">
           <div class="card-price-label">送料</div>
-          <div class="price-val">${shipping === 0 ? '無料' : '¥' + shipping.toLocaleString()}</div>
-        </div>
+          <div class="price-val">¥${shipping.toLocaleString()}</div>
+        </div>` : ''}
       </div>
       <div class="card-sellers${multiSellerClass}">
         出品者${sellerCountLabel}: ${sellerBadges || '—'}${sellerExtra}

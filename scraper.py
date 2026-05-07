@@ -1,11 +1,28 @@
 """
-scraper.py - AucFan Selenium スクレイパー
-- 既存 Chrome に接続（リモートデバッグ）
-- 一覧ページ全件取得（Step1）
-- 候補のみ詳細ページ取得（Step2）
-- 3〜5秒ランダム待機
-- エラーがあっても継続
-- 途中停止・再開対応
+scraper.py — AucFan Selenium スクレイパー
+
+【役割】
+  - 既存の Chrome（リモートデバッグポート 9222）に接続してスクレイピングを実行
+  - AucFanScraper クラスが STEP 1 / STEP 2 / STEP 3 で共通して使われる基底クラス
+  - SellerAnalyzer（seller_analyzer.py）はこのクラスを継承してセラー分析に特化
+
+【スクレイピングフロー（STEP 1 キーワードリサーチ）】
+  1. _scrape_list_pages  : 一覧ページを全ページ取得（50件/ページ）
+  2. _run_phash_grouping : pHash 画像類似度でグループ化（中間）
+  3. _scrape_detail_pages: 候補商品の詳細ページ取得（送料・サイズ情報取得）
+  4. _run_phash_grouping : 最終グループ化（詳細取得後に再実行）
+  5. _run_vision_group_check: Gemini Vision API による画像・タイトル判定
+
+【主な設定値（config.py で変更可能）】
+  MIN_DELAY / MAX_DELAY    : ページ取得間のランダム待機時間（サーバー負荷対策）
+  MAX_PAGES                : 最大取得ページ数（デフォルト 500）
+  MIN_PRICE / MAX_PRICE    : 一覧取得時の価格フィルター（skip_price_filter=True で無効化）
+  PHASH_THRESHOLD          : pHash 類似度の閾値（数値が大きいほど緩い判定）
+  CHROME_DEBUG_HOST/PORT   : Chrome デバッグ接続先（デフォルト 127.0.0.1:9222）
+
+【停止・再開】
+  stop_event.set() で各ループが停止シグナルを検出して安全に終了する。
+  再開時（resume=True）は DataManager.load_previous_session() で前回データを引き継ぐ。
 """
 import hashlib
 import logging
@@ -53,13 +70,13 @@ class AucFanScraper:
         self.gemini = gemini_client
         self.stop_event = stop_event
         self.driver: Optional[webdriver.Chrome] = None
-        # True にすると _parse_item_card() の価格フィルタをスキップする
-        # キーワードリサーチ: False（デフォルト）
-        # セラー分析: True（SellerAnalyzer.__init__ で設定）
+        # 価格フィルターを適用するかどうか
+        #   False（デフォルト）: MIN_PRICE 〜 MAX_PRICE*1.5 の範囲外を除外
+        #   True              : セラー分析で全商品を取得するために SellerAnalyzer.__init__ で True に設定
         self.skip_price_filter: bool = False
-        # 進捗カウンター（アプリ画面の「X件中Y件処理済み」表示用）
-        self._total_items: int = 0      # スクレイピング対象の総件数（既知の場合）
-        self._processed_items: int = 0  # 処理済み件数
+        # アプリ画面「X件中Y件処理済み」表示用カウンター
+        self._total_items: int = 0      # スクレイピング対象の総件数（詳細取得フェーズで確定）
+        self._processed_items: int = 0  # 処理済み件数（UI の進捗カウンターに反映）
 
     # ─────────────────────────────────────────────
     # Chrome 接続
@@ -192,6 +209,7 @@ class AucFanScraper:
             logger.info("=" * 50)
             logger.info(f"=== STEP 1 スクレイピング完了 === 全{self.dm.total_items}件処理 ({final_status})")
             logger.info("=" * 50)
+            logger.info(">>> 待機中 (アプリは起動中) <<<  次の操作をブラウザから行ってください")
 
             # ── マスターセラーリストへ seller_id を追記 ──
             # group_size >= MASTER_SELLER_MIN_GROUP_SIZE のグループに属するセラーのみ対象
@@ -642,8 +660,9 @@ class AucFanScraper:
         price_el = self._find_element_soup(card, config.SELECTORS["list"]["price"])
         price = self._extract_price(price_el.get_text(strip=True) if price_el else "0")
 
-        # 価格フィルター（一覧段階で大まかに絞る）
-        # skip_price_filter=True（セラー分析モード）では全件取得するためスキップ
+        # 価格フィルター（一覧取得段階で大まかに除外する）
+        # 上限は MAX_PRICE×1.5 と緩めに設定し、詳細取得後の正確な価格で再判定する余地を残す。
+        # セラー分析モード（skip_price_filter=True）では全商品を対象とするためスキップ。
         if not self.skip_price_filter:
             if price > 0 and (price < config.MIN_PRICE or price > config.MAX_PRICE * 1.5):
                 return None

@@ -1,5 +1,22 @@
 """
-data_manager.py - データ管理・CSV保存・進捗保存・再開機能
+data_manager.py — スクレイピングデータの管理・保存・再開
+
+【役割】
+  - 全商品データをメモリ上の辞書（{item_id: item_dict}）で保持（スレッドセーフ）
+  - progress.json / items.json / results.csv への自動保存
+  - 前回セッションのデータロードによる途中再開
+  - pHash グループ化後のステータス昇格（promote_candidates）
+  - API レスポンス用の集計統計（get_stats）
+
+【保存先（output_dir 以下）】
+  progress.json : スクレイピング進捗（ページ数・件数・ステータス等）
+  items.json    : 全商品データ（辞書形式）
+  results.csv   : 全商品データ（Excel で開きやすい UTF-8-BOM CSV）
+  images/       : サムネール・詳細画像のローカルキャッシュ
+
+【スレッドセーフ設計】
+  全 _items / _progress アクセスは self._lock（threading.Lock）で保護する。
+  DataManager インスタンスはスクレイパースレッドと Flask ルートから同時参照される。
 """
 import json
 import os
@@ -200,7 +217,16 @@ class DataManager:
         return result
 
     def get_groups(self) -> Dict[str, List[dict]]:
-        """グループID別に商品をまとめて返す"""
+        """
+        グループID別に商品をまとめた辞書を返す。
+
+        pHash グループ化済みのアイテムは group_id でまとめられる。
+        group_id が未設定（グループ化前または単品）のアイテムは
+        item_id をキーとした単独グループとして扱う。
+
+        Returns:
+            {group_id: [item_dict, ...]} の辞書
+        """
         with self._lock:
             items = list(self._items.values())
         groups: Dict[str, List[dict]] = {}
@@ -211,7 +237,7 @@ class DataManager:
                 groups.setdefault(gid, []).append(item)
             else:
                 ungrouped.append(item)
-        # グループなし商品は個別グループとして扱う
+        # グループなし商品は item_id をキーとした単独グループとして扱う
         for item in ungrouped:
             groups[item["item_id"]] = [item]
         return groups
@@ -247,12 +273,18 @@ class DataManager:
         """
         グループサイズに応じて商品ステータスを昇格する。
 
-        - size >= threshold (MIN_GROUP_SIZE)          → candidate（仕入れ候補）
-        - size >= next_threshold (MIN_NEXT_CANDIDATE_SIZE) → next_candidate（次期候補）
-        - それ未満                                    → waiting のまま
+        昇格ルール:
+          size >= threshold（デフォルト: MIN_GROUP_SIZE=5）      → "candidate"（仕入れ候補）
+          size >= next_threshold（MIN_NEXT_CANDIDATE_SIZE=4）    → "next_candidate"（次期候補）
+          それ未満                                               → "waiting" のまま変更なし
 
-        min_group_size=1（セラー分析）の場合は全商品が candidate になるため
-        next_candidate の elif は自然にスキップされる。
+        min_group_size=1 指定時（セラー分析 SellerAnalyzer._run_phash_grouping から呼ばれる）:
+          threshold=1 のため全商品が candidate に昇格する。
+          next_candidate の elif は threshold <= next_threshold となり自然にスキップされる。
+
+        Note:
+          既に "ok" / "ng" / "review" のステータスを持つアイテムは上書きしない。
+          NG 除外済みアイテムが再スクレイピング後に誤って candidate に戻ることを防ぐ。
         """
         threshold = min_group_size if min_group_size is not None else config.MIN_GROUP_SIZE
         next_threshold = config.MIN_NEXT_CANDIDATE_SIZE
