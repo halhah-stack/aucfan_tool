@@ -1764,8 +1764,14 @@ def _list_sessions(step: int = None):
         if step is not None and info["step"] != step:
             continue
 
-        p = {}
+        # progress.json も results.csv もない空フォルダはリストに出さない
+        # （削除後にGoogleDriveの同期で空フォルダが残る場合などに対応）
         progress_file = d / "progress.json"
+        has_data = progress_file.exists() or (d / "results.csv").exists() or (d / "items.json").exists()
+        if not has_data:
+            continue
+
+        p = {}
         if progress_file.exists():
             try:
                 with open(progress_file) as f:
