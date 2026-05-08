@@ -176,16 +176,25 @@ class ImageProcessor:
             return {}
 
         # 件数が上限を超えた場合は pHash グループ化をスキップ
-        # （超えると比較回数が爆発的に増えてフリーズする恐れがあるため）
+        # 理由: n 件の比較回数は最悪 n*(n-1)/2 回になり、数万件ではフリーズする
+        # 例: 50,000件 → 約12.5億回比較 → 数時間かかる
+        # 上限は .env の MAX_PHASH_ITEMS で変更可能（デフォルト 15,000）
         if n > config.MAX_PHASH_ITEMS:
-            logger.warning(
-                f"pHashグループ化スキップ: {n}件 > 上限{config.MAX_PHASH_ITEMS}件。"
-                f"各アイテムを個別グループとして扱います。"
-                f"上限を上げたい場合は .env の MAX_PHASH_ITEMS を変更してください。"
+            msg = (
+                f"[pHash] 件数が上限を超えたためグループ化をスキップしました\n"
+                f"        対象: {n:,}件  上限: {config.MAX_PHASH_ITEMS:,}件\n"
+                f"        各アイテムは個別グループとして扱います\n"
+                f"        上限を変更する場合: .env に MAX_PHASH_ITEMS=数値 を追記"
             )
+            logger.warning(msg)
+            print(f"\n{'='*50}")
+            print(f">>> pHash スキップ: {n:,}件 > 上限{config.MAX_PHASH_ITEMS:,}件 <<<")
+            print(f"    グループ化をスキップし、次の処理へ進みます")
+            print(f"{'='*50}\n")
             return {item_id: [item_id] for item_id, _ in valid}
 
         logger.info(f"pHashグループ化開始: {n}件 (閾値={config.PHASH_THRESHOLD})")
+        print(f"\n>>> pHash グループ化中: {n:,}件 (しばらくお待ちください) <<<")
 
         # 代表ハッシュ比較方式
         # groups: [(代表hash, [item_id, ...])]
@@ -214,6 +223,7 @@ class ImageProcessor:
 
         result = {members[0]: members for _, members in groups}
         logger.info(f"pHashグループ化完了: {len(result)}グループ")
+        print(f">>> pHash 完了: {len(result):,}グループ <<<\n")
         return result
 
     def group_items(self, data_manager) -> int:

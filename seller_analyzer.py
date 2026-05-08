@@ -232,7 +232,12 @@ class SellerAnalyzer(AucFanScraper):
         pHash グループ化を実行。
         セラー分析では全商品を表示したいため min_group_size=1 に固定する。
         （キーワードリサーチの MIN_GROUP_SIZE=5 は適用しない）
+
+        件数が MAX_PHASH_ITEMS を超える場合は image_processor 側で自動スキップされる。
+        スキップ時はターミナルに「>>> pHash スキップ <<<」と表示される。
         """
+        total = self.dm.total_items
+        logger.info(f"=== pHash グループ化フェーズ開始: 対象 {total:,}件 ===")
         try:
             n = self.img.group_items_with_min_size(self.dm, min_group_size=1)
             candidates = self.dm.candidate_count
