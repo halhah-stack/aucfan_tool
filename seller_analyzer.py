@@ -127,6 +127,10 @@ class SellerAnalyzer(AucFanScraper):
                 try:
                     # ★ 現在タブを直接セラー URL へナビゲート
                     #   （window.open + driver.close() はセッションが切れる原因になるため使わない）
+
+                    # このセラーのスクレイピング開始前のアイテムIDを記録
+                    ids_before = {item["item_id"] for item in self.dm.get_all_items()}
+
                     self._navigate(seller_url)
 
                     # 一覧ページを全ページ取得（親クラスのメソッドをそのまま使用）
@@ -138,6 +142,15 @@ class SellerAnalyzer(AucFanScraper):
                         f"  累計: {self.dm.total_items} 件"
                     )
 
+                    # ── 中間インクリメンタルpHashグループ化 ──
+                    # 新規取得アイテムのみを既存グループと比較して割り当てる。
+                    # 全件を毎回比較するより大幅に高速で、MAX_PHASH_ITEMS の上限にも当たりにくい。
+                    if not self.stop_event.is_set():
+                        ids_after = {item["item_id"] for item in self.dm.get_all_items()}
+                        new_ids = ids_after - ids_before
+                        if new_ids:
+                            self._incremental_phash_group(new_ids)
+
                 except Exception as e:
                     logger.error(
                         f"[セラー {i + 1}/{total}] {seller_short} エラー: {e}"
@@ -146,9 +159,12 @@ class SellerAnalyzer(AucFanScraper):
                     self._notify(i, "error")
                     continue
 
-            # ── Step 2: pHash グループ化（min_group_size=1） ──
+            # ── Step 2: 最終pHashグループ化（小規模データセット向け整合確認） ──
+            # インクリメンタルグループ化で大半は処理済み。
+            # アイテム数が MAX_PHASH_ITEMS 以内の場合のみ全件再比較して完全性を保証する。
+            # 超過時は中間グループ化結果をそのまま使用する。
             if not self.stop_event.is_set():
-                logger.info("=== pHash グループ化 ===")
+                logger.info("=== 最終pHash グループ化 ===")
                 self.dm.update_progress(status="grouping")
                 self._run_phash_grouping()
 
@@ -222,6 +238,100 @@ class SellerAnalyzer(AucFanScraper):
                     self.driver.quit()
             except Exception:
                 pass
+
+    # ─────────────────────────────────────────────
+    # インクリメンタル pHash グループ化
+    # ─────────────────────────────────────────────
+
+    def _incremental_phash_group(self, new_item_ids: set):
+        """
+        今回のセラーで新規取得したアイテムのみを対象に pHash グループ化を行う。
+
+        既存グループの「代表ハッシュ」と新規アイテムを比較し、
+          - 一致 → 既存グループに追加
+          - 不一致 → 新規グループを作成
+        全アイテムを毎回全件比較する _run_phash_grouping() より大幅に高速で、
+        MAX_PHASH_ITEMS 上限にも当たりにくい。
+
+        Args:
+            new_item_ids: 今回スクレイピングで追加されたアイテム ID のセット
+        """
+        if not new_item_ids:
+            return
+
+        all_items = self.dm.get_all_items()
+
+        # ── 既存グループの代表ハッシュとメンバーを収集（既存アイテムのみ） ──
+        # group_id == item_id のアイテムが各グループの「代表」
+        existing_members: dict = {}   # group_id -> [item_id, ...]
+        group_rep_hash: dict  = {}    # group_id -> phash
+
+        for item in all_items:
+            if item["item_id"] in new_item_ids:
+                continue  # 新規アイテムはスキップ
+            gid = item.get("group_id") or item["item_id"]
+            existing_members.setdefault(gid, []).append(item["item_id"])
+            # グループ代表（group_id == item_id）からハッシュを取得
+            if gid == item["item_id"] and item.get("phash"):
+                group_rep_hash[gid] = item["phash"]
+
+        # 代表ハッシュリスト: [(phash, group_id)]
+        rep_list = [(ph, gid) for gid, ph in group_rep_hash.items()]
+
+        # ── 新規アイテムを既存グループ or 新規グループへ割り当て ──
+        new_items = [i for i in all_items if i["item_id"] in new_item_ids]
+
+        additions: dict = {}     # group_id -> [new_item_id, ...]（既存グループへの追加分）
+        fresh_groups: list = []  # [(rep_phash, [item_id, ...])]（新規グループ）
+
+        for item in new_items:
+            ph = item.get("phash")
+            if not ph:
+                # pHash なし → 個別グループとして即登録
+                self.dm.assign_group([item["item_id"]], item["item_id"])
+                continue
+
+            matched = False
+
+            # 既存グループ代表と比較
+            for rep_hash, gid in rep_list:
+                if self.img.is_same_image(ph, rep_hash):
+                    additions.setdefault(gid, []).append(item["item_id"])
+                    matched = True
+                    break
+
+            if not matched:
+                # 今回の新規グループと比較（セラー内での重複検出）
+                for rep_hash, members in fresh_groups:
+                    if self.img.is_same_image(ph, rep_hash):
+                        members.append(item["item_id"])
+                        matched = True
+                        break
+
+            if not matched:
+                # 完全な新規グループを作成
+                fresh_groups.append((ph, [item["item_id"]]))
+
+        # ── バッチ割り当て ──
+        # 既存グループへの追加（現メンバー + 新メンバーでまとめて assign_group）
+        for gid, new_members in additions.items():
+            current = existing_members.get(gid, [])
+            self.dm.assign_group(current + new_members, gid)
+
+        # 新規グループを登録（最初のアイテムが group_id = 代表）
+        for _, members in fresh_groups:
+            self.dm.assign_group(members, members[0])
+
+        # 全アイテムを candidate に昇格（min_group_size=1 → 全件対象）
+        self.dm.promote_candidates(min_group_size=1)
+
+        n_added = sum(len(v) for v in additions.values())
+        n_fresh = sum(len(m) for _, m in fresh_groups)
+        logger.info(
+            f"インクリメンタルpHash: {len(new_item_ids)}件入力 / "
+            f"既存グループ追加: {n_added}件 / "
+            f"新規グループ: {len(fresh_groups)}件 ({n_fresh}件)"
+        )
 
     # ─────────────────────────────────────────────
     # pHash グループ化（min_group_size=1 でオーバーライド）

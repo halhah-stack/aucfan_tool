@@ -115,7 +115,7 @@ aucfan_tool/
 
 ### `seller_analyzer.py` — セラー分析（STEP 2）
 
-`AucFanScraper` を継承した `SellerAnalyzer` クラスです。複数のセラーURLを1セッションで順番にスクレイピングし、全商品をまとめてpHashグループ化します。
+`AucFanScraper` を継承した `SellerAnalyzer` クラスです。複数のセラーURLを1セッションで順番にスクレイピングし、セラーごとにインクリメンタルpHashグループ化を行います。
 
 **特徴**：
 
@@ -124,6 +124,10 @@ aucfan_tool/
 - セラーごとに `on_seller_progress(index, status)` コールバックが呼ばれ、フロントエンドの進捗表示に使われます
 - STEP 2の `min_group_size=1` で `promote_candidates()` を呼ぶため、全商品が `candidate` になります（単品でも表示対象）
 - スクレイピング完了時には `=== STEP 2 スクレイピング完了 === 全N件処理` というログをターミナルに出力します。STEP 3（マスターリスト横断）の場合は `=== STEP 3 スクレイピング完了 === 全N件処理` が同様に出力されます
+
+**インクリメンタルpHashグループ化**：
+
+従来は全セラー完了後にまとめて `group_by_phash()` を実行していましたが、商品数が `MAX_PHASH_ITEMS`（15,000件）を超えるとグループ化がスキップされ全件が個別カードで表示される問題がありました。現在は各セラーのスクレイピング完了後に `_incremental_phash_group(new_item_ids)` を呼び出し、その**セラーで新たに追加された商品だけ**を既存グループ代表と比較してマッチングします。これにより件数に依存せず正確なグループ化が行われます（計算量 O(新規件数 × グループ数)）。
 
 ---
 
@@ -296,16 +300,17 @@ _sellers_master      # SellersMasterシングルトン
 | `/api/master/merge` | POST | 外部の `sellers_master.json` をマージ。`multipart/form-data` でファイルを受け取り `SellersMaster.merge_from_file()` に委譲する。レスポンス: `{"added": int, "skipped": int, "total": int}` |
 | `/api/export/csv` | GET | 現在セッションをCSVエクスポート |
 | `/api/export/html` | GET | 現在セッションをHTMLエクスポート（Mac用・画像はサーバー経由） |
-| `/api/export/html_offline` | GET | 現在セッションをオフラインHTML（iPhone/iPad用）としてエクスポート。`_generate_offline_html()` を呼び出し、すべての商品画像をBase64エンコードしてHTMLに直接埋め込む |
+| `/api/export/html_offline` | GET | 現在セッションをオフラインHTML（iPhone/iPad用）としてブラウザダウンロード。`?filter=active` クエリを付けると候補・OK・要確認のみ出力して軽量化 |
+| `/api/export/html_offline_gdrive` | POST | オフラインHTMLをGoogle Drive `AucFanToolData` フォルダに保存（iPhone/Mac両方から押せる）。リクエストボディ `{"filter":"active"}` で軽量版出力 |
 | `/api/gemini_status` | GET | 直近のGemini APIエラー情報を返す（フロントエンドのポーリング用） |
 
 **進捗レスポンスへの `processed_items` フィールド**:
 
 `scrape_status`（STEP 1）、`seller_status`（STEP 2）、`master_status`（STEP 3）の各ステータスレスポンスには `processed_items` フィールドが含まれます。これはスクレイパー側の `_processed_items` カウンター値であり、`app.js` の `updateProgressUI()` / `fetchSellerStatus()` / `fetchMasterStatus()` がこの値を読み取って「X件 / Y件処理済み」カウンターを画面上に更新します。スクレイピング完了時には `app.js` がこのフィールドをもとに緑色の「✅ スクレイピング完了（N件処理）」バナーを表示します（✕ボタンで閉じられます）。
 
-**`_generate_offline_html(session_data)` 関数**:
+**`_generate_offline_html(dm, images_dir, only_active=False)` 関数**:
 
-`/api/export/html_offline` から呼び出されるヘルパー関数です。通常のHTMLエクスポートと異なり、商品画像をすべて `requests` でダウンロードし `base64.b64encode()` でBase64文字列に変換して `<img src="data:image/jpeg;base64,...">` として直接埋め込みます。ネットワーク接続なしでiPhoneのSafariから閲覧できるよう、レイアウトはモバイル向けに最適化されています（フォントサイズ・余白の拡大、タッチ操作を考慮したボタンサイズ等）。Base64埋め込みのため通常の Mac 用 HTML よりファイルサイズが大きくなります。
+`/api/export/html_offline` および `/api/export/html_offline_gdrive` から呼び出されるヘルパー関数です。通常のHTMLエクスポートと異なり、セッションの `images/` ディレクトリにキャッシュ済みの商品画像を読み取り、PIL（Pillow）で **120×120px にリサイズ・JPEG quality=35 で圧縮**してからBase64エンコードして `<img src="data:image/jpeg;base64,...">` として直接埋め込みます。画像1枚あたりのサイズを大幅削減することで iPhone Safari のメモリ制限内で開けるよう設計されています。`only_active=True` を渡すと `candidate` / `next_candidate` / `ok` / `review` のステータス商品のみを出力してさらに軽量化します（`waiting` / `ng` を除外）。ネットワーク接続なしでオフライン閲覧できます（閲覧専用・データ読み込み不可）。
 
 **`/api/gemini_status` エンドポイント仕様**:
 
@@ -379,7 +384,9 @@ _sellers_master      # SellersMasterシングルトン
   ┌─────────────────────────────────┐
   │ 複数セラーURLを順番に           │
   │ scrape_list_pages() で取得      │
-  │ → まとめてpHashグループ化       │
+  │ → セラー完了ごとに              │
+  │    _incremental_phash_group()   │
+  │    （新規商品 vs 既存グループ）  │
   │ → 1セッションに集約して保存     │
   └─────────────────────────────────┘
         │

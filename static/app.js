@@ -1203,20 +1203,26 @@ async function exportHtml() {
  * Mac サーバー側で HTML を生成して Google Drive フォルダに書き込む。
  * iPhone / Mac どちらから押しても Google Drive（Mac上）に保存される。
  * 生成中はボタンを無効化してスピナーラベルを表示する。
+ *
+ * @param {boolean} [onlyActive=false] - true のとき候補・OK・要確認のみ出力して軽量化する
  */
-async function exportOfflineHtml() {
-  const btn = document.getElementById('btnExportOfflineHtml');
+async function exportOfflineHtml(onlyActive = false) {
+  const btnId = onlyActive ? 'btnExportOfflineHtmlActive' : 'btnExportOfflineHtml';
+  const btn = document.getElementById(btnId);
   const origLabel = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '⏳ 生成中...'; }
-  showToast('📱 iPhone/iPad用HTML生成中... Google Driveに保存します');
+
+  const label = onlyActive ? '候補のみ（軽量）' : '全件';
+  showToast(`📱 iPhone/iPad用HTML生成中（${label}）... Google Driveに保存します`);
 
   try {
-    const res = await fetchJSON('/api/export/html_offline_gdrive', 'POST');
+    const body = onlyActive ? { filter: 'active' } : {};
+    const res = await fetchJSON('/api/export/html_offline_gdrive', 'POST', body);
     if (res.success) {
       const where = res.gdrive_saved
         ? `Google Drive「AucFanToolData」フォルダ ✅`
         : 'セッションフォルダに保存（Google Drive 未接続）';
-      showToast(`📱 保存完了 → ${where}`);
+      showToast(`📱 保存完了（${label}） → ${where}`);
       if (btn) btn.textContent = '✅ 保存済';
     } else {
       showToast('❌ ' + (res.message || '書き出し失敗'), 'error');

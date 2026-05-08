@@ -478,8 +478,11 @@
       <button class="btn btn-secondary btn-sm" id="btnExportHtml" onclick="exportHtml()">
         💻 HTMLで保存（Mac用）
       </button>
-      <button class="btn btn-secondary btn-sm" id="btnExportOfflineHtml" onclick="exportOfflineHtml()">
-        📱 HTMLで保存（iPhone/iPad用）
+      <button class="btn btn-secondary btn-sm" id="btnExportOfflineHtml" onclick="exportOfflineHtml(false)" title="全件をiPhone向けHTMLで保存（候補件数が多い場合は重くなることがあります）">
+        📱 HTML保存（iPhone全件）
+      </button>
+      <button class="btn btn-secondary btn-sm" id="btnExportOfflineHtmlActive" onclick="exportOfflineHtml(true)" title="候補・OK・要確認のみ出力して軽量化（iPhone Safariで開けないときはこちら）">
+        📱 HTML保存（候補のみ・軽量）
       </button>
       <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="results.csv を読み込んでグリッドに表示します">
         📂 CSV読み込み

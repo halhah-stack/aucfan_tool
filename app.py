@@ -499,15 +499,27 @@ def _generate_export_html(dm, images_dir: Path) -> str:
     return _build_export_html(groups_data, keyword, exported_at, len(items), len(groups_data))
 
 
-def _generate_offline_html(dm, images_dir: Path) -> str:
+def _generate_offline_html(dm, images_dir: Path, only_active: bool = False) -> str:
     """
     iPhone/iPad向けオフライン用HTML。画像をすべてbase64埋め込み、外部リソース参照なし。
     シンプルな縦1カラムレイアウトでモバイル画面に最適化。
+
+    Args:
+        dm          : DataManager インスタンス
+        images_dir  : ローカル画像フォルダ
+        only_active : True のとき candidate/next_candidate/ok/review のみ出力し
+                      waiting/ng を除外する（ファイルサイズ削減）
     """
     import base64
     from collections import defaultdict
 
     items = dm.get_all_items()
+
+    # only_active=True: 確認待ちと NG を除外して軽量化
+    if only_active:
+        _active = {"candidate", "next_candidate", "ok", "review"}
+        items = [i for i in items if i.get("status", "waiting") in _active]
+
     if not items:
         return ""
 
@@ -524,20 +536,25 @@ def _generate_offline_html(dm, images_dir: Path) -> str:
     )
 
     def encode_image(local_path):
+        """
+        画像をbase64エンコードして返す。
+        PIL でリサイズ（120×120）＋JPEG圧縮（quality=35）を行い
+        ファイルサイズを大幅に削減する（iPhone Safari の読み込み制限対策）。
+        """
         if not local_path or not images_dir:
             return PLACEHOLDER
         try:
             img_path = images_dir / Path(local_path).name
             if img_path.exists():
-                with open(img_path, "rb") as f:
-                    raw = f.read()
-                ext = img_path.suffix.lower().lstrip(".")
-                mime = {
-                    "jpg": "image/jpeg", "jpeg": "image/jpeg",
-                    "png": "image/png", "gif": "image/gif",
-                    "webp": "image/webp",
-                }.get(ext, "image/jpeg")
-                return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+                from PIL import Image as PILImage
+                img = PILImage.open(img_path)
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                img.thumbnail((120, 120), PILImage.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=35, optimize=True)
+                raw = buf.getvalue()
+                return f"data:image/jpeg;base64,{base64.b64encode(raw).decode()}"
         except Exception as e:
             logger.debug(f"オフラインHTML画像変換エラー: {e}")
         return PLACEHOLDER
@@ -884,7 +901,9 @@ def api_export_html_offline():
         return jsonify({"error": "データがありません"}), 400
 
     images_dir = _session_output_dir / "images" if _session_output_dir else None
-    html = _generate_offline_html(dm, images_dir)
+    # ?filter=active のとき候補・OK・要確認のみ出力（軽量化）
+    only_active = request.args.get("filter") == "active"
+    html = _generate_offline_html(dm, images_dir, only_active=only_active)
     if not html:
         return jsonify({"error": "商品データがありません"}), 400
 
@@ -895,7 +914,8 @@ def api_export_html_offline():
         keyword = dm.get_progress().get("keyword", "")
         safe_kw = "".join(c for c in keyword if c.isalnum() or c in ("_", "-"))[:20] or "result"
         session_id = f"aucfan_{safe_kw}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    filename = f"{session_id}_iPhone_iPad用.html"
+    suffix = "_候補のみ" if only_active else ""
+    filename = f"{session_id}_iPhone_iPad用{suffix}.html"
 
     response = Response(html, mimetype="text/html; charset=utf-8")
     response.headers["Content-Disposition"] = (
@@ -1206,7 +1226,11 @@ def api_export_html_offline_gdrive():
 
     images_dir = _session_output_dir / "images" if _session_output_dir else None
 
-    html = _generate_offline_html(dm, images_dir)
+    # リクエストボディの filter フィールドで候補のみ軽量エクスポートに切り替える
+    body = request.get_json(silent=True) or {}
+    only_active = body.get("filter") == "active"
+
+    html = _generate_offline_html(dm, images_dir, only_active=only_active)
     if not html:
         return jsonify({"success": False, "message": "商品データがありません"}), 400
 
@@ -1218,18 +1242,20 @@ def api_export_html_offline_gdrive():
         safe_kw = "".join(c for c in kw if c.isalnum() or c in ("_", "-"))[:20]
         session_name = f"aucfan_{safe_kw}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+    suffix = "_候補のみ" if only_active else ""
     gdrive_dir = Path(
         "/Users/shino/Library/CloudStorage/"
         "GoogleDrive-shinozakistore@gmail.com/"
         "マイドライブ/AucFanToolData"
     )
-    gdrive_path = gdrive_dir / f"{session_name}_iPhone表示用.html"
+    gdrive_path = gdrive_dir / f"{session_name}_iPhone表示用{suffix}.html"
 
     # ローカル（セッションフォルダ）にも保存
     local_saved = False
     if _session_output_dir:
         try:
-            (_session_output_dir / "result_iphone.html").write_text(html, encoding="utf-8")
+            local_filename = f"result_iphone{suffix}.html"
+            (_session_output_dir / local_filename).write_text(html, encoding="utf-8")
             local_saved = True
         except Exception as e:
             logger.warning(f"ローカル保存エラー: {e}")
