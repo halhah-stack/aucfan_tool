@@ -175,6 +175,16 @@ class ImageProcessor:
         if n == 0:
             return {}
 
+        # 件数が上限を超えた場合は pHash グループ化をスキップ
+        # （超えると比較回数が爆発的に増えてフリーズする恐れがあるため）
+        if n > config.MAX_PHASH_ITEMS:
+            logger.warning(
+                f"pHashグループ化スキップ: {n}件 > 上限{config.MAX_PHASH_ITEMS}件。"
+                f"各アイテムを個別グループとして扱います。"
+                f"上限を上げたい場合は .env の MAX_PHASH_ITEMS を変更してください。"
+            )
+            return {item_id: [item_id] for item_id, _ in valid}
+
         logger.info(f"pHashグループ化開始: {n}件 (閾値={config.PHASH_THRESHOLD})")
 
         # 代表ハッシュ比較方式
