@@ -770,25 +770,78 @@ def _generate_offline_html(dm, images_dir: Path) -> str:
 
 def _save_export_files(dm, output_dir: Path):
     """
-    CSV と HTML をセッションフォルダに自動保存する。
+    CSV / Mac用HTML / iPhone用HTML をセッションフォルダと Google Drive に自動保存する。
     セラー分析完了時・キーワードスクレイピング完了時に呼ばれる。
+
+    Google Drive 保存先:
+      ~/Library/CloudStorage/GoogleDrive-shinozakistore@gmail.com/マイドライブ/AucFanToolData/
+      セッション名_Mac表示用.html   ← ブラウザで開く用
+      セッション名_iPhone表示用.html ← iPhone の「ファイル」アプリで開く用（base64画像埋め込み）
     """
+    import shutil
+
+    # Google Drive 保存先フォルダ
+    _GDRIVE_DIR = Path(
+        "/Users/shino/Library/CloudStorage/"
+        "GoogleDrive-shinozakistore@gmail.com/"
+        "マイドライブ/AucFanToolData"
+    )
+
+    session_name = output_dir.name   # 例: S1_20260508_01_LEDライト
+    images_dir   = output_dir / "images"
+
+    # ── CSV ──
     try:
-        # CSV（DataManager.save_csv() は results.csv に書き込む）
         dm.save_csv()
         logger.info(f"自動CSV保存: {output_dir / 'results.csv'}")
     except Exception as e:
         logger.error(f"CSV自動保存エラー: {e}")
 
+    # ── Mac用HTML（セッションフォルダ + Google Drive） ──
     try:
-        images_dir = output_dir / "images"
-        html = _generate_export_html(dm, images_dir)
-        if html:
-            html_path = output_dir / "result.html"
-            html_path.write_text(html, encoding="utf-8")
-            logger.info(f"自動HTML保存: {html_path}")
+        html_mac = _generate_export_html(dm, images_dir)
+        if html_mac:
+            # セッションフォルダに保存
+            (output_dir / "result.html").write_text(html_mac, encoding="utf-8")
+            logger.info(f"自動HTML保存(Mac用): {output_dir / 'result.html'}")
+            # Google Drive にコピー
+            _gdrive_copy_html(
+                html_mac,
+                _GDRIVE_DIR / f"{session_name}_Mac表示用.html",
+                label="Mac表示用"
+            )
     except Exception as e:
-        logger.error(f"HTML自動保存エラー: {e}")
+        logger.error(f"HTML自動保存エラー(Mac用): {e}")
+
+    # ── iPhone用HTML（画像base64埋め込み・オフライン対応） ──
+    try:
+        html_iphone = _generate_offline_html(dm, images_dir)
+        if html_iphone:
+            # セッションフォルダに保存
+            (output_dir / "result_iphone.html").write_text(html_iphone, encoding="utf-8")
+            logger.info(f"自動HTML保存(iPhone用): {output_dir / 'result_iphone.html'}")
+            # Google Drive にコピー
+            _gdrive_copy_html(
+                html_iphone,
+                _GDRIVE_DIR / f"{session_name}_iPhone表示用.html",
+                label="iPhone表示用"
+            )
+    except Exception as e:
+        logger.error(f"HTML自動保存エラー(iPhone用): {e}")
+
+
+def _gdrive_copy_html(html_content: str, dest_path: Path, label: str = ""):
+    """
+    HTML 文字列を Google Drive の指定パスに書き込む。
+    Google Drive フォルダが存在しない場合は自動作成する。
+    エラーが発生しても例外を握り潰してメインフローを止めない。
+    """
+    try:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_text(html_content, encoding="utf-8")
+        logger.info(f"Google Drive 保存({label}): {dest_path}")
+    except Exception as e:
+        logger.warning(f"Google Drive 保存スキップ({label}): {e}")
 
 
 @app.route("/api/export/html")
@@ -1134,6 +1187,64 @@ renderCards();
 </script>
 </body>
 </html>"""
+
+
+@app.route("/api/export/html_offline_gdrive", methods=["POST"])
+def api_export_html_offline_gdrive():
+    """
+    iPhone/iPad 用オフライン HTML を Google Drive に保存する（サーバーサイド処理）。
+    iPhone / Mac どちらからリクエストしても Mac サーバー側で処理するため
+    必ず Mac 上の Google Drive フォルダに保存される（ブラウザダウンロードしない）。
+    """
+    dm = get_dm()
+    if not dm:
+        # セラー分析セッションも確認
+        with _seller_lock:
+            dm = _seller_state.get("dm")
+        if not dm:
+            return jsonify({"success": False, "message": "データがありません"}), 400
+
+    images_dir = _session_output_dir / "images" if _session_output_dir else None
+
+    html = _generate_offline_html(dm, images_dir)
+    if not html:
+        return jsonify({"success": False, "message": "商品データがありません"}), 400
+
+    # セッション名の取得
+    if _session_output_dir:
+        session_name = _session_output_dir.name
+    else:
+        kw = dm.get_progress().get("keyword", "result")
+        safe_kw = "".join(c for c in kw if c.isalnum() or c in ("_", "-"))[:20]
+        session_name = f"aucfan_{safe_kw}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    gdrive_dir = Path(
+        "/Users/shino/Library/CloudStorage/"
+        "GoogleDrive-shinozakistore@gmail.com/"
+        "マイドライブ/AucFanToolData"
+    )
+    gdrive_path = gdrive_dir / f"{session_name}_iPhone表示用.html"
+
+    # ローカル（セッションフォルダ）にも保存
+    local_saved = False
+    if _session_output_dir:
+        try:
+            (_session_output_dir / "result_iphone.html").write_text(html, encoding="utf-8")
+            local_saved = True
+        except Exception as e:
+            logger.warning(f"ローカル保存エラー: {e}")
+
+    # Google Drive に保存
+    _gdrive_copy_html(html, gdrive_path, label="iPhone表示用")
+    gdrive_saved = gdrive_path.exists()
+
+    return jsonify({
+        "success": True,
+        "session": session_name,
+        "filename": gdrive_path.name,
+        "gdrive_saved": gdrive_saved,
+        "local_saved": local_saved,
+    })
 
 
 @app.route("/api/export/csv")
@@ -1550,6 +1661,71 @@ def api_current_session():
             "status": _data_manager.get_progress().get("status", ""),
         }
     })
+
+
+@app.route("/api/sessions/<session_name>/export_iphone", methods=["POST"])
+def api_session_export_iphone(session_name):
+    """
+    既存セッションの items.json から iPhone 用 HTML を生成して
+    セッションフォルダ + Google Drive の両方に保存する。
+    現在メモリにロードされているセッションと異なる場合も対応。
+    """
+    # パストラバーサル防止
+    if ".." in session_name or "/" in session_name or "\\" in session_name:
+        return jsonify({"success": False, "message": "不正なセッション名"}), 400
+
+    base = Path(config.OUTPUT_BASE_DIR)
+    session_dir = base / session_name
+    if not session_dir.exists():
+        return jsonify({"success": False, "message": "セッションが見つかりません"}), 404
+
+    items_file = session_dir / "items.json"
+    if not items_file.exists():
+        return jsonify({"success": False, "message": "items.json が見つかりません"}), 404
+
+    try:
+        # 一時的に DataManager を作成してデータをロード
+        tmp_dm = DataManager(session_name, session_dir)
+        tmp_dm.load_previous_session()
+
+        if tmp_dm.total_items == 0:
+            return jsonify({"success": False, "message": "商品データが空です"}), 400
+
+        images_dir = session_dir / "images"
+
+        # iPhone 用 HTML 生成（base64 画像埋め込み）
+        html_iphone = _generate_offline_html(tmp_dm, images_dir)
+        if not html_iphone:
+            return jsonify({"success": False, "message": "HTML生成に失敗しました"}), 500
+
+        # セッションフォルダに保存
+        local_path = session_dir / "result_iphone.html"
+        local_path.write_text(html_iphone, encoding="utf-8")
+        logger.info(f"iPhone用HTML保存: {local_path}")
+
+        # Google Drive に保存
+        gdrive_dir = Path(
+            "/Users/shino/Library/CloudStorage/"
+            "GoogleDrive-shinozakistore@gmail.com/"
+            "マイドライブ/AucFanToolData"
+        )
+        gdrive_path = gdrive_dir / f"{session_name}_iPhone表示用.html"
+        _gdrive_copy_html(html_iphone, gdrive_path, label="iPhone表示用")
+
+        gdrive_saved = gdrive_path.exists()
+
+        return jsonify({
+            "success": True,
+            "session": session_name,
+            "total_items": tmp_dm.total_items,
+            "local_path": str(local_path),
+            "gdrive_path": str(gdrive_path) if gdrive_saved else None,
+            "gdrive_saved": gdrive_saved,
+        })
+
+    except Exception as e:
+        logger.error(f"iPhone用HTML生成エラー ({session_name}): {e}", exc_info=True)
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route("/api/sessions/<session_name>", methods=["DELETE"])
