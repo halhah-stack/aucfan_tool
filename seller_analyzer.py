@@ -162,11 +162,26 @@ class SellerAnalyzer(AucFanScraper):
             # ── Step 2: 最終pHashグループ化（小規模データセット向け整合確認） ──
             # インクリメンタルグループ化で大半は処理済み。
             # アイテム数が MAX_PHASH_ITEMS 以内の場合のみ全件再比較して完全性を保証する。
-            # 超過時は中間グループ化結果をそのまま使用する。
+            #
+            # ★ 重要: 超過時は _run_phash_grouping() を呼ばない。
+            #   group_by_phash() がスキップ時に全件を単品グループに戻す処理を行うため、
+            #   呼び出してしまうとインクリメンタルグループ化の結果が消去される。
             if not self.stop_event.is_set():
-                logger.info("=== 最終pHash グループ化 ===")
-                self.dm.update_progress(status="grouping")
-                self._run_phash_grouping()
+                total_items = self.dm.total_items
+                if total_items <= config.MAX_PHASH_ITEMS:
+                    logger.info(f"=== 最終pHash グループ化: {total_items:,}件 ===")
+                    self.dm.update_progress(status="grouping")
+                    self._run_phash_grouping()
+                else:
+                    logger.info(
+                        f"=== 最終pHash グループ化スキップ: {total_items:,}件 > 上限{config.MAX_PHASH_ITEMS:,}件 ==="
+                        f"\n    → インクリメンタルグループ化の結果を維持します"
+                    )
+                    print(f"\n{'='*55}")
+                    print(f">>> 最終pHash スキップ: {total_items:,}件 > 上限{config.MAX_PHASH_ITEMS:,}件 <<<")
+                    print(f"    インクリメンタルグループ化の結果を維持します")
+                    print(f"    上限を変更: .env に MAX_PHASH_ITEMS=数値 を追記")
+                    print(f"{'='*55}\n")
 
             # ── Step 3: 候補のみ詳細ページ取得 + Gemini判定 ──
             #   グループ化で candidate / next_candidate になった商品だけが対象。
@@ -198,8 +213,15 @@ class SellerAnalyzer(AucFanScraper):
 
                 # 詳細取得後に最終グループ化（画像更新があるため）
                 if not self.stop_event.is_set():
-                    logger.info("=== 最終グループ化 ===")
-                    self._run_phash_grouping()
+                    _total = self.dm.total_items
+                    if _total <= config.MAX_PHASH_ITEMS:
+                        logger.info(f"=== 最終グループ化: {_total:,}件 ===")
+                        self._run_phash_grouping()
+                    else:
+                        logger.info(
+                            f"=== 最終グループ化スキップ: {_total:,}件 > 上限{config.MAX_PHASH_ITEMS:,}件"
+                            f" → インクリメンタル結果を維持 ==="
+                        )
 
                 # Vision判定（詳細取得 + 最終グループ化の後）
                 if not self.stop_event.is_set():
