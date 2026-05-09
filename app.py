@@ -2356,10 +2356,13 @@ def _run_seller_analysis(stop_ev: threading.Event):
         _seller_state["dm"] = dm
 
     # セラーごとの進捗をコールバックで _seller_state に反映
-    def on_progress(index: int, status: str):
+    def on_progress(index: int, status: str, extra: dict = None):
         with _seller_lock:
             if 0 <= index < len(_seller_state["sellers"]):
                 _seller_state["sellers"][index]["status"] = status
+                # used_skip 時などに追加情報（used_count 等）を保存
+                if extra:
+                    _seller_state["sellers"][index].update(extra)
             _seller_state["current_index"] = index if status == "running" else -1
             # phase を DataManager の進捗から同期
             dm_status = dm.get_progress().get("status", "scraping_list")

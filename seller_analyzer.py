@@ -148,12 +148,21 @@ class SellerAnalyzer(AucFanScraper):
                         ids_to_remove = ids_after - ids_before
                         if ids_to_remove:
                             self.dm.remove_items(ids_to_remove)
-                        self._notify(i, "used_skip")
-                        logger.info(
+                        used_cnt = self._seller_used_count
+                        thresh   = config.SELLER_USED_SKIP_THRESHOLD
+                        self._notify(i, "used_skip", {"used_count": used_cnt})
+                        msg = (
                             f"[セラー {i + 1}/{total}] {seller_short}"
-                            f" → 中古{self._seller_used_count}件超 → スキップ・データ除外"
-                            f" (除外: {len(ids_to_remove)}件, 累計: {self.dm.total_items}件)"
+                            f" → 中古 {used_cnt}件（上限 {thresh}件）のためスキップ"
+                            f" | 取得データ {len(ids_to_remove)}件を除外"
+                            f" | 累計 {self.dm.total_items}件"
                         )
+                        logger.info(msg)
+                        print(f"\n{'─'*60}")
+                        print(f"🚫 中古セラースキップ: {seller_id}")
+                        print(f"   中古件数: {used_cnt}件（閾値: {thresh}件超でスキップ）")
+                        print(f"   取得データ {len(ids_to_remove)}件を除外しました")
+                        print(f"{'─'*60}\n")
                         continue
 
                     self._notify(i, "done")
@@ -452,10 +461,10 @@ class SellerAnalyzer(AucFanScraper):
     # ユーティリティ
     # ─────────────────────────────────────────────
 
-    def _notify(self, index: int, status: str):
-        """セラーごとの進捗をコールバックで通知"""
+    def _notify(self, index: int, status: str, extra: dict = None):
+        """セラーごとの進捗をコールバックで通知。extra に追加情報を渡せる"""
         if self.on_seller_progress:
             try:
-                self.on_seller_progress(index, status)
+                self.on_seller_progress(index, status, extra or {})
             except Exception:
                 pass

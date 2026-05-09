@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-06
+> 最終更新：2026-05-10
 
 ---
 
@@ -80,6 +80,7 @@ aucfan_tool/
 |---|---|
 | `add_item(item)` | 商品を追加。`item_id` を自動生成して返す |
 | `update_item(item_id, updates)` | 商品データを部分更新 |
+| `remove_items(item_ids)` | 指定アイテムセットをデータから削除（中古セラースキップ時に使用） |
 | `assign_group(item_ids, group_id)` | pHash結果のグループIDを商品に割り当て |
 | `promote_candidates(min_group_size)` | グループサイズに応じてステータスを `candidate` / `next_candidate` に昇格 |
 | `save_all()` | `progress.json` + `items.json` + `results.csv` を一括保存 |
@@ -99,8 +100,8 @@ aucfan_tool/
 **主要な内部フロー**：
 
 1. `connect()` — `selenium.webdriver.Remote` でポート9222に接続
-2. `scrape_list_pages(keyword, url)` — 検索一覧を全ページ走査。各商品カードを `_parse_item_card()` で解析し、価格フィルタ・タイトルキーワード除外・メーカー名除外・商品状態フィルタを適用
-3. `_parse_item_card()` — 商品カードからタイトル・価格・セラーID・画像URL・商品状態等を抽出。各種除外判定もここで実行。STEP 2/3モード（`skip_price_filter=True`）かつ `SELLER_NEW_ONLY=true` のとき、`<dt>商品状態</dt><dd>` から状態テキストを取得し、新品系ワード（新品・未使用・未開封・未着用）以外を除外する
+2. `scrape_list_pages(keyword, url)` — 検索一覧を全ページ走査。各商品カードを `_parse_item_card()` で解析し、価格フィルタ・タイトルキーワード除外・メーカー名除外・商品状態フィルタを適用。STEP 2/3モードでは `_seller_used_count` を累積し、`SELLER_USED_SKIP_THRESHOLD` 超過時に `_seller_skipped_by_used=True` をセットして早期終了する
+3. `_parse_item_card()` — 商品カードからタイトル・価格・セラーID・画像URL・商品状態等を抽出。各種除外判定もここで実行。STEP 2/3モード（`skip_price_filter=True`）かつ `SELLER_NEW_ONLY=true` のとき、`<dt>商品状態</dt><dd>` から状態テキストを取得し、新品系ワード（新品・未使用・未開封・未着用）以外を除外する。除外件数は `_seller_used_count` に累積される
 4. `run_phash_grouping()` — pHash計算後にハミング距離でグループ化し `assign_group()` を呼ぶ
 5. `scrape_detail_pages()` — 候補商品の詳細ページを個別取得（STEP 1でのみ使用）
 6. `_run_gemini_checks()` — グループサイズが `VISION_MIN_GROUP_SIZE` 以上のグループに対してGemini Vision判定を実行
@@ -125,9 +126,13 @@ aucfan_tool/
 - STEP 2の `min_group_size=1` で `promote_candidates()` を呼ぶため、全商品が `candidate` になります（単品でも表示対象）
 - スクレイピング完了時には `=== STEP 2 スクレイピング完了 === 全N件処理` というログをターミナルに出力します。STEP 3（マスターリスト横断）の場合は `=== STEP 3 スクレイピング完了 === 全N件処理` が同様に出力されます
 
-**インクリメンタルpHashグループ化**：
+**中古セラー自動スキップ**：
 
-従来は全セラー完了後にまとめて `group_by_phash()` を実行していましたが、商品数が `MAX_PHASH_ITEMS`（15,000件）を超えるとグループ化がスキップされ全件が個別カードで表示される問題がありました。現在は各セラーのスクレイピング完了後に `_incremental_phash_group(new_item_ids)` を呼び出し、その**セラーで新たに追加された商品だけ**を既存グループ代表と比較してマッチングします。これにより件数に依存せず正確なグループ化が行われます（計算量 O(新規件数 × グループ数)）。
+各セラーのスクレイピング開始時に `_seller_used_count` と `_seller_skipped_by_used` をリセットします。`_parse_items_from_page()` が商品状態フィルタで除外した件数をページをまたいで累積し、`SELLER_USED_SKIP_THRESHOLD`（デフォルト3）を超えると `_seller_skipped_by_used=True` をセットして一覧取得ループを即座に終了します。`seller_analyzer.py` 側でこのフラグを検出し、`dm.remove_items()` でそのセラーの取得済みデータを全削除・コールバックで `"used_skip"` ステータスを通知して次のセラーへ進みます。
+
+**インクリメンタルpHashグループ化 + 最終グループ代表マージ**：
+
+各セラーのスクレイピング完了後に `_incremental_phash_group(new_item_ids)` を呼び出し、その**セラーで新たに追加された商品だけ**を既存グループ代表と比較してマッチングします（計算量 O(新規件数 × グループ数)）。全セラー完了後は `_merge_groups_by_phash()` でグループ代表ハッシュ同士のみを比較して似たグループをまとめます（計算量 O(グループ数²)）。全アイテムを比較する `group_by_phash()` と異なり件数上限がなく、42,500件超のセッションでも数秒〜数十秒で完了します。
 
 ---
 
@@ -447,6 +452,9 @@ _sellers_master      # SellersMasterシングルトン
 | `EXCLUDE_TITLE_KEYWORDS` | `""` | 追加の除外タイトルキーワード（カンマ区切り） |
 | `EXCLUDE_MAKER_KEYWORDS` | `""` | 追加の除外メーカー名（カンマ区切り） |
 | `SELLER_SCRAPE_DETAIL` | `false` | `true` にするとSTEP 2でも詳細ページを取得する（非推奨・低速） |
+| `SELLER_NEW_ONLY` | `true` | STEP 2/3で「商品状態」が新品系ワード以外の商品を除外する。`false` で無効化 |
+| `SELLER_NEW_CONDITIONS` | `新品,未使用,未開封,未着用` | 新品とみなす商品状態ワード（カンマ区切り） |
+| `SELLER_USED_SKIP_THRESHOLD` | `5` | 1セラーで中古除外がこの件数を超えたらセラーごとスキップ（デフォルト5件→6件目でスキップ）。`0` で無効化 |
 
 ---
 
@@ -581,7 +589,7 @@ node --check static/app.js
 
 **SSEストリーム**: 進捗はSSE（Server-Sent Events）でブラウザに送信されます。`/api/progress`, `/api/seller/progress`, `/api/master/progress` がそれぞれジェネレーター関数を返す Flask `Response` です。接続が切れても次のポーリングで再接続されます。
 
-**フロントエンドのステップ切り替え**: `app.js` の `switchStep(step)` が各パネルの表示/非表示を管理します。`step` は `'1'`, `'2'`, `'3'`, `'master'` の4値です。
+**フロントエンドのステップ切り替え**: `app.js` の `switchStep(step)` が各パネルの表示/非表示を管理します。`step` は `'1'`, `'2'`, `'3'`, `'master'` の4値です。切り替え時に `localStorage.setItem('activeStep', step)` で現在タブを保存し、ページリロード後も `DOMContentLoaded` で復元します（iPhone Safariでリロードしてもタブが戻らない）。
 
 **セッション読み込み**: `loadSessionToGrid(sessionName)` が `/api/sessions/<name>/load` を呼び出し、`loadGroups()` でグリッドを更新し、`refreshCurrentSession()` で「📌 表示中:」バーを更新します。この3ステップのシーケンスが重要です。
 
@@ -600,6 +608,10 @@ node --check static/app.js
 | `fetchMasterStatus()` | STEP 3の進捗をポーリングして `master_status.processed_items` からカウンターを更新し、完了時に完了バナーを表示する |
 
 完了バナーは `<div class="scrape-complete-banner">✅ スクレイピング完了（N件処理）</div>` として動的に生成され、✕ボタンのクリックで `remove()` されます。
+
+**`sellerStatusBadge(status, usedCount)` 関数**:
+
+セラーリストの各行に表示するステータスバッジHTMLを返します。対応ステータス：`pending`（待機中）/ `running`（処理中）/ `done`（✅ 完了）/ `error`（❌ エラー）/ `used_skip`（🚫 中古N件超でスキップ・オレンジ）。`used_skip` 時は第2引数 `usedCount`（セラー辞書の `used_count` フィールド）を受け取り、「🚫 中古7件超でスキップ」のように実際の件数をバッジに表示します。`used_count` は `on_progress` コールバックの `extra` 引数経由でセラー辞書に保存されます。ターミナルにも `🚫 中古セラースキップ: seller_id / 中古件数: N件（閾値: M件超でスキップ）` と枠線付きで出力されます。
 
 **`validateNotHtmlFile(file)` ヘルパー関数**:
 

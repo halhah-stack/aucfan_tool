@@ -304,7 +304,7 @@ SELLER_NEW_CONDITIONS = [w.strip() for w in os.getenv(
 # 取得済みデータを破棄して次のセラーへ進む。
 # 0 = スキップしない（アイテム単位フィルターのみ）
 # 推奨: 3〜10（偶発的な1〜2件の中古を許容しつつ、中古主体セラーを除外）
-SELLER_USED_SKIP_THRESHOLD = int(os.getenv("SELLER_USED_SKIP_THRESHOLD", "3"))
+SELLER_USED_SKIP_THRESHOLD = int(os.getenv("SELLER_USED_SKIP_THRESHOLD", "5"))
 
 # ─────────────────────────────────────────────
 # 商品ステータス定義

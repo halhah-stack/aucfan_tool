@@ -1874,7 +1874,7 @@ function renderSellerTable(sellers) {
   // URL列は表示しない（各行にボタン・リンクを置かず、一覧は表示のみ）
   // スクレイピングは「▶ スクレイピング開始」ボタン1つで全セラーを一括処理
   tbody.innerHTML = sellers.map((s, i) => {
-    const statusHtml = sellerStatusBadge(s.status);
+    const statusHtml = sellerStatusBadge(s.status, s.used_count);
     return `<tr id="seller-row-${i}" style="border-bottom:1px solid #f3f4f6">
       <td style="padding:7px 12px;color:#9ca3af;font-size:12px">${i + 1}</td>
       <td style="padding:7px 12px;font-family:monospace;font-size:12px;color:#111827">${escHtml(s.seller_id)}</td>
@@ -1883,13 +1883,16 @@ function renderSellerTable(sellers) {
   }).join('');
 }
 
-function sellerStatusBadge(status) {
+function sellerStatusBadge(status, usedCount) {
+  if (status === 'used_skip') {
+    const cnt = usedCount != null ? `${usedCount}件` : '';
+    return `<span style="color:#d97706;font-weight:700" title="中古${cnt}超のためスキップ">🚫 中古${cnt}超でスキップ</span>`;
+  }
   const map = {
     pending: '<span style="color:#6b7280">待機中</span>',
     running: '<span style="color:#2563eb;font-weight:700">▶ 処理中</span>',
     done:    '<span style="color:#16a34a;font-weight:700">✅ 完了</span>',
-    error:     '<span style="color:#dc2626;font-weight:700">❌ エラー</span>',
-    used_skip: '<span style="color:#d97706;font-weight:700">🚫 中古セラー</span>',
+    error:   '<span style="color:#dc2626;font-weight:700">❌ エラー</span>',
   };
   return map[status] || `<span>${escHtml(status)}</span>`;
 }
