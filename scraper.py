@@ -77,6 +77,8 @@ class AucFanScraper:
         # アプリ画面「X件中Y件処理済み」表示用カウンター
         self._total_items: int = 0      # スクレイピング対象の総件数（詳細取得フェーズで確定）
         self._processed_items: int = 0  # 処理済み件数（UI の進捗カウンターに反映）
+        # 直前ページで商品状態フィルタにより除外した件数（ページ打ち切り判定で使用）
+        self._last_condition_filtered: int = 0
 
     # ─────────────────────────────────────────────
     # Chrome 接続
@@ -299,6 +301,11 @@ class AucFanScraper:
                         # 全リトライがタイムアウト → ページ読み込み失敗扱いでスキップ
                         logger.warning(f"[一覧] ページ {page}: 全リトライタイムアウト → スキップ")
                         # consecutive_errors はカウントしない
+                    elif self._last_condition_filtered > 0:
+                        # 商品状態フィルタのみで全除外 → 次ページへ（エラーカウントしない）
+                        logger.info(
+                            f"[一覧] ページ {page}: 商品状態フィルタで{self._last_condition_filtered}件除外（中古等）→ 次ページへ"
+                        )
                     else:
                         logger.info(f"[一覧] ページ {page}: リトライ後も商品なし")
                         consecutive_errors += 1
@@ -558,6 +565,7 @@ class AucFanScraper:
         # カードごとにパースしてフィルタ理由を集計
         filtered_no_title = 0
         filtered_price = 0
+        filtered_condition = 0
         for card in cards:
             try:
                 item, reject_reason = self._parse_item_card_debug(card, keyword, current_url)
@@ -565,21 +573,33 @@ class AucFanScraper:
                     items.append(item)
                 elif reject_reason == "no_title":
                     filtered_no_title += 1
+                elif reject_reason == "condition":
+                    filtered_condition += 1
                 elif reject_reason == "price":
                     filtered_price += 1
             except Exception as e:
                 logger.debug(f"カードパースエラー: {e}")
                 continue
 
-        if not items and cards:
+        # 商品状態フィルタのみで全除外の場合は診断ログを出さず正常続行
+        # （セラーに中古商品しかないページ → 次ページへ進む）
+        self._last_condition_filtered = filtered_condition
+        all_condition_filtered = (filtered_condition == len(cards)) and filtered_condition > 0
+        if not items and cards and not all_condition_filtered:
             # ── 診断ログ: 条件B（カードはあるが全フィルタアウト）──
             logger.warning(
                 f"[診断 条件B] カード{len(cards)}枚あるが全フィルタアウト"
                 f" | タイトル空={filtered_no_title}"
                 f" | 価格フィルタ={filtered_price}"
+                f" | 商品状態フィルタ={filtered_condition}"
                 f" | URL={current_url}"
             )
             self._dump_html_on_zero(current_url, html, "条件B_全フィルタアウト")
+        elif filtered_condition > 0:
+            logger.info(
+                f"[商品状態フィルタ] {filtered_condition}件除外（中古等）"
+                f" | 取得={len(items)}件 | URL={current_url}"
+            )
 
         return items
 
@@ -608,7 +628,7 @@ class AucFanScraper:
         """
         _parse_item_card の診断版。フィルタ理由も返す。
         Returns: (item_dict | None, reject_reason: str)
-          reject_reason: "" | "no_title" | "price"
+          reject_reason: "" | "no_title" | "price" | "condition"
         """
         item = self._parse_item_card(card, keyword, base_url)
         if item is not None:
@@ -619,6 +639,17 @@ class AucFanScraper:
         title = title_el.get_text(strip=True) if title_el else ""
         if not title:
             return (None, "no_title")
+
+        # 商品状態フィルタで弾かれたか確認
+        if self.skip_price_filter and config.SELLER_NEW_ONLY:
+            for dt in card.find_all("dt"):
+                if "商品状態" in dt.get_text():
+                    dd = dt.find_next_sibling("dd")
+                    if dd:
+                        condition = dd.get_text(strip=True)
+                        if condition and not any(w in condition for w in config.SELLER_NEW_CONDITIONS):
+                            return (None, "condition")
+                    break
 
         # タイトルはあるが None → 価格フィルタ
         return (None, "price")
