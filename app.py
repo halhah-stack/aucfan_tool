@@ -2738,7 +2738,7 @@ def check_env():
     logger.info("")
     logger.info("使い方:")
     logger.info("  1. AucFanで検索条件を設定し1ページ目を表示した状態にする")
-    logger.info("  2. ブラウザで http://localhost:5000 を開く（自動で開きます）")
+    logger.info(f"  2. ブラウザで http://localhost:{config.FLASK_PORT} を開く（自動で開きます）")
     logger.info("  3. UIでキーワードを入力して「スクレイピング開始」をクリック")
     logger.info("")
 
