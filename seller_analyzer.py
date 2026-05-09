@@ -159,29 +159,15 @@ class SellerAnalyzer(AucFanScraper):
                     self._notify(i, "error")
                     continue
 
-            # ── Step 2: 最終pHashグループ化（小規模データセット向け整合確認） ──
-            # インクリメンタルグループ化で大半は処理済み。
-            # アイテム数が MAX_PHASH_ITEMS 以内の場合のみ全件再比較して完全性を保証する。
-            #
-            # ★ 重要: 超過時は _run_phash_grouping() を呼ばない。
-            #   group_by_phash() がスキップ時に全件を単品グループに戻す処理を行うため、
-            #   呼び出してしまうとインクリメンタルグループ化の結果が消去される。
+            # ── Step 2: グループ代表マージ（件数上限なし・高速） ──
+            # インクリメンタルグループ化で各セラー内・セラー間のグループ化は完了済み。
+            # このステップでは「グループ代表ハッシュ同士」だけを比較してグループをマージする。
+            # 全アイテムを比較する _run_phash_grouping() と異なり、代表件数（グループ数）
+            # だけを比較するため件数上限に引っかからない。
+            #   例: 42,500件・5,000グループ → 代表5,000件の比較で完了（秒単位）
             if not self.stop_event.is_set():
-                total_items = self.dm.total_items
-                if total_items <= config.MAX_PHASH_ITEMS:
-                    logger.info(f"=== 最終pHash グループ化: {total_items:,}件 ===")
-                    self.dm.update_progress(status="grouping")
-                    self._run_phash_grouping()
-                else:
-                    logger.info(
-                        f"=== 最終pHash グループ化スキップ: {total_items:,}件 > 上限{config.MAX_PHASH_ITEMS:,}件 ==="
-                        f"\n    → インクリメンタルグループ化の結果を維持します"
-                    )
-                    print(f"\n{'='*55}")
-                    print(f">>> 最終pHash スキップ: {total_items:,}件 > 上限{config.MAX_PHASH_ITEMS:,}件 <<<")
-                    print(f"    インクリメンタルグループ化の結果を維持します")
-                    print(f"    上限を変更: .env に MAX_PHASH_ITEMS=数値 を追記")
-                    print(f"{'='*55}\n")
+                self.dm.update_progress(status="grouping")
+                self._merge_groups_by_phash()
 
             # ── Step 3: 候補のみ詳細ページ取得 + Gemini判定 ──
             #   グループ化で candidate / next_candidate になった商品だけが対象。
@@ -211,17 +197,9 @@ class SellerAnalyzer(AucFanScraper):
                     min_group_size=_min_group,
                 )
 
-                # 詳細取得後に最終グループ化（画像更新があるため）
+                # 詳細取得後に最終グループ化（代表マージ方式・件数上限なし）
                 if not self.stop_event.is_set():
-                    _total = self.dm.total_items
-                    if _total <= config.MAX_PHASH_ITEMS:
-                        logger.info(f"=== 最終グループ化: {_total:,}件 ===")
-                        self._run_phash_grouping()
-                    else:
-                        logger.info(
-                            f"=== 最終グループ化スキップ: {_total:,}件 > 上限{config.MAX_PHASH_ITEMS:,}件"
-                            f" → インクリメンタル結果を維持 ==="
-                        )
+                    self._merge_groups_by_phash()
 
                 # Vision判定（詳細取得 + 最終グループ化の後）
                 if not self.stop_event.is_set():
@@ -354,6 +332,77 @@ class SellerAnalyzer(AucFanScraper):
             f"既存グループ追加: {n_added}件 / "
             f"新規グループ: {len(fresh_groups)}件 ({n_fresh}件)"
         )
+
+    # ─────────────────────────────────────────────
+    # グループ代表マージ（件数上限なし）
+    # ─────────────────────────────────────────────
+
+    def _merge_groups_by_phash(self):
+        """
+        インクリメンタルグループ化完了後に「グループ代表ハッシュ同士」を比較し、
+        類似グループをまとめて最終的なグループを確定する。
+
+        全アイテムを比較する _run_phash_grouping() と異なり、
+        代表アイテム数（グループ数）だけを比較するため高速で件数上限がない。
+          例: 42,500件・5,000グループ → 代表5,000件の比較で完了
+
+        セラーをまたいで同一商品が別グループになっているケース
+        （異なるサムネイル、セラー順序の都合）を追加でまとめる。
+        """
+        all_items = self.dm.get_all_items()
+
+        # グループ代表（group_id == item_id）のハッシュとメンバーを収集
+        # {group_id: {"phash": str, "members": [item_id, ...]}}
+        groups: dict = {}
+        for item in all_items:
+            gid = item.get("group_id") or item["item_id"]
+            if gid not in groups:
+                groups[gid] = {"phash": None, "members": []}
+            groups[gid]["members"].append(item["item_id"])
+            if gid == item["item_id"] and item.get("phash"):
+                groups[gid]["phash"] = item["phash"]
+
+        # pHash がある代表のみ対象
+        reps = [(gid, info["phash"], info["members"])
+                for gid, info in groups.items() if info["phash"]]
+        n = len(reps)
+
+        logger.info(f"=== グループ代表マージ: {n:,}グループ (全{self.dm.total_items:,}件) ===")
+        print(f"\n>>> グループ代表マージ中: {n:,}グループ <<<")
+
+        # 代表ハッシュ比較方式でグループをまとめる
+        # merged_groups: [(代表gid, 代表phash, [member gid, ...])]
+        merged: list = []
+        for gid, phash, members in reps:
+            matched = False
+            for rep_gid, rep_hash, merge_targets in merged:
+                if self.img.is_same_image(phash, rep_hash):
+                    merge_targets.append(gid)
+                    matched = True
+                    break
+            if not matched:
+                merged.append((gid, phash, [gid]))
+
+        # マージが発生したグループを DataManager に反映
+        merged_count = 0
+        for rep_gid, _, target_gids in merged:
+            if len(target_gids) <= 1:
+                continue  # マージなし → スキップ
+            # マージ対象グループの全メンバーを収集
+            all_members = []
+            for tgid in target_gids:
+                all_members.extend(groups[tgid]["members"])
+            self.dm.assign_group(all_members, rep_gid)
+            merged_count += 1
+
+        # candidate 昇格（min_group_size=1 → 全件対象）
+        self.dm.promote_candidates(min_group_size=1)
+
+        logger.info(
+            f"グループ代表マージ完了: {len(merged):,}グループ"
+            f" ({merged_count}件マージ発生)"
+        )
+        print(f">>> マージ完了: {len(merged):,}グループ ({merged_count}件マージ) <<<\n")
 
     # ─────────────────────────────────────────────
     # pHash グループ化（min_group_size=1 でオーバーライド）
