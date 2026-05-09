@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-10
+> 最終更新：2026-05-10（ログイン切れ検知・自動再開、グループ化高速化、ヘッダーステータス修正）
 
 ---
 
@@ -106,6 +106,19 @@ aucfan_tool/
 5. `scrape_detail_pages()` — 候補商品の詳細ページを個別取得（STEP 1でのみ使用）
 6. `_run_gemini_checks()` — グループサイズが `VISION_MIN_GROUP_SIZE` 以上のグループに対してGemini Vision判定を実行
 
+**AucFanログイン状態チェックと待機**：
+
+各ページ取得の直前に `_is_logged_in()` を呼び出し、AucFanがログアウト状態（「ゲストさん」文言をページソースから検索）を検知した場合は `_wait_for_login()` を呼んで待機する。
+
+| メソッド | 説明 |
+|---|---|
+| `_is_logged_in()` | `driver.page_source` に「ゲストさん」が含まれていれば `False`（未ログイン）を返す。ドライバーエラー時は `True`（ログイン済みと仮定）にフォールバック |
+| `_wait_for_login(resume_url)` | `login_required` ステータスをUIに通知してターミナルに警告を表示。`login_check_event` が set されるか30秒経過するたびにAucFanトップページでログイン確認。ログイン復帰を検知したら `resume_url` に戻って `True` を返す。`stop_event` セット時は `False` を返す |
+
+`login_check_event: threading.Event`（`__init__` の任意引数）が set されると30秒待機を中断して即時確認を実行する。UIの「🔄 今すぐ確認して再開」ボタン → `/api/login_check` → `_login_check_event.set()` がトリガー経路。STEP1/2/3で共通の1つのEventを使用する。
+
+一覧取得ループ（`_scrape_list_pages`）と詳細取得ループ（`_scrape_detail_pages`）の両方にログインチェックが組み込まれており、STEP1〜3すべてで動作する。
+
 **進捗カウンター**:
 
 `_total_items` と `_processed_items` の2つのインスタンス変数でスクレイピング対象の総件数と処理済み件数をそれぞれ追跡します。`app.py` の `scrape_status` レスポンスに `processed_items` フィールドとして公開され、フロントエンドの `updateProgressUI()` で「X件 / Y件処理済み」カウンター表示に使われます。スクレイピング完了時には `=== STEP 1 スクレイピング完了 === 全N件処理` というログをターミナルに出力します。
@@ -125,6 +138,7 @@ aucfan_tool/
 - セラーごとに `on_seller_progress(index, status)` コールバックが呼ばれ、フロントエンドの進捗表示に使われます
 - STEP 2の `min_group_size=1` で `promote_candidates()` を呼ぶため、全商品が `candidate` になります（単品でも表示対象）
 - スクレイピング完了時には `=== STEP 2 スクレイピング完了 === 全N件処理` というログをターミナルに出力します。STEP 3（マスターリスト横断）の場合は `=== STEP 3 スクレイピング完了 === 全N件処理` が同様に出力されます
+- `login_check_event` 引数（省略可）を `super().__init__()` 経由で `AucFanScraper` に渡すことで、ログイン即時確認ボタンがSTEP2/3でも動作します
 
 **中古セラー自動スキップ**：
 
@@ -133,6 +147,14 @@ aucfan_tool/
 **インクリメンタルpHashグループ化 + 最終グループ代表マージ**：
 
 各セラーのスクレイピング完了後に `_incremental_phash_group(new_item_ids)` を呼び出し、その**セラーで新たに追加された商品だけ**を既存グループ代表と比較してマッチングします（計算量 O(新規件数 × グループ数)）。全セラー完了後は `_merge_groups_by_phash()` でグループ代表ハッシュ同士のみを比較して似たグループをまとめます（計算量 O(グループ数²)）。全アイテムを比較する `group_by_phash()` と異なり件数上限がなく、42,500件超のセッションでも数秒〜数十秒で完了します。
+
+**`_merge_groups_by_phash()` の最適化（グループ化高速化）**：
+
+旧実装では比較ループ内で毎回 `imagehash.hex_to_hash()` を呼んでいたため、5,000グループの場合最大約1,250万回の文字列→オブジェクト変換が発生し「止まっているように見える」問題があった。現在は以下の最適化を実施済み：
+
+- **事前一括変換**: ループ前に全代表ハッシュ文字列を `img.str_to_phash()` で imagehash オブジェクトに変換。ループ内では `img.is_same_image_obj()` でオブジェクト同士を直接比較（文字列パース不要）
+- **進捗ログ**: 500グループごとにターミナルとlogに進捗を出力（「止まっているように見える」問題を解消）
+- **停止チェック**: 100グループごとに `stop_event` を確認し、停止リクエストに応答
 
 ---
 
@@ -143,6 +165,15 @@ aucfan_tool/
 - サムネール画像を `requests` でダウンロードし、セッションの `images/` ディレクトリに保存
 - `imagehash.phash()` でPerceptual Hash（pHash）を64ビット文字列として計算
 - `group_by_phash(items)` がハミング距離 ≤ `PHASH_THRESHOLD` の商品を同一グループとみなしてクラスタリング
+
+**グループ代表マージ向け高速比較メソッド**：
+
+| メソッド | 説明 |
+|---|---|
+| `str_to_phash(hash_str)` | pHash文字列を imagehash オブジェクトに変換して返す。変換失敗時は `None`。大量比較前に一括変換することで `is_same_image()` の hex_to_hash() 重複呼び出しを回避できる |
+| `is_same_image_obj(obj1, obj2)` | 事前変換済み imagehash オブジェクト同士のハミング距離を比較。文字列パースなしで高速動作。どちらかが `None` なら `False` を返す |
+
+`_merge_groups_by_phash()` はこの2メソッドを使って事前一括変換 → オブジェクト比較の流れで実行する（文字列比較より大幅に高速）。
 
 ---
 
@@ -280,6 +311,7 @@ _data_manager        # 現在のSTEP 1セッションのDataManager
 _seller_state        # STEP 2状態辞書（running, phase, thread, dm, session_id ...）
 _master_state        # STEP 3状態辞書（running, phase, thread, dm, session_id ...）
 _sellers_master      # SellersMasterシングルトン
+_login_check_event   # ログイン即時確認トリガー（threading.Event）。UIの「今すぐ確認して再開」ボタンが set() する。STEP1/2/3で共通。
 ```
 
 **主要APIエンドポイント**：
@@ -306,6 +338,7 @@ _sellers_master      # SellersMasterシングルトン
 | `/api/master_list/delete` | POST | マスターリストから指定セラーを削除 |
 | `/api/master_list/clear` | POST | マスターリストを全件削除 |
 | `/api/master/merge` | POST | 外部の `sellers_master.json` をマージ。`multipart/form-data` でファイルを受け取り `SellersMaster.merge_from_file()` に委譲する。レスポンス: `{"added": int, "skipped": int, "total": int}` |
+| `/api/login_check` | POST | UIの「今すぐ確認して再開」ボタンから呼び出す。`_login_check_event.set()` してスクレイパーの30秒待機ループを即時起動する。STEP1/2/3共通 |
 | `/api/export/csv` | GET | 現在セッションをCSVエクスポート |
 | `/api/export/html` | GET | 現在セッションをHTMLエクスポート（Mac用・画像はサーバー経由） |
 | `/api/export/html_offline` | GET | 現在セッションをオフラインHTML（iPhone/iPad用）としてブラウザダウンロード。`?filter=active` クエリを付けると候補・OK・要確認のみ出力して軽量化 |
@@ -608,6 +641,14 @@ node --check static/app.js
 | `fetchMasterStatus()` | STEP 3の進捗をポーリングして `master_status.processed_items` からカウンターを更新し、完了時に完了バナーを表示する |
 
 完了バナーは `<div class="scrape-complete-banner">✅ スクレイピング完了（N件処理）</div>` として動的に生成され、✕ボタンのクリックで `remove()` されます。
+
+**ヘッダーステータス表示（`headerStatus` 要素）**：
+
+アプリタイトル右に表示される状態インジケーター。STEP1はSSEストリームの `updateProgressUI()` が更新する。STEP2/3はSSEがSTEP1専用のため、`fetchSellerStatus()` / `fetchMasterStatus()` の末尾でそれぞれ直接更新する。ログイン待ち時は `login_required` ステータスに対して各ポーリング関数の先頭で `return` する前にヘッダーを更新する。対応ステータスラベル: `idle`=待機中 / `scraping_list`=一覧取得中 / `scraping_detail`=詳細取得中 / `grouping`=グループ化中 / `vision_check`=🤖 Vision判定中 / `login_required`=⚠️ ログイン待ち / `done`=完了 / `stopped`=停止済み / `error`=エラー。
+
+**ログイン待ちバナーと「今すぐ確認して再開」ボタン**：
+
+スクレイパーが `login_required` ステータスを発行すると `updateBanner()` が `type: 'login'`（琥珀色 `#78350f`・左黄ボーダー）でバナーを表示する。バナーには `showLoginBtn: true` 時のみ表示される「🔄 今すぐ確認して再開」ボタン（`id="bannerLoginCheckBtn"`）を内包する。このボタンが押されると `triggerLoginCheck()` が `/api/login_check` をPOSTし、Python側の `_login_check_event.set()` 経由で30秒待機ループを即時起動する。タブ移動・ページリロードは一切行わない。
 
 **`sellerStatusBadge(status, usedCount)` 関数**:
 
