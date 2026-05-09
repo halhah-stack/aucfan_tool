@@ -2784,8 +2784,9 @@ def _auto_load_latest_session():
 if __name__ == "__main__":
     check_env()
 
-    # 最新セッションを自動ロード（再起動後も前回結果をすぐ表示）
-    _auto_load_latest_session()
+    # 最新セッションをバックグラウンドで自動ロード（Google Drive 同期中でもFlaskをすぐ起動するため）
+    auto_load_thread = threading.Thread(target=_auto_load_latest_session, daemon=True)
+    auto_load_thread.start()
 
     # ブラウザを自動で開く（少し遅らせる）
     def open_browser():

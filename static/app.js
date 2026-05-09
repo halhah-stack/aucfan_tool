@@ -177,7 +177,7 @@ async function loadKeywordSessions() {
   const sessions = data.sessions || [];
 
   if (sessions.length === 0) {
-    el.innerHTML = '<span style="color:#9ca3af;font-size:13px">過去のSTEP 1セッションはありません</span>';
+    el.innerHTML = '<span style="color:#9ca3af;font-size:13px">Google DriveにSTEP 1のセッションが見つかりません</span>';
     return;
   }
 
@@ -226,7 +226,7 @@ async function loadStep2KeywordSessions() {
   const sessions = data.sessions || [];
 
   if (sessions.length === 0) {
-    el.innerHTML = '<span style="color:#9ca3af;font-size:12px">過去のSTEP 1セッションはありません</span>';
+    el.innerHTML = '<span style="color:#9ca3af;font-size:12px">Google DriveにSTEP 1のセッションが見つかりません</span>';
     return;
   }
 
@@ -1245,7 +1245,7 @@ async function showSessions() {
   const sessions = data.sessions || [];
 
   if (sessions.length === 0) {
-    document.getElementById('sessionsBody').innerHTML = '<p style="text-align:center;color:#6b7280;padding:30px">過去のセッションはありません</p>';
+    document.getElementById('sessionsBody').innerHTML = '<p style="text-align:center;color:#6b7280;padding:30px">Google Driveにセッションが見つかりません</p>';
     return;
   }
 
@@ -1571,7 +1571,7 @@ async function loadSellerHistory() {
   const sessions = data.sessions || [];
 
   if (sessions.length === 0) {
-    listEl.innerHTML = '<span style="color:#9ca3af">過去のセラー分析セッションはありません</span>';
+    listEl.innerHTML = '<span style="color:#9ca3af">Google Driveにセラー分析セッションが見つかりません</span>';
     return;
   }
 
@@ -1620,7 +1620,7 @@ async function loadStep3History() {
   const sessions = data.sessions || [];
 
   if (sessions.length === 0) {
-    el.innerHTML = '<span style="color:#9ca3af;font-size:13px">過去のSTEP 3セッションはありません</span>';
+    el.innerHTML = '<span style="color:#9ca3af;font-size:13px">Google DriveにSTEP 3のセッションが見つかりません</span>';
     return;
   }
 

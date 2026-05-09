@@ -103,7 +103,7 @@
           ■ 停止
         </button>
         <button class="btn btn-secondary" id="btnSessions" onclick="showSessions()">
-          📂 過去セッション
+          ☁️ Google Driveのセッション
         </button>
       </div>
     </div>
@@ -155,10 +155,10 @@
       </div>
     </div>
 
-    <!-- 過去のSTEP 1セッション一覧 -->
+    <!-- Google DriveのSTEP 1セッション一覧 -->
     <div class="sessions-section" style="margin-top:16px">
       <div class="sessions-section-header">
-        <span class="sessions-section-title">📂 過去のSTEP 1セッション</span>
+        <span class="sessions-section-title">☁️ Google DriveのSTEP 1セッション</span>
         <button class="btn btn-secondary btn-sm" onclick="loadKeywordSessions()">🔄 更新</button>
       </div>
       <div id="step1SessionsList" class="sessions-list-wrap">
@@ -172,18 +172,18 @@
   <div id="step2Panel" class="control-inner" style="display:none">
     <div class="step2-grid">
 
-      <!-- 左カラム: 過去の分析結果 -->
+      <!-- 左カラム: Google Driveの分析結果 -->
       <div class="step2-col step2-col-history">
         <div class="step2-col-head">
-          <span class="step2-col-icon">📂</span>
-          <span class="step2-col-title">過去の分析結果を読み込む</span>
+          <span class="step2-col-icon">☁️</span>
+          <span class="step2-col-title">Google Driveの分析結果を読み込む</span>
           <button class="btn btn-secondary btn-sm" onclick="loadSellerHistory()" style="margin-left:auto">🔄 更新</button>
         </div>
         <p class="step2-col-desc">
-          過去に実行したセラー分析の結果をメイン画面に読み込みます。スクレイピングは行いません。
+          Google Driveに保存されたセラー分析の結果をメイン画面に読み込みます。スクレイピングは行いません。
         </p>
         <div id="sellerHistoryList" class="seller-history-list">
-          <span style="color:#9ca3af;font-size:13px">「更新」を押すと過去のセッションが表示されます</span>
+          <span style="color:#9ca3af;font-size:13px">「更新」を押すとGoogle Driveのセッションが表示されます</span>
         </div>
       </div>
 
@@ -209,14 +209,14 @@
           <div id="sourceInfo1" class="source-selected-info" style="display:none"></div>
         </div>
 
-        <!-- ② 過去のSTEP 1セッションから選択 -->
+        <!-- ② Google DriveのSTEP 1セッションから選択 -->
         <div class="seller-source-box" id="sourceBox2">
           <div class="seller-source-label" style="display:flex;align-items:center;justify-content:space-between">
-            <span>📂 過去のSTEP 1セッションから選択</span>
+            <span>☁️ Google DriveのSTEP 1セッションから選択</span>
             <button class="btn btn-secondary btn-sm" onclick="loadStep2KeywordSessions()" style="font-size:11px;padding:3px 8px">🔄</button>
           </div>
           <div id="step2KeywordSessionsList" class="sessions-list-wrap" style="max-height:160px;overflow-y:auto;margin-top:6px">
-            <span style="color:#9ca3af;font-size:12px">🔄 ボタンを押してセッション一覧を更新</span>
+            <span style="color:#9ca3af;font-size:12px">🔄 ボタンを押してGoogle Driveのセッション一覧を表示</span>
           </div>
           <div id="sourceInfo2" class="source-selected-info" style="display:none"></div>
         </div>
@@ -371,10 +371,10 @@
         <button onclick="document.getElementById('step3CompletionBanner').style.display='none'" style="background:none;border:none;cursor:pointer;color:#6d28d9;font-size:15px;padding:0;margin-left:12px;line-height:1" title="閉じる">✕</button>
       </div>
 
-      <!-- 過去のSTEP 3セッション -->
+      <!-- Google DriveのSTEP 3セッション -->
       <div class="sessions-section" style="margin-top:16px">
         <div class="sessions-section-header">
-          <span class="sessions-section-title">📂 過去のSTEP 3セッション</span>
+          <span class="sessions-section-title">☁️ Google DriveのSTEP 3セッション</span>
           <button class="btn btn-secondary btn-sm" onclick="loadStep3History()">🔄 更新</button>
         </div>
         <div id="step3SessionsList" class="sessions-list-wrap">
@@ -562,11 +562,11 @@
   </div>
 </main>
 
-<!-- 過去セッション モーダル（STEP 1 キーワードリサーチ用） -->
+<!-- Google Driveセッション モーダル（STEP 1 キーワードリサーチ用） -->
 <div class="modal-overlay" id="sessionsModal" style="display:none" onclick="hideModal('sessionsModal')">
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-header">
-      <h2>過去のセッション（キーワードリサーチ）</h2>
+      <h2>☁️ Google Driveのセッション（キーワードリサーチ）</h2>
       <button class="modal-close" onclick="hideModal('sessionsModal')">✕</button>
     </div>
     <div class="modal-body" id="sessionsBody">
