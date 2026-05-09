@@ -31,7 +31,7 @@ aucfan_tool/
 ├── data/
 │   └── sellers_master.json # マスターセラーリスト（永続データ）
 │
-├── リサーチ結果/            # セッションフォルダ群（OUTPUT_BASE_DIR）
+├── リサーチ結果/            # セッションフォルダ群（ローカルフォールバック用。通常はGoogle Drive）
 │   ├── S1_20260506_01_バフ/   # STEP 1セッション例
 │   │   ├── progress.json
 │   │   ├── items.json
@@ -64,7 +64,7 @@ aucfan_tool/
 | pHash | `PHASH_THRESHOLD=5` | 同一商品判定の閾値（0=完全一致、大きいほど緩い） |
 | Gemini | `GEMINI_API_KEY`, `GEMINI_MODEL_VISION`, `GEMINI_RPM_LIMIT=14` | AI判定の設定 |
 | Flask | `FLASK_PORT=5001`, `FLASK_HOST=0.0.0.0` | Webサーバー設定 |
-| 出力先 | `OUTPUT_BASE_DIR=リサーチ結果` | セッションフォルダの親ディレクトリ |
+| 出力先 | `OUTPUT_BASE_DIR=（Google Driveパス）` | セッションフォルダの親ディレクトリ。デフォルトは `~/Library/CloudStorage/.../AucFanToolData/リサーチ結果`。Google Drive未接続時はローカルの `リサーチ結果/` にフォールバック |
 
 **CSS セレクター (`SELECTORS` 辞書)**: AucFanのHTML構造が変わった際はここを更新します。`list`キー配下が一覧ページ用、`detail`キー配下が詳細ページ用で、それぞれ候補セレクターをリストで持ちます（先頭から順に試行します）。
 
@@ -244,14 +244,17 @@ else:
 
 ```python
 # config.py 内のパス解決（概略）
-OUTPUT_BASE_DIR = Path(os.getenv("OUTPUT_BASE_DIR", "リサーチ結果"))
-_sellers_master_env = os.getenv("SELLERS_MASTER_PATH", "")
-SELLERS_MASTER_PATH = Path(_sellers_master_env) if _sellers_master_env else OUTPUT_BASE_DIR / "sellers_master.json"
+_GDRIVE_BASE = os.path.expanduser(
+    "~/Library/CloudStorage/GoogleDrive-shinozakistore@gmail.com/マイドライブ/AucFanToolData/リサーチ結果"
+)
+OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
 ```
+
+デフォルトで Google Drive パスを使うため、`.env` の変更なしに2拠点から同じデータを参照できます。`.env` に `OUTPUT_BASE_DIR=リサーチ結果` と書けばローカル保存に切り替えられます。
 
 **`data_manager.py` の `make_output_dir()`**:
 
-セッションフォルダを作成する `make_output_dir(keyword, step=1)` は `config.OUTPUT_BASE_DIR` を親ディレクトリとして使います。`OUTPUT_BASE_DIR` が存在しない場合は `mkdir(parents=True, exist_ok=True)` で自動作成されます。Google Driveのパスが設定されていれば、セッションフォルダはそのままGoogle Drive上に作成されます。
+セッションフォルダを作成する `make_output_dir(keyword, step=1)` は `config.OUTPUT_BASE_DIR` を親ディレクトリとして使います。Google Drive が未接続（`~/Library/CloudStorage/` が存在しない）の場合はローカルの `リサーチ結果/` に自動フォールバックします。`app.py` の `_list_sessions()` も同様のフォールバックロジックを持ちます。
 
 **`sellers_master.py` の参照先**:
 
@@ -439,7 +442,7 @@ _sellers_master      # SellersMasterシングルトン
 | `MAX_BOX_H` | `20` | 除外する箱サイズ（高さcm） |
 | `FLASK_PORT` | `5001` | FlaskサーバーのListenポート |
 | `FLASK_HOST` | `0.0.0.0` | FlaskサーバーのListenホスト（`0.0.0.0`でLAN公開） |
-| `OUTPUT_BASE_DIR` | `リサーチ結果` | セッションフォルダの保存先ディレクトリ名（絶対パス指定でGoogle Drive等の外部パスも可） |
+| `OUTPUT_BASE_DIR` | `（Google Driveパス）` | セッションフォルダの保存先。デフォルトは `~/Library/CloudStorage/.../AucFanToolData/リサーチ結果`。ローカルに切り替えたい場合は `OUTPUT_BASE_DIR=リサーチ結果` を `.env` に追加 |
 | `SELLERS_MASTER_PATH` | `""` | `sellers_master.json` のフルパス（省略時は `OUTPUT_BASE_DIR/sellers_master.json`） |
 | `EXCLUDE_TITLE_KEYWORDS` | `""` | 追加の除外タイトルキーワード（カンマ区切り） |
 | `EXCLUDE_MAKER_KEYWORDS` | `""` | 追加の除外メーカー名（カンマ区切り） |

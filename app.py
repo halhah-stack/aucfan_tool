@@ -1944,6 +1944,11 @@ def _parse_session_info(name: str) -> dict:
 def _list_sessions(step: int = None):
     """過去セッションの一覧を返す。step を指定するとそのステップのみ返す。"""
     base = Path(config.OUTPUT_BASE_DIR)
+    # Google Drive 未接続の場合はローカルフォールバック
+    if not base.exists():
+        _gdrive_prefix = os.path.expanduser("~/Library/CloudStorage/")
+        if str(base).startswith(_gdrive_prefix):
+            base = Path("リサーチ結果")
     if not base.exists():
         return []
 

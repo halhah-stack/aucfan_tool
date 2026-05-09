@@ -419,6 +419,16 @@ def make_output_dir(keyword: str, step: int = 1) -> tuple:
     date_str = datetime.now().strftime("%Y%m%d")
     step_prefix = f"S{step}_{date_str}_"
     base = Path(config.OUTPUT_BASE_DIR)
+
+    # Google Drive パスが存在しない場合（GDrive未接続 or 別Mac）はローカルにフォールバック
+    _gdrive_prefix = os.path.expanduser("~/Library/CloudStorage/")
+    if str(base).startswith(_gdrive_prefix) and not Path(os.path.expanduser("~/Library/CloudStorage/")).exists():
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            f"Google Drive が見つかりません。ローカル保存にフォールバックします: リサーチ結果/"
+        )
+        base = Path("リサーチ結果")
+
     base.mkdir(parents=True, exist_ok=True)
 
     # 通番: 同日・同ステップの既存フォルダ中の最大番号 + 1

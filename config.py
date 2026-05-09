@@ -235,7 +235,16 @@ FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
 # ─────────────────────────────────────────────
 # 出力設定
 # ─────────────────────────────────────────────
-OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", "リサーチ結果")
+# セッションデータの保存先。
+# デフォルトは Google Drive（2拠点からアクセス可能）。
+# Google Drive for Desktop がインストールされていない環境では
+# .env に OUTPUT_BASE_DIR=リサーチ結果 と記載してローカルに切り替え可能。
+_GDRIVE_BASE = os.path.expanduser(
+    "~/Library/CloudStorage/"
+    "GoogleDrive-shinozakistore@gmail.com/"
+    "マイドライブ/AucFanToolData/リサーチ結果"
+)
+OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
 SELLERS_MASTER_PATH = os.getenv("SELLERS_MASTER_PATH", "data/sellers_master.json")
 
 # ─────────────────────────────────────────────
