@@ -422,6 +422,10 @@ class AucFanScraper:
                     logger.info(f"  リトライ成功: {len(items)}件取得")
                 return (items, False)
 
+            # 商品状態フィルタで全除外 → リトライ不要（ページ自体は正常）
+            if self._last_condition_filtered > 0:
+                return ([], False)
+
             # 0件
             if content_status == "empty":
                 logger.info(
