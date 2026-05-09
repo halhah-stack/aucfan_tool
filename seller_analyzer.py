@@ -377,8 +377,11 @@ class SellerAnalyzer(AucFanScraper):
         代表アイテム数（グループ数）だけを比較するため高速で件数上限がない。
           例: 42,500件・5,000グループ → 代表5,000件の比較で完了
 
-        セラーをまたいで同一商品が別グループになっているケース
-        （異なるサムネイル、セラー順序の都合）を追加でまとめる。
+        【最適化】
+        - pHash文字列を imagehash オブジェクトに事前一括変換し、
+          ループ内で hex_to_hash() を繰り返し呼ばない
+        - 500グループごとに進捗ログを出力して「止まっているように見える」問題を解消
+        - stop_event を 100グループごとにチェックし、停止リクエストに応答する
         """
         all_items = self.dm.get_all_items()
 
@@ -394,25 +397,44 @@ class SellerAnalyzer(AucFanScraper):
                 groups[gid]["phash"] = item["phash"]
 
         # pHash がある代表のみ対象
-        reps = [(gid, info["phash"], info["members"])
-                for gid, info in groups.items() if info["phash"]]
-        n = len(reps)
+        reps_str = [(gid, info["phash"], info["members"])
+                    for gid, info in groups.items() if info["phash"]]
+        n = len(reps_str)
 
         logger.info(f"=== グループ代表マージ: {n:,}グループ (全{self.dm.total_items:,}件) ===")
-        print(f"\n>>> グループ代表マージ中: {n:,}グループ <<<")
+        print(f"\n>>> グループ代表マージ開始: {n:,}グループ <<<")
 
-        # 代表ハッシュ比較方式でグループをまとめる
-        # merged_groups: [(代表gid, 代表phash, [member gid, ...])]
+        # ── 最適化: pHash文字列をオブジェクトに一括変換 ──
+        # ループ内で毎回 hex_to_hash() を呼ぶと O(G²) 回の文字列パースが発生する。
+        # 事前に変換しておくことで比較コストを大幅に削減する。
+        reps = []
+        for gid, phash_str, members in reps_str:
+            phash_obj = self.img.str_to_phash(phash_str)
+            if phash_obj is not None:
+                reps.append((gid, phash_obj, members))
+
+        # 代表ハッシュ比較（事前変換済みオブジェクト使用）
+        # merged: [(代表gid, 代表phash_obj, [member gid, ...])]
         merged: list = []
-        for gid, phash, members in reps:
+        for i, (gid, phash_obj, members) in enumerate(reps):
+            # stop_event チェック（100グループごと）
+            if i % 100 == 0 and self.stop_event.is_set():
+                logger.info("グループ代表マージ: 停止リクエストを受信")
+                break
+
+            # 進捗ログ（500グループごと）
+            if i > 0 and i % 500 == 0:
+                logger.info(f"グループ代表マージ進捗: {i:,} / {n:,} グループ処理中...")
+                print(f"   >>> マージ進捗: {i:,} / {n:,} <<<")
+
             matched = False
-            for rep_gid, rep_hash, merge_targets in merged:
-                if self.img.is_same_image(phash, rep_hash):
+            for rep_gid, rep_obj, merge_targets in merged:
+                if self.img.is_same_image_obj(phash_obj, rep_obj):
                     merge_targets.append(gid)
                     matched = True
                     break
             if not matched:
-                merged.append((gid, phash, [gid]))
+                merged.append((gid, phash_obj, [gid]))
 
         # マージが発生したグループを DataManager に反映
         merged_count = 0

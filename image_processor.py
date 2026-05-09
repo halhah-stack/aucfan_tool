@@ -135,12 +135,38 @@ class ImageProcessor:
         except Exception:
             return 999  # エラー時は別物とみなす
 
+    def str_to_phash(self, hash_str: str):
+        """
+        pHash文字列を imagehash オブジェクトに変換して返す。
+        大量比較前に一括変換することで hex_to_hash() の重複呼び出しを避けられる。
+        変換失敗時は None を返す。
+        """
+        if not hash_str:
+            return None
+        try:
+            return imagehash.hex_to_hash(hash_str)
+        except Exception:
+            return None
+
     def is_same_image(self, hash1_str: str, hash2_str: str) -> bool:
         """pHash距離が閾値以内なら同一画像と判定"""
         if not hash1_str or not hash2_str:
             return False
         dist = self.phash_distance(hash1_str, hash2_str)
         return dist <= config.PHASH_THRESHOLD
+
+    def is_same_image_obj(self, obj1, obj2) -> bool:
+        """
+        事前変換済み imagehash オブジェクト同士の比較（高速版）。
+        str_to_phash() で変換したオブジェクトを渡す。
+        どちらかが None の場合は False を返す。
+        """
+        if obj1 is None or obj2 is None:
+            return False
+        try:
+            return (obj1 - obj2) <= config.PHASH_THRESHOLD
+        except Exception:
+            return False
 
     # ─────────────────────────────────────────────
     # グループ化（Union-Find ベース）
