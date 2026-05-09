@@ -64,11 +64,15 @@ class AucFanScraper:
         image_processor: ImageProcessor,
         gemini_client: GeminiClient,
         stop_event: threading.Event,
+        login_check_event: Optional[threading.Event] = None,
     ):
         self.dm = data_manager
         self.img = image_processor
         self.gemini = gemini_client
         self.stop_event = stop_event
+        # UIの「今すぐ確認」ボタンから即時ログインチェックをトリガーするイベント
+        # set() されたら _wait_for_login() がすぐに確認を実行する
+        self.login_check_event: threading.Event = login_check_event or threading.Event()
         self.driver: Optional[webdriver.Chrome] = None
         # 価格フィルターを適用するかどうか
         #   False（デフォルト）: MIN_PRICE 〜 MAX_PRICE*1.5 の範囲外を除外
@@ -295,6 +299,14 @@ class AucFanScraper:
             logger.info(f"[一覧] ページ {page}: {current_url}")
 
             try:
+                # ── ログイン状態チェック ──
+                if not self._is_logged_in():
+                    logger.warning("[一覧] ログインセッション切れを検知")
+                    if not self._wait_for_login(resume_url=current_url):
+                        break  # stop_event がセット → 終了
+                    # ログイン後はステータスを元に戻す
+                    self.dm.update_progress(status="scraping_list")
+
                 # ── 商品取得（リトライあり）──
                 items, all_timed_out = self._fetch_page_items_with_retry(
                     current_url, max_retries=2
@@ -877,6 +889,14 @@ class AucFanScraper:
                 done += 1
                 continue
 
+            # ── ログイン状態チェック ──
+            if not self._is_logged_in():
+                logger.warning("[詳細] ログインセッション切れを検知")
+                if not self._wait_for_login(resume_url=url):
+                    break  # stop_event がセット → 終了
+                # ログイン後はステータスを元に戻す
+                self.dm.update_progress(status="scraping_detail")
+
             try:
                 logger.info(f"詳細ページ [{done+1}/{len(targets)}]: {url}")
                 detail = self._scrape_detail_page(url, item_id)
@@ -1112,6 +1132,99 @@ class AucFanScraper:
             logger.warning(f"ページ移動失敗 {url}: {e}")
             self.dm.add_error(f"移動失敗: {url}: {e}")
             return False
+
+    # ─────────────────────────────────────────────
+    # ログイン状態チェック・待機
+    # ─────────────────────────────────────────────
+
+    def _is_logged_in(self) -> bool:
+        """
+        現在のページ内容からAucFanのログイン状態を判定する。
+
+        AucFanは未ログイン時に「ようこそ、 ゲストさん」という文言を
+        ヘッダーに表示する。この文字列をページソースから検索して判定する。
+
+        Returns:
+            True  : ログイン済み
+            False : 未ログイン（ゲスト状態）
+        """
+        try:
+            html = self.driver.page_source
+            # AucFan未ログイン時の特徴的な文言
+            if "ゲストさん" in html:
+                return False
+            return True
+        except Exception:
+            # ドライバーエラー時はログイン済みと仮定して続行
+            return True
+
+    def _wait_for_login(self, resume_url: str = "") -> bool:
+        """
+        ログアウトを検知した際に呼び出す待機ループ。
+
+        - progress.status を "login_required" に変更してUIに通知
+        - ターミナルに警告メッセージを表示
+        - 15秒ごとにAucFanトップページを確認
+        - ログイン復帰を検知したら resume_url に戻り True を返す
+        - stop_event がセットされたら False を返す
+
+        Args:
+            resume_url: ログイン後に戻るURL（空文字の場合は移動しない）
+
+        Returns:
+            True  : ログイン復帰（スクレイピング再開可能）
+            False : stop_event がセットされた（終了）
+        """
+        # ターミナル警告
+        print(f"\n{'='*60}")
+        print(f"⚠️  AucFanのログインセッションが切れました")
+        print(f"   Chromeブラウザで aucfan.com にログインしてください")
+        print(f"   ログイン確認後、スクレイピングを自動的に再開します")
+        if resume_url:
+            print(f"   再開URL: {resume_url}")
+        print(f"{'='*60}\n")
+
+        # 前のstatus（scraping_list等）を保持してlogin_requiredを設定
+        self.dm.update_progress(status="login_required")
+        self.login_check_event.clear()  # 古いトリガーをリセット
+
+        check_interval = 30  # 秒（自動チェック間隔）
+        while not self.stop_event.is_set():
+            # 30秒待機。ただし login_check_event が set されたら即座に抜ける
+            for _ in range(check_interval):
+                if self.stop_event.is_set():
+                    return False
+                if self.login_check_event.is_set():
+                    self.login_check_event.clear()
+                    logger.info("「今すぐ確認」ボタンによる即時ログインチェック")
+                    print(f"   🔄 今すぐ確認中...")
+                    break
+                time.sleep(1)
+
+            if self.stop_event.is_set():
+                return False
+
+            try:
+                # AucFanトップページでログイン状態を確認
+                self.driver.get("https://aucfan.com/")
+                time.sleep(2)
+                if self._is_logged_in():
+                    print(f"\n{'='*60}")
+                    print(f"✅ ログインを確認しました！スクレイピングを再開します")
+                    print(f"{'='*60}\n")
+                    logger.info("ログイン復帰を確認。スクレイピングを再開します。")
+                    # 元のURLに戻る
+                    if resume_url:
+                        self.driver.get(resume_url)
+                        time.sleep(2)
+                    return True
+                else:
+                    logger.info("ログイン未確認。引き続き待機中...")
+                    print(f"   ❌ ログイン未確認、{check_interval}秒後に再確認します...")
+            except Exception as e:
+                logger.warning(f"ログイン確認中にエラー: {e}")
+
+        return False
 
     def _random_wait(self):
         """ランダム待機（3〜5秒）"""

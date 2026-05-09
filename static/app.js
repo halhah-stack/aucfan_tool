@@ -438,6 +438,7 @@ function updateProgressUI(data) {
     grouping: 'グループ化中', vision_check: '🤖 Vision判定中',
     done: '完了', stopped: '停止済み', error: 'エラー',
     candidate: '仕入れ候補', next_candidate: '次期候補',
+    login_required: '⚠️ ログイン待ち',
   };
   const statusEl = document.getElementById('headerStatus');
   if (statusEl) {
@@ -533,6 +534,22 @@ function updateProgressUI(data) {
   // ── スクレイピングバナー更新（キーワードリサーチ用） ──
   // セラー分析中は fetchSellerStatus 側でバナーを管理するためスキップ
   if (!state.isSellerAnalysis) {
+    // ログイン待ち（STEP1）
+    if (progress.status === 'login_required') {
+      updateBanner({
+        isActive: true, icon: '⚠️', type: 'login',
+        main: 'AucFanのログインが切れました',
+        sub:  'Chromeで aucfan.com にログイン後、自動再開（30秒）またはボタンで即再開。',
+        showLoginBtn: true,
+      });
+      // ヘッダー更新（SSEのstatusLabels経由より確実）
+      const statusEl = document.getElementById('headerStatus');
+      if (statusEl) {
+        statusEl.textContent = '⚠️ ログイン待ち';
+        statusEl.style.background = 'rgba(255,255,255,.35)';
+      }
+      return;
+    }
     if (is_running) {
       const phaseText = {
         scraping_list:   '一覧取得中',
@@ -1529,7 +1546,7 @@ let _bannerHideTimer = null;
  *   type      {string} '' | 'done' | 'stopped' | 'error'  背景色を切り替える
  *   autohide  {number} ms後に自動的に非表示 (0=しない)
  */
-function updateBanner({ isActive, icon = '⚡', main = '', sub = '', type = '', autohide = 0 } = {}) {
+function updateBanner({ isActive, icon = '⚡', main = '', sub = '', type = '', autohide = 0, showLoginBtn = false } = {}) {
   const banner = document.getElementById('scrapingBanner');
   if (!banner) return;
 
@@ -1537,6 +1554,8 @@ function updateBanner({ isActive, icon = '⚡', main = '', sub = '', type = '', 
 
   if (!isActive) {
     banner.style.display = 'none';
+    const loginBtn = document.getElementById('bannerLoginCheckBtn');
+    if (loginBtn) loginBtn.style.display = 'none';
     return;
   }
 
@@ -1546,9 +1565,41 @@ function updateBanner({ isActive, icon = '⚡', main = '', sub = '', type = '', 
   setText('bannerMain', main);
   setText('bannerSub',  sub);
 
+  // ログイン待ちボタンの表示切替（タブ移動なし）
+  const loginBtn = document.getElementById('bannerLoginCheckBtn');
+  if (loginBtn) loginBtn.style.display = showLoginBtn ? '' : 'none';
+
   if (autohide > 0) {
-    _bannerHideTimer = setTimeout(() => { banner.style.display = 'none'; }, autohide);
+    _bannerHideTimer = setTimeout(() => {
+      banner.style.display = 'none';
+      if (loginBtn) loginBtn.style.display = 'none';
+    }, autohide);
   }
+}
+
+/**
+ * 「今すぐ確認して再開」ボタンの処理。
+ * /api/login_check を呼びスクレイパーの待機ループを即時起動する。
+ * タブ移動やページリロードは一切行わない。
+ */
+async function triggerLoginCheck() {
+  const btn = document.getElementById('bannerLoginCheckBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ 確認中...';
+  }
+  try {
+    await fetch('/api/login_check', { method: 'POST' });
+  } catch (e) {
+    console.warn('ログインチェックリクエスト失敗:', e);
+  }
+  // ボタンは確認結果を待ってポーリングが更新するまで数秒後に戻す
+  setTimeout(() => {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🔄 今すぐ確認して再開';
+    }
+  }, 5000);
 }
 
 // ─────────────────────────────────────────────
@@ -2023,6 +2074,22 @@ async function fetchSellerStatus(silent = false) {
     document.getElementById('btnSellerStop').disabled = !data.running;
 
     // ── スクレイピングバナー更新（セラー分析用） ──
+    // ログイン待ち（STEP2）
+    if (data.phase === 'login_required') {
+      updateBanner({
+        isActive: true, icon: '⚠️', type: 'login',
+        main: 'AucFanのログインが切れました',
+        sub:  'Chromeで aucfan.com にログイン後、自動再開（30秒）またはボタンで即再開。',
+        showLoginBtn: true,
+      });
+      // ヘッダーも更新してからreturn（タブは移動しない）
+      const hdrElS2 = document.getElementById('headerStatus');
+      if (hdrElS2) {
+        hdrElS2.textContent = '⚠️ ログイン待ち';
+        hdrElS2.style.background = 'rgba(255,255,255,.35)';
+      }
+      return;
+    }
     if (data.running) {
       const currentSeller = data.current_index >= 0
         ? (data.sellers[data.current_index]?.seller_id || '') : '';
@@ -2092,6 +2159,25 @@ async function fetchSellerStatus(silent = false) {
           );
         }
       }
+    }
+
+    // ── ヘッダーステータス更新（STEP2用） ──
+    // SSEはSTEP1専用のため、STEP2中はここで headerStatus を直接更新する
+    const sellerStatusLabels = {
+      scraping_list:   '一覧取得中',
+      scraping_detail: '詳細取得中',
+      grouping:        'グループ化中',
+      vision_check:    '🤖 Vision判定中',
+      done:            '完了',
+      stopped:         '停止済み',
+      error:           'エラー',
+      idle:            '待機中',
+      login_required:  '⚠️ ログイン待ち',
+    };
+    const hdrEl = document.getElementById('headerStatus');
+    if (hdrEl) {
+      hdrEl.textContent = sellerStatusLabels[data.phase] || data.phase || '待機中';
+      hdrEl.style.background = data.running ? 'rgba(255,255,255,.35)' : 'rgba(255,255,255,.15)';
     }
 
   } catch (e) {
@@ -2264,6 +2350,22 @@ async function fetchMasterStatus(silent = false) {
     const data = await fetchJSON('/api/master_sellers/scrape/status');
     if (!data) return;
 
+    // ログイン待ち（STEP3）
+    if (data.phase === 'login_required') {
+      updateBanner({
+        isActive: true, icon: '⚠️', type: 'login',
+        main: 'AucFanのログインが切れました',
+        sub:  'Chromeで aucfan.com にログイン後、自動再開（30秒）またはボタンで即再開。',
+        showLoginBtn: true,
+      });
+      const hdrEl = document.getElementById('headerStatus');
+      if (hdrEl) {
+        hdrEl.textContent = '⚠️ ログイン待ち';
+        hdrEl.style.background = 'rgba(255,255,255,.35)';
+      }
+      return;
+    }
+
     const pct = data.total > 0 ? Math.round(data.done / data.total * 100) : 0;
     const bar = document.getElementById('masterProgressBar');
     if (bar) bar.style.width = pct + '%';
@@ -2310,6 +2412,15 @@ async function fetchMasterStatus(silent = false) {
         }
       }
     }
+
+    // ── ヘッダーステータス更新（STEP3用） ──
+    // SSEはSTEP1専用のため、STEP3中はここで headerStatus を直接更新する
+    const hdrEl3 = document.getElementById('headerStatus');
+    if (hdrEl3) {
+      hdrEl3.textContent = phaseLabel3(data.phase) || '待機中';
+      hdrEl3.style.background = data.running ? 'rgba(255,255,255,.35)' : 'rgba(255,255,255,.15)';
+    }
+
   } catch (e) {
     console.warn('STEP 3 ステータス取得失敗:', e);
   }
@@ -2325,6 +2436,7 @@ function phaseLabel3(phase) {
     done: '完了',
     stopped: '停止',
     error: 'エラー',
+    login_required: '⚠️ ログイン待ち',
   }[phase] || phase;
 }
 

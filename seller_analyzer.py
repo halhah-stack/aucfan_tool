@@ -72,8 +72,10 @@ class SellerAnalyzer(AucFanScraper):
         stop_event: threading.Event,
         on_seller_progress: Optional[Callable[[int, str], None]] = None,
         scrape_detail: Optional[bool] = None,
+        login_check_event: Optional[threading.Event] = None,
     ):
-        super().__init__(data_manager, image_processor, gemini_client, stop_event)
+        super().__init__(data_manager, image_processor, gemini_client, stop_event,
+                         login_check_event=login_check_event)
         self.sellers = sellers
         self.on_seller_progress = on_seller_progress
         # セラー分析では価格フィルタをオフにして全商品を取得する
