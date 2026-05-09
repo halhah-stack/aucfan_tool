@@ -253,6 +253,18 @@ _GDRIVE_SELLERS = os.path.join(_GDRIVE_ROOT, "sellers_master.json")
 SELLERS_MASTER_PATH = os.getenv("SELLERS_MASTER_PATH", _GDRIVE_SELLERS)
 
 # ─────────────────────────────────────────────
+# STEP2/3 セラーリサーチ 商品状態フィルター
+# ─────────────────────────────────────────────
+# True のとき、AucFan 一覧の「商品状態」が新品系ワードの商品のみを取得する。
+# .env に SELLER_NEW_ONLY=false と書けば全件対象に戻せる。
+SELLER_NEW_ONLY = os.getenv("SELLER_NEW_ONLY", "true").lower() == "true"
+
+# 新品とみなす商品状態ワード（AucFan の「商品状態」欄に表示されるテキスト）
+SELLER_NEW_CONDITIONS = [w.strip() for w in os.getenv(
+    "SELLER_NEW_CONDITIONS", "新品,未使用,未開封,未着用"
+).split(",") if w.strip()]
+
+# ─────────────────────────────────────────────
 # 商品ステータス定義
 # ─────────────────────────────────────────────
 STATUS_CANDIDATE = "candidate"          # 仕入れ候補（グループ MIN_GROUP_SIZE 件以上）

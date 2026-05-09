@@ -667,6 +667,22 @@ class AucFanScraper:
             if price > 0 and (price < config.MIN_PRICE or price > config.MAX_PRICE * 1.5):
                 return None
 
+        # 商品状態を取得（<dt>商品状態</dt><dd>新品</dd> 構造から抽出）
+        condition = ""
+        for dt in card.find_all("dt"):
+            if "商品状態" in dt.get_text():
+                dd = dt.find_next_sibling("dd")
+                if dd:
+                    condition = dd.get_text(strip=True)
+                break
+
+        # STEP2/3モード（skip_price_filter=True）かつ SELLER_NEW_ONLY=true のとき
+        # 商品状態が新品系ワードでない商品を除外する
+        if self.skip_price_filter and config.SELLER_NEW_ONLY:
+            if condition and not any(w in condition for w in config.SELLER_NEW_CONDITIONS):
+                logger.debug(f"商品状態除外 [{condition}]: {title[:60]}")
+                return None
+
         # セラーID + セラー検索URL（a.sellerLink の href を流用）
         seller_el = self._find_element_soup(card, config.SELECTORS["list"]["seller"])
         seller_id = seller_el.get_text(strip=True) if seller_el else ""
