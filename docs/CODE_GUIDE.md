@@ -99,8 +99,8 @@ aucfan_tool/
 **主要な内部フロー**：
 
 1. `connect()` — `selenium.webdriver.Remote` でポート9222に接続
-2. `scrape_list_pages(keyword, url)` — 検索一覧を全ページ走査。各商品カードを `_parse_item_card()` で解析し、価格フィルタ・タイトルキーワード除外・メーカー名除外を適用
-3. `_parse_item_card()` — 商品カードからタイトル・価格・セラーID・画像URL等を抽出。各種除外判定もここで実行
+2. `scrape_list_pages(keyword, url)` — 検索一覧を全ページ走査。各商品カードを `_parse_item_card()` で解析し、価格フィルタ・タイトルキーワード除外・メーカー名除外・商品状態フィルタを適用
+3. `_parse_item_card()` — 商品カードからタイトル・価格・セラーID・画像URL・商品状態等を抽出。各種除外判定もここで実行。STEP 2/3モード（`skip_price_filter=True`）かつ `SELLER_NEW_ONLY=true` のとき、`<dt>商品状態</dt><dd>` から状態テキストを取得し、新品系ワード（新品・未使用・未開封・未着用）以外を除外する
 4. `run_phash_grouping()` — pHash計算後にハミング距離でグループ化し `assign_group()` を呼ぶ
 5. `scrape_detail_pages()` — 候補商品の詳細ページを個別取得（STEP 1でのみ使用）
 6. `_run_gemini_checks()` — グループサイズが `VISION_MIN_GROUP_SIZE` 以上のグループに対してGemini Vision判定を実行
