@@ -443,7 +443,7 @@ _sellers_master      # SellersMasterシングルトン
 | `FLASK_PORT` | `5001` | FlaskサーバーのListenポート |
 | `FLASK_HOST` | `0.0.0.0` | FlaskサーバーのListenホスト（`0.0.0.0`でLAN公開） |
 | `OUTPUT_BASE_DIR` | `（Google Driveパス）` | セッションフォルダの保存先。デフォルトは `~/Library/CloudStorage/.../AucFanToolData/リサーチ結果`。ローカルに切り替えたい場合は `OUTPUT_BASE_DIR=リサーチ結果` を `.env` に追加 |
-| `SELLERS_MASTER_PATH` | `""` | `sellers_master.json` のフルパス（省略時は `OUTPUT_BASE_DIR/sellers_master.json`） |
+| `SELLERS_MASTER_PATH` | `（Google DriveパスのAucFanToolData/sellers_master.json）` | マスターセラーリストのフルパス。デフォルトは Google Drive の `AucFanToolData/sellers_master.json`。ローカルに切り替えたい場合は `SELLERS_MASTER_PATH=data/sellers_master.json` を `.env` に追加 |
 | `EXCLUDE_TITLE_KEYWORDS` | `""` | 追加の除外タイトルキーワード（カンマ区切り） |
 | `EXCLUDE_MAKER_KEYWORDS` | `""` | 追加の除外メーカー名（カンマ区切り） |
 | `SELLER_SCRAPE_DETAIL` | `false` | `true` にするとSTEP 2でも詳細ページを取得する（非推奨・低速） |

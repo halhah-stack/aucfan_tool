@@ -27,8 +27,16 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# デフォルト保存パス
-_DEFAULT_PATH = Path(config.SELLERS_MASTER_PATH)
+# デフォルト保存パス（Google Drive 未接続時はローカルにフォールバック）
+def _resolve_default_path() -> Path:
+    p = Path(config.SELLERS_MASTER_PATH)
+    _gdrive_prefix = Path.home() / "Library" / "CloudStorage"
+    if str(p).startswith(str(_gdrive_prefix)) and not _gdrive_prefix.exists():
+        logger.warning("Google Drive が見つかりません。sellers_master をローカルにフォールバックします: data/sellers_master.json")
+        return Path("data/sellers_master.json")
+    return p
+
+_DEFAULT_PATH = _resolve_default_path()
 
 
 class SellersMaster:
