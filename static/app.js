@@ -45,8 +45,18 @@ const state = {
 document.addEventListener('DOMContentLoaded', () => {
   startSSE();
   loadGroups();
-  loadKeywordSessions();   // STEP 1 セッション一覧を初期表示
   refreshCurrentSession(); // 表示中セッションバーを初期化
+
+  // ── タブ復元（画面更新後も前回のステップを維持する） ──
+  // localStorage に保存された最後のステップへ切り替える。
+  // 保存値がなければ STEP 1 を表示。
+  const savedStep = localStorage.getItem('activeStep');
+  const restoredStep = savedStep === '2' ? 2
+                     : savedStep === '3' ? 3
+                     : savedStep === 'master' ? 'master'
+                     : 1;
+  switchStep(restoredStep);
+
   setInterval(() => {
     if (state.isRunning) loadGroups(); // スクレイピング中のみ自動更新
   }, 8000);
@@ -66,6 +76,9 @@ document.addEventListener('DOMContentLoaded', () => {
  */
 function switchStep(step) {
   state.activeStep = step;
+
+  // 現在のステップを localStorage に保存（画面更新後も復元できるように）
+  localStorage.setItem('activeStep', String(step));
 
   const p1  = document.getElementById('step1Panel');
   const p2  = document.getElementById('step2Panel');
