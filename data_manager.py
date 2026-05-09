@@ -182,6 +182,13 @@ class DataManager:
             if item_id in self._items:
                 self._items[item_id].update(updates)
 
+    def remove_items(self, item_ids: set):
+        """指定アイテムをデータから削除する（中古セラースキップ時に使用）"""
+        with self._lock:
+            for iid in item_ids:
+                self._items.pop(iid, None)
+            self._progress["total_items"] = len(self._items)
+
     def get_item(self, item_id: str) -> Optional[dict]:
         with self._lock:
             return dict(self._items.get(item_id, {}))

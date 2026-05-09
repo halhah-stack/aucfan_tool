@@ -131,10 +131,30 @@ class SellerAnalyzer(AucFanScraper):
                     # このセラーのスクレイピング開始前のアイテムIDを記録
                     ids_before = {item["item_id"] for item in self.dm.get_all_items()}
 
+                    # 中古カウンターをリセット（セラーごとに独立してカウント）
+                    self._seller_used_count = 0
+                    self._seller_skipped_by_used = False
+
                     self._navigate(seller_url)
 
                     # 一覧ページを全ページ取得（親クラスのメソッドをそのまま使用）
                     self._scrape_list_pages(seller_url)
+
+                    # ── 中古セラー判定 ──
+                    # _scrape_list_pages 内で中古累計が閾値超えなら打ち切り済み。
+                    # 取得済みデータを削除して次のセラーへ進む。
+                    if self._seller_skipped_by_used:
+                        ids_after = {item["item_id"] for item in self.dm.get_all_items()}
+                        ids_to_remove = ids_after - ids_before
+                        if ids_to_remove:
+                            self.dm.remove_items(ids_to_remove)
+                        self._notify(i, "used_skip")
+                        logger.info(
+                            f"[セラー {i + 1}/{total}] {seller_short}"
+                            f" → 中古{self._seller_used_count}件超 → スキップ・データ除外"
+                            f" (除外: {len(ids_to_remove)}件, 累計: {self.dm.total_items}件)"
+                        )
+                        continue
 
                     self._notify(i, "done")
                     logger.info(

@@ -2424,6 +2424,7 @@ def api_seller_scrape_status():
     total = len(sellers)
     done_sellers = sum(1 for s in sellers if s.get("status") == "done")
     errors = sum(1 for s in sellers if s.get("status") == "error")
+    used_skipped = sum(1 for s in sellers if s.get("status") == "used_skip")
 
     # DataManager から詳細進捗を取得
     dm_progress = {}
@@ -2442,6 +2443,7 @@ def api_seller_scrape_status():
         "total": total,
         "done": done_sellers,
         "errors": errors,
+        "used_skipped": used_skipped,
         "sellers": sellers,
         "session_id": session_id,
         "total_items": total_items,

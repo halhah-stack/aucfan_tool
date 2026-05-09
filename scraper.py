@@ -79,6 +79,10 @@ class AucFanScraper:
         self._processed_items: int = 0  # 処理済み件数（UI の進捗カウンターに反映）
         # 直前ページで商品状態フィルタにより除外した件数（ページ打ち切り判定で使用）
         self._last_condition_filtered: int = 0
+        # 現セラーの中古除外累計件数（seller_analyzer がセラーごとにリセット）
+        # SELLER_USED_SKIP_THRESHOLD を超えたら _seller_skipped_by_used=True にして打ち切る
+        self._seller_used_count: int = 0
+        self._seller_skipped_by_used: bool = False
 
     # ─────────────────────────────────────────────
     # Chrome 接続
@@ -338,6 +342,20 @@ class AucFanScraper:
                         processed_items=self._processed_items,
                     )
 
+                # ── 中古セラー打ち切りチェック（STEP2/3 のみ）──
+                # 1セラーの中古累計が閾値を超えたら、このセラーは中古主体と判断して打ち切る。
+                # 取得済みデータは seller_analyzer 側で削除する。
+                thresh = config.SELLER_USED_SKIP_THRESHOLD
+                if (self.skip_price_filter
+                        and thresh > 0
+                        and self._seller_used_count > thresh):
+                    logger.info(
+                        f"[一覧] 中古累計 {self._seller_used_count}件 > 上限{thresh}件"
+                        f" → 中古セラーと判断してスキップ"
+                    )
+                    self._seller_skipped_by_used = True
+                    break
+
                 # 定期保存（10ページごと）
                 if page % 10 == 0:
                     self.dm.save_all()
@@ -588,6 +606,8 @@ class AucFanScraper:
         # 商品状態フィルタのみで全除外の場合は診断ログを出さず正常続行
         # （セラーに中古商品しかないページ → 次ページへ進む）
         self._last_condition_filtered = filtered_condition
+        # セラー累計に加算（seller_analyzer がセラーごとにリセットする）
+        self._seller_used_count += filtered_condition
         all_condition_filtered = (filtered_condition == len(cards)) and filtered_condition > 0
         if not items and cards and not all_condition_filtered:
             # ── 診断ログ: 条件B（カードはあるが全フィルタアウト）──

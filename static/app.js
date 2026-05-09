@@ -1888,7 +1888,8 @@ function sellerStatusBadge(status) {
     pending: '<span style="color:#6b7280">待機中</span>',
     running: '<span style="color:#2563eb;font-weight:700">▶ 処理中</span>',
     done:    '<span style="color:#16a34a;font-weight:700">✅ 完了</span>',
-    error:   '<span style="color:#dc2626;font-weight:700">❌ エラー</span>',
+    error:     '<span style="color:#dc2626;font-weight:700">❌ エラー</span>',
+    used_skip: '<span style="color:#d97706;font-weight:700">🚫 中古セラー</span>',
   };
   return map[status] || `<span>${escHtml(status)}</span>`;
 }
