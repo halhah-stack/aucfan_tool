@@ -2456,11 +2456,16 @@ def api_seller_scrape_status():
         except Exception:
             pass
 
-    # DataManager のステータスが login_required の場合はそちらを優先する
-    # （_seller_state["phase"] は _notify() 呼び出し時にしか更新されないため、
-    #   ログイン待機中は dm.get_progress() から直接読む必要がある）
+    # DataManager のステータスを優先する
+    # （_seller_state["phase"] は on_progress コールバック呼び出し時にしか更新されないため、
+    #   セラーループ終了後の grouping / vision_check / login_required フェーズは
+    #   dm.get_progress() から直接読む必要がある）
     dm_status = dm_progress.get("status", "")
-    effective_phase = "login_required" if dm_status == "login_required" else phase
+    _DM_OVERRIDE_PHASES = {
+        "login_required", "grouping", "vision_check",
+        "scraping_detail", "done", "stopped", "error",
+    }
+    effective_phase = dm_status if dm_status in _DM_OVERRIDE_PHASES else phase
 
     return jsonify({
         "running": running,
@@ -2597,8 +2602,12 @@ def api_master_scrape_status():
         except Exception:
             pass
 
-    # DataManager のステータスが login_required の場合はそちらを優先する
-    effective_phase = "login_required" if dm_status == "login_required" else phase
+    # DataManager のステータスを優先する（STEP2と同じロジック）
+    _DM_OVERRIDE_PHASES = {
+        "login_required", "grouping", "vision_check",
+        "scraping_detail", "done", "stopped", "error",
+    }
+    effective_phase = dm_status if dm_status in _DM_OVERRIDE_PHASES else phase
 
     return jsonify({
         "running": running,
