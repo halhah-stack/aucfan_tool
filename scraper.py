@@ -107,6 +107,10 @@ class AucFanScraper:
             options.add_argument("--disable-dev-shm-usage")
 
             self.driver = webdriver.Chrome(options=options)
+            # ページロードタイムアウトを明示的に設定（デフォルト300秒を上書き）
+            # これがないと driver.get() がページ読み込み中にフリーズして
+            # 手動でChromeタブを更新するまで再開しない問題が発生する
+            self.driver.set_page_load_timeout(config.PAGE_LOAD_TIMEOUT)
             logger.info(f"Chrome に接続しました（初期タブ）: {self.driver.current_url}")
 
             # AucFanタブに切り替え（見つからない場合は現在のタブで続行）
@@ -169,10 +173,17 @@ class AucFanScraper:
                 logger.info(f"新規タブでAucFanを開きます: {start_url}")
                 self.driver.execute_script("window.open('about:blank', '_blank');")
                 self.driver.switch_to.window(self.driver.window_handles[-1])
-                self.driver.get(start_url)
-                WebDriverWait(self.driver, config.PAGE_LOAD_TIMEOUT).until(
-                    lambda d: d.execute_script("return document.readyState") == "complete"
-                )
+                try:
+                    self.driver.get(start_url)
+                    WebDriverWait(self.driver, config.PAGE_LOAD_TIMEOUT).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
+                except TimeoutException:
+                    logger.warning(f"start_url ロードタイムアウト → window.stop() で続行: {start_url}")
+                    try:
+                        self.driver.execute_script("window.stop();")
+                    except Exception:
+                        pass
                 logger.info(f"タブ遷移完了: {self.driver.current_url}")
 
             # 現在のURLとキーワードを取得
@@ -1124,10 +1135,29 @@ class AucFanScraper:
     # ─────────────────────────────────────────────
 
     def _navigate(self, url: str) -> bool:
-        """URLに移動。失敗したら False を返す（例外はキャッチ）"""
+        """
+        URLに移動。失敗したら False を返す（例外はキャッチ）。
+
+        【ページロードタイムアウト対応】
+        driver.set_page_load_timeout() により PAGE_LOAD_TIMEOUT 秒を超えると
+        TimeoutException が発生する。この場合 window.stop() でブラウザの読み込みを
+        強制停止し、部分ロードされたDOMで処理を続行する（True を返す）。
+        これにより手動でChromeタブを更新しないと再開しないフリーズを防ぐ。
+        """
         try:
             self.driver.get(url)
             return True
+        except TimeoutException:
+            # ページロードタイムアウト: window.stop() で読み込みを停止して続行
+            logger.warning(
+                f"ページロードタイムアウト ({config.PAGE_LOAD_TIMEOUT}秒): {url}"
+                " → window.stop() で強制停止して続行"
+            )
+            try:
+                self.driver.execute_script("window.stop();")
+            except Exception:
+                pass
+            return True  # 部分ロードでも _wait_for_page_content でリトライ判定する
         except Exception as e:
             logger.warning(f"ページ移動失敗 {url}: {e}")
             self.dm.add_error(f"移動失敗: {url}: {e}")
