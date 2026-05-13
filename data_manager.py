@@ -51,6 +51,10 @@ class DataManager:
         # 商品データ辞書 {item_id: item_dict}
         self._items: Dict[str, dict] = {}
 
+        # 実行Mac のホスト名（複数Macで同じGoogle Driveを使う場合に識別用）
+        import socket as _socket
+        _hostname = _socket.gethostname()
+
         # 進捗データ
         self._progress = {
             "session_id": session_id,
@@ -58,6 +62,8 @@ class DataManager:
             "updated_at": datetime.now().isoformat(),
             "status": "idle",           # idle / scraping_list / scraping_detail / done / stopped
             "keyword": "",
+            "source_keyword": "",       # STEP2/3 の場合: 元になった STEP1 キーワード名
+            "machine_name": _hostname,  # 実行したMacのホスト名（複数Mac識別用）
             "current_url": "",
             "pages_done": 0,
             "total_pages": 0,

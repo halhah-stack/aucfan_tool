@@ -1642,10 +1642,14 @@ async function loadSellerHistory() {
   listEl.innerHTML = sessions.map(s => {
     const dis = s.is_running ? 'disabled' : '';
     const disTitle = s.is_running ? 'スクレイピング中は選択できません' : '';
+    // Mac名（ホスト名）とSTEP1キーワードを組み合わせて表示ラベルを作る
+    const macLabel = s.machine_name ? `💻 ${escHtml(s.machine_name)}` : '';
+    const kwLabel  = s.source_keyword ? `🔑 ${escHtml(s.source_keyword)}` : '';
+    const subLabel = [macLabel, kwLabel].filter(Boolean).join('　');
     return `
     <div class="session-row">
       <div class="session-row-info">
-        <div class="session-row-keyword" style="font-size:12px">🏪 セラー分析</div>
+        <div class="session-row-keyword" style="font-size:12px">🏪 セラー分析${subLabel ? `<span style="margin-left:6px;color:#6b7280;font-weight:normal">${subLabel}</span>` : ''}</div>
         <div class="session-row-meta">
           <span class="meta-count">${(s.total_items || 0).toLocaleString()}件</span>
           <span class="meta-date">${escHtml(s.date_str)}</span>

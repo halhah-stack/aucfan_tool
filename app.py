@@ -96,6 +96,7 @@ _seller_state = {
     "dm": None,           # 実行中の DataManager（/api/seller/status でのポーリング用）
     "session_id": None,   # 完了セッション ID（履歴表示用）
     "output_dir": None,   # 完了セッション出力ディレクトリ（Path）
+    "source_keyword": "", # 元になった STEP1 キーワード名（セッション履歴の表示に使用）
 }
 _seller_lock = threading.Lock()
 
@@ -1824,12 +1825,14 @@ def api_seller_ids_from_session(session_name):
                         url = str(item.get("seller_url", "")).strip()
                         seen[sid] = "" if url.lower() in ("nan", "") else url
                 sellers = [{"seller_id": s, "seller_url": u, "status": "pending"} for s, u in seen.items()]
+                src_kw = _parse_session_info(session_name).get("label", session_name)
                 with _seller_lock:
                     _seller_state["sellers"] = sellers
                     _seller_state["current_index"] = -1
                     _seller_state["running"] = False
                     _seller_state["stop_requested"] = False
                     _seller_state["session_dirs"] = []
+                    _seller_state["source_keyword"] = src_kw
                 return jsonify({
                     "count": len(sellers),
                     "has_seller_url": any(s["seller_url"] for s in sellers),
@@ -1861,12 +1864,14 @@ def api_seller_ids_from_session(session_name):
 
         sellers = [{"seller_id": s, "seller_url": u, "status": "pending"} for s, u in seen.items()]
 
+        src_kw = _parse_session_info(session_name).get("label", session_name)
         with _seller_lock:
             _seller_state["sellers"] = sellers
             _seller_state["current_index"] = -1
             _seller_state["running"] = False
             _seller_state["stop_requested"] = False
             _seller_state["session_dirs"] = []
+            _seller_state["source_keyword"] = src_kw  # STEP2セッションに引き継ぐキーワード名
 
         logger.info(f"セッション({session_name})からセラーID抽出: {len(sellers)}件")
         return jsonify({
@@ -1975,12 +1980,25 @@ def _list_sessions(step: int = None):
         if step is not None and info["step"] != step:
             continue
 
-        # progress.json も results.csv もない空フォルダはリストに出さない
-        # （削除後にGoogleDriveの同期で空フォルダが残る場合などに対応）
         progress_file = d / "progress.json"
-        has_data = progress_file.exists() or (d / "results.csv").exists() or (d / "items.json").exists()
-        if not has_data:
-            continue
+
+        # セッション名パターンに合致するフォルダは他Macのものも含めて表示する。
+        # Google Drive 同期中はファイルが exists()=False になる場合があるため、
+        # 名前パターンで有効セッションと判断したものはデータ確認をスキップする。
+        import re as _re
+        is_valid_session_name = bool(
+            _re.match(r'^S[123]_\d{8}_\d+', d.name) or
+            _re.match(r'^.+_\d{8}_\d{6}$', d.name)
+        )
+
+        if not is_valid_session_name:
+            # 命名規則外のフォルダはデータファイルがある場合のみ表示
+            try:
+                has_data = progress_file.exists() or (d / "results.csv").exists() or (d / "items.json").exists()
+            except Exception:
+                has_data = False
+            if not has_data:
+                continue
 
         p = {}
         if progress_file.exists():
@@ -1990,6 +2008,15 @@ def _list_sessions(step: int = None):
             except Exception:
                 pass
 
+        # データファイルが一切ない完全な空フォルダ（削除残骸）はスキップ
+        if is_valid_session_name and not p:
+            try:
+                has_any_file = any(True for _ in d.iterdir())
+            except Exception:
+                has_any_file = True  # 確認できない場合は表示する（他Macの同期途中）
+            if not has_any_file:
+                continue
+
         sessions.append({
             "name": d.name,
             "step": info["step"],
@@ -1998,6 +2025,8 @@ def _list_sessions(step: int = None):
             "date_str": info["date_str"],
             "num": info["num"],
             "keyword": p.get("keyword", info["label"]),
+            "source_keyword": p.get("source_keyword", ""),   # 元STEP1キーワード
+            "machine_name": p.get("machine_name", ""),       # 実行したMac名
             "status": p.get("status", "unknown"),
             "total_items": p.get("total_items", 0),
             "started_at": p.get("started_at", ""),
@@ -2144,15 +2173,16 @@ def api_seller_ids_from_current_session():
         for sid, url in seen.items()
     ]
 
+    keyword = dm.get_progress().get("keyword", "（不明）")
     with _seller_lock:
         _seller_state["sellers"] = sellers
         _seller_state["current_index"] = -1
         _seller_state["running"] = False
         _seller_state["stop_requested"] = False
         _seller_state["session_dirs"] = []
+        _seller_state["source_keyword"] = keyword  # STEP2セッションに引き継ぐキーワード名
 
     has_seller_url = any(s["seller_url"] for s in sellers)
-    keyword = dm.get_progress().get("keyword", "（不明）")
     logger.info(f"現在のセッション({keyword})からセラーID抽出: {len(sellers)}件")
 
     return jsonify({
@@ -2347,12 +2377,17 @@ def _run_seller_analysis(stop_ev: threading.Event):
 
     with _seller_lock:
         sellers = list(_seller_state["sellers"])
+        source_keyword = _seller_state.get("source_keyword", "")
 
     # 1 セッションフォルダを作成 (S2_YYYYMMDD_NN)
     out_dir, session_id = make_output_dir("seller_analysis", step=2)
     dm = DataManager(session_id, out_dir)
     img = ImageProcessor(out_dir / "images")
     gc = GeminiClient()
+
+    # 元キーワードをセッション情報として記録（セッション履歴で表示するため）
+    if source_keyword:
+        dm.update_progress(source_keyword=source_keyword)
 
     with _seller_lock:
         _seller_state["session_id"] = session_id
