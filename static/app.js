@@ -2246,6 +2246,29 @@ async function loadMasterSellers() {
   updateMasterBatchPreview();
 }
 
+// ─── 手動追加 ───
+async function addMasterSellerManual() {
+  const textarea = document.getElementById('masterAddInput');
+  if (!textarea) return;
+  const raw = textarea.value.trim();
+  if (!raw) { showToast('セラーIDを入力してください', 'error'); return; }
+
+  // 改行・カンマ・スペースで分割して重複除去
+  const ids = [...new Set(
+    raw.split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean)
+  )];
+  if (ids.length === 0) { showToast('有効なセラーIDがありません', 'error'); return; }
+
+  const res = await fetchJSON('/api/master_sellers/add', 'POST', { seller_ids: ids, source_keyword: '手動追加' });
+  if (res.success) {
+    showToast(`✅ ${res.added}件追加しました（入力${res.total}件）`);
+    textarea.value = '';
+    loadMasterSellers();
+  } else {
+    showToast('❌ ' + (res.error || '追加失敗'), 'error');
+  }
+}
+
 // ─── 全件削除 ───
 async function deleteAllMasterSellers() {
   const total = parseInt(document.getElementById('masterTotal')?.textContent || '0', 10);

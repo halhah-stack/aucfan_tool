@@ -411,6 +411,20 @@
       </div>
     </div>
 
+    <!-- 手動追加フォーム -->
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:8px">
+      <div style="font-size:12px;color:#374151;font-weight:600;margin-bottom:6px">➕ セラーIDを手動追加</div>
+      <div style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap">
+        <textarea id="masterAddInput" rows="2"
+          placeholder="セラーIDを入力（複数の場合は改行・カンマ・スペース区切り）"
+          style="flex:1;min-width:200px;font-size:12px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;resize:vertical"></textarea>
+        <button class="btn btn-success btn-sm" onclick="addMasterSellerManual()" style="white-space:nowrap">追加</button>
+      </div>
+      <div style="font-size:11px;color:#6b7280;margin-top:4px">
+        ※ STEP1完了時に条件を満たしたセラーは自動追加されます（グループ2件以上）
+      </div>
+    </div>
+
     <!-- マージ結果 -->
     <div id="masterMergeResult" style="display:none;margin-bottom:8px">
       <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:8px 14px;font-size:13px;display:flex;align-items:center;justify-content:space-between">

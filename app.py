@@ -1972,48 +1972,56 @@ def _list_sessions(step: int = None):
         if _master_state["running"] and _master_state.get("output_dir"):
             running_names.add(Path(_master_state["output_dir"]).name)
 
+    import re as _re_sess
+    # 有効なセッション名パターン（新形式: S1_20260506_01_キーワード / 旧形式: keyword_20260506_123456）
+    _SESS_PAT = _re_sess.compile(r'^S[123]_\d{8}_\d+|^.+_\d{8}_\d{6}$')
+
     sessions = []
-    for d in sorted(base.iterdir(), reverse=True):
-        if not d.is_dir():
+    try:
+        entries = sorted(base.iterdir(), reverse=True)
+    except Exception as e:
+        logger.warning(f"セッション一覧の読み込みに失敗しました（Google Drive同期中の可能性）: {e}")
+        return []
+
+    for d in entries:
+        try:
+            if not d.is_dir():
+                continue
+        except Exception:
             continue
+
         info = _parse_session_info(d.name)
         if step is not None and info["step"] != step:
             continue
 
         progress_file = d / "progress.json"
-
-        # セッション名パターンに合致するフォルダは他Macのものも含めて表示する。
-        # Google Drive 同期中はファイルが exists()=False になる場合があるため、
-        # 名前パターンで有効セッションと判断したものはデータ確認をスキップする。
-        import re as _re
-        is_valid_session_name = bool(
-            _re.match(r'^S[123]_\d{8}_\d+', d.name) or
-            _re.match(r'^.+_\d{8}_\d{6}$', d.name)
-        )
+        is_valid_session_name = bool(_SESS_PAT.match(d.name))
 
         if not is_valid_session_name:
             # 命名規則外のフォルダはデータファイルがある場合のみ表示
             try:
-                has_data = progress_file.exists() or (d / "results.csv").exists() or (d / "items.json").exists()
+                has_data = (progress_file.exists() or
+                            (d / "results.csv").exists() or
+                            (d / "items.json").exists())
             except Exception:
                 has_data = False
             if not has_data:
                 continue
 
         p = {}
-        if progress_file.exists():
-            try:
-                with open(progress_file) as f:
+        try:
+            if progress_file.exists():
+                with open(progress_file, encoding="utf-8") as f:
                     p = json.load(f)
-            except Exception:
-                pass
+        except Exception:
+            pass  # Google Drive 同期中で読み込めない場合はスキップせず空データで続行
 
-        # データファイルが一切ない完全な空フォルダ（削除残骸）はスキップ
+        # 完全に空（ファイルなし）なフォルダは削除残骸とみなしてスキップ
         if is_valid_session_name and not p:
             try:
                 has_any_file = any(True for _ in d.iterdir())
             except Exception:
-                has_any_file = True  # 確認できない場合は表示する（他Macの同期途中）
+                has_any_file = True  # 確認できない場合は表示する
             if not has_any_file:
                 continue
 
@@ -2537,6 +2545,35 @@ def api_seller_scrape_reset():
 # ─────────────────────────────────────────────
 # STEP 3: マスターセラーリサーチ
 # ─────────────────────────────────────────────
+
+@app.route("/api/master_sellers/add", methods=["POST"])
+def api_master_sellers_add():
+    """
+    セラーIDを手動でマスターリストに追加する。
+    リクエスト: {"seller_ids": ["id1", "id2", ...], "source_keyword": "任意メモ"}
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    raw = data.get("seller_ids", [])
+    source_keyword = data.get("source_keyword", "手動追加")
+    # 文字列1件でも受け付けられるよう正規化
+    if isinstance(raw, str):
+        raw = [raw]
+    seller_ids = [s.strip() for s in raw if str(s).strip()]
+    if not seller_ids:
+        return jsonify({"error": "seller_id を1件以上指定してください"}), 400
+    try:
+        added = _sellers_master.upsert_sellers(seller_ids, source_keyword=source_keyword)
+        logger.info(f"マスターリスト手動追加: {added}件追加 (入力{len(seller_ids)}件)")
+        return jsonify({
+            "success": True,
+            "added": added,
+            "total": len(seller_ids),
+            "stats": _sellers_master.stats(),
+        })
+    except Exception as e:
+        logger.error(f"マスターリスト手動追加エラー: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/master_sellers")
 def api_master_sellers():
