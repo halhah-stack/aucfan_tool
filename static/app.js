@@ -927,7 +927,7 @@ function renderNgList(ngGroups) {
           ? '<span class="ng-badge ng-badge-text">📝 テキスト NG</span>'
           : '<span class="ng-badge ng-badge-manual">手動 NG</span>';
       const thumbHtml = thumb
-        ? `<img class="ng-thumb" src="${thumb}" alt=""
+        ? `<img class="ng-thumb" src="${thumb}" alt="" loading="lazy"
                onerror="this.outerHTML='<div class=ng-thumb-placeholder>📦</div>'">`
         : '<div class="ng-thumb-placeholder">📦</div>';
       const countBadge = g.count > 1
@@ -999,7 +999,7 @@ function renderGroupCard(group) {
 
   const thumbs = thumbItems.map(item => {
     const thumb = `/images/${getFilename(item.thumbnail_local)}`;
-    return `<img class="card-thumb" src="${thumb}" alt=""
+    return `<img class="card-thumb" src="${thumb}" alt="" loading="lazy"
                  onerror="this.outerHTML='<div class=card-thumb-placeholder>📦</div>'"
                  onclick="openItemDetail('${item.item_id}')">`;
   }).join('') || '<div class="card-thumb-placeholder">📦</div>';
