@@ -252,6 +252,13 @@ MAX_PHASH_ITEMS = int(os.getenv("MAX_PHASH_ITEMS", "15000"))
 # セラー数が多い場合（例: 20セラー×2,500件=50,000件）はスキップが発動する。
 IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "10"))  # 画像DLタイムアウト(秒)
 
+# ローカル画像キャッシュ（Google Driveの外に保存することで高速表示・別Mac閲覧に対応）
+# 各Macが個別に持つキャッシュ。セッションをロードすると不足画像をバックグラウンドで自動DL。
+# .env に LOCAL_IMAGE_CACHE_DIR=/path/to/dir を記載して変更可能。
+LOCAL_IMAGE_CACHE_DIR = Path(os.path.expanduser(
+    os.getenv("LOCAL_IMAGE_CACHE_DIR", "~/Downloads/aucfan_images")
+))
+
 # ─────────────────────────────────────────────
 # Gemini API 設定
 # ─────────────────────────────────────────────

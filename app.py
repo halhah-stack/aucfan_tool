@@ -143,11 +143,18 @@ def index():
 
 @app.route("/images/<path:filename>")
 def serve_image(filename):
-    """保存済み画像を配信"""
-    if _session_output_dir is None:
-        abort(404)
-    images_dir = _session_output_dir / "images"
-    return send_from_directory(str(images_dir), filename)
+    """保存済み画像を配信（ローカルキャッシュ優先 → セッションフォルダのフォールバック）"""
+    # 1. ローカルキャッシュ（高速・Google Drive外）を優先
+    local_cache = Path(config.LOCAL_IMAGE_CACHE_DIR)
+    local_file = local_cache / filename
+    if local_file.exists():
+        return send_from_directory(str(local_cache), filename)
+    # 2. セッションフォルダ内（旧形式・Google Drive）にフォールバック
+    if _session_output_dir is not None:
+        session_images = _session_output_dir / "images"
+        if (session_images / filename).exists():
+            return send_from_directory(str(session_images), filename)
+    abort(404)
 
 
 # ─────────────────────────────────────────────
@@ -173,7 +180,7 @@ def api_start():
         out_dir, session_id = make_output_dir(keyword, step=1)
         _session_output_dir = out_dir
         _data_manager = DataManager(session_id, out_dir)
-        _image_processor = ImageProcessor(out_dir / "images")
+        _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR))
         _gemini_client = GeminiClient()
 
         # 再開の場合は前回データをロード
@@ -810,7 +817,7 @@ def _save_export_files(dm, output_dir: Path):
     )
 
     session_name = output_dir.name   # 例: S1_20260508_01_LEDライト
-    images_dir   = output_dir / "images"
+    images_dir   = Path(config.LOCAL_IMAGE_CACHE_DIR)
 
     # ── CSV ──
     try:
@@ -875,7 +882,7 @@ def api_export_html():
     if not dm:
         return jsonify({"error": "データがありません"}), 400
 
-    images_dir = _session_output_dir / "images" if _session_output_dir else None
+    images_dir = Path(config.LOCAL_IMAGE_CACHE_DIR)
     html = _generate_export_html(dm, images_dir)
     if not html:
         return jsonify({"error": "商品データがありません"}), 400
@@ -905,7 +912,7 @@ def api_export_html_offline():
     if not dm:
         return jsonify({"error": "データがありません"}), 400
 
-    images_dir = _session_output_dir / "images" if _session_output_dir else None
+    images_dir = Path(config.LOCAL_IMAGE_CACHE_DIR)
     # ?filter=active のとき候補・OK・要確認のみ出力（軽量化）
     only_active = request.args.get("filter") == "active"
     html = _generate_offline_html(dm, images_dir, only_active=only_active)
@@ -1229,7 +1236,7 @@ def api_export_html_offline_gdrive():
         if not dm:
             return jsonify({"success": False, "message": "データがありません"}), 400
 
-    images_dir = _session_output_dir / "images" if _session_output_dir else None
+    images_dir = Path(config.LOCAL_IMAGE_CACHE_DIR)
 
     # リクエストボディの filter フィールドで候補のみ軽量エクスポートに切り替える
     body = request.get_json(silent=True) or {}
@@ -1368,7 +1375,7 @@ def api_load_csv():
 
         with _lock:
             _data_manager = dm
-            _image_processor = ImageProcessor(out_dir / "images")
+            _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR))
             _gemini_client = GeminiClient()
             _session_output_dir = out_dir
 
@@ -1722,7 +1729,7 @@ def api_session_export_iphone(session_name):
         if tmp_dm.total_items == 0:
             return jsonify({"success": False, "message": "商品データが空です"}), 400
 
-        images_dir = session_dir / "images"
+        images_dir = Path(config.LOCAL_IMAGE_CACHE_DIR)
 
         # iPhone 用 HTML 生成（base64 画像埋め込み）
         html_iphone = _generate_offline_html(tmp_dm, images_dir)
@@ -1899,14 +1906,62 @@ def api_load_session(session_name):
     _session_output_dir = session_dir
     _data_manager = DataManager(session_name, session_dir)
     _data_manager.load_previous_session()
-    _image_processor = ImageProcessor(session_dir / "images")
+    _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR))
     _gemini_client = GeminiClient()
+
+    # バックグラウンドで不足画像をローカルキャッシュにDL
+    t = threading.Thread(
+        target=_background_image_sync,
+        args=(_data_manager,),
+        daemon=True,
+        name="image-sync",
+    )
+    t.start()
 
     return jsonify({
         "success": True,
         "session": session_name,
         "total_items": _data_manager.total_items,
     })
+
+
+def _background_image_sync(dm: DataManager):
+    """
+    セッション読み込み時にローカルキャッシュに不足している画像を
+    バックグラウンドで AucFan から再ダウンロードする。
+
+    【動作】
+      items.json の thumbnail_url を参照し、
+      LOCAL_IMAGE_CACHE_DIR に同名ファイルがなければダウンロードする。
+      既にキャッシュ済みのファイルはスキップするため 2 回目以降は高速。
+    """
+    import hashlib as _hs
+    cache_dir = Path(config.LOCAL_IMAGE_CACHE_DIR)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    ip = ImageProcessor(cache_dir)
+
+    items = dm.get_all_items()
+    missing = []
+    for item in items:
+        url = item.get("thumbnail_url", "")
+        if not url:
+            continue
+        url_hash = _hs.md5(url.encode()).hexdigest()[:12]
+        ext = ip._get_extension(url)
+        if not (cache_dir / f"thumb_{url_hash}{ext}").exists():
+            missing.append(url)
+
+    if not missing:
+        logger.debug("[画像キャッシュ] 全画像キャッシュ済み")
+        return
+
+    logger.info(f"[画像キャッシュ] {len(missing)}件をバックグラウンドDL開始")
+    for url in missing:
+        try:
+            ip.download_image(url, prefix="thumb")
+        except Exception as e:
+            logger.debug(f"[画像キャッシュ] DL失敗: {url} ({e})")
+    logger.info("[画像キャッシュ] バックグラウンドDL完了")
 
 
 def _parse_session_info(name: str) -> dict:
@@ -2390,7 +2445,7 @@ def _run_seller_analysis(stop_ev: threading.Event):
     # 1 セッションフォルダを作成 (S2_YYYYMMDD_NN)
     out_dir, session_id = make_output_dir("seller_analysis", step=2)
     dm = DataManager(session_id, out_dir)
-    img = ImageProcessor(out_dir / "images")
+    img = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR))
     gc = GeminiClient()
 
     # 元キーワードをセッション情報として記録（セッション履歴で表示するため）
@@ -2716,7 +2771,7 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
 
     out_dir, session_id = make_output_dir("master_analysis", step=3)
     dm = DataManager(session_id, out_dir)
-    img = ImageProcessor(out_dir / "images")
+    img = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR))
     gc = GeminiClient()
 
     with _master_lock:
@@ -2886,7 +2941,7 @@ def _auto_load_latest_session():
         _session_output_dir = latest_dir
         _data_manager = DataManager(session_name, latest_dir)
         _data_manager.load_previous_session()
-        _image_processor = ImageProcessor(latest_dir / "images")
+        _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR))
         _gemini_client = GeminiClient()
         logger.info(
             f"[起動時自動ロード] セッション: {session_name}"
