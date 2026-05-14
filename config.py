@@ -17,6 +17,7 @@ config.py — AucFan リサーチツール 全設定値
   CSS セレクター   : SELECTORS（AucFan のサイト改修時にここを更新する）
 """
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
