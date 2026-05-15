@@ -1918,17 +1918,7 @@ def api_load_session(session_name):
     _session_output_dir = session_dir
     _data_manager = DataManager(session_name, session_dir)
     _data_manager.load_previous_session()
-    _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / session_name)
     _gemini_client = GeminiClient()
-
-    # バックグラウンドで不足画像をローカルキャッシュにDL
-    t = threading.Thread(
-        target=_background_image_sync,
-        args=(_data_manager, session_dir),
-        daemon=True,
-        name="image-sync",
-    )
-    t.start()
 
     return jsonify({
         "success": True,
@@ -1937,65 +1927,6 @@ def api_load_session(session_name):
     })
 
 
-def _background_image_sync(dm: DataManager, session_dir: Path):
-    """
-    セッション読み込み時に画像をローカルキャッシュへ同期する。
-
-    【優先順位】
-      1. Google Driveのセッションフォルダ内の画像をローカルにコピー（高速）
-      2. コピーできなかった画像のみ AucFan から再DL（別Macのセッション向け）
-
-    【フォルダ構成】
-      ~/Downloads/aucfan_images/<session_name>/thumb_xxx.jpg
-      セッションごとにサブフォルダを作成して整理する。
-    """
-    session_name = session_dir.name
-    cache_dir = Path(config.LOCAL_IMAGE_CACHE_DIR) / session_name
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    ip = ImageProcessor(cache_dir)
-
-    # ① セッションフォルダ（Google Drive）からローカルにコピー（高速パス）
-    src_images = session_dir / "images"
-    copied = 0
-    try:
-        if src_images.exists():
-            for img_file in src_images.iterdir():
-                dest = cache_dir / img_file.name
-                if not dest.exists():
-                    try:
-                        shutil.copy2(img_file, dest)
-                        copied += 1
-                    except Exception:
-                        pass
-    except Exception as e:
-        logger.debug(f"[画像キャッシュ] Google Driveコピー失敗: {e}")
-    if copied > 0:
-        logger.info(f"[画像キャッシュ] {copied}件をローカルにコピー完了")
-
-    # ② コピーで不足した画像のみ AucFan から再DL
-    import hashlib as _hs
-    items = dm.get_all_items()
-    missing = []
-    for item in items:
-        url = item.get("thumbnail_url", "")
-        if not url:
-            continue
-        url_hash = _hs.md5(url.encode()).hexdigest()[:12]
-        ext = ip._get_extension(url)
-        if not (cache_dir / f"thumb_{url_hash}{ext}").exists():
-            missing.append(url)
-
-    if not missing:
-        logger.debug("[画像キャッシュ] 全画像キャッシュ済み")
-        return
-
-    logger.info(f"[画像キャッシュ] {len(missing)}件をAucFanから再DL開始")
-    for url in missing:
-        try:
-            ip.download_image(url, prefix="thumb")
-        except Exception:
-            pass  # 404等は無視（オークション終了済み）
-    logger.info("[画像キャッシュ] 再DL完了")
 
 
 def _parse_session_info(name: str) -> dict:
@@ -2954,7 +2885,7 @@ def _auto_load_latest_session():
     前回のスクレイピング結果をすぐに表示できるようにする。
     セッションが存在しない場合は何もしない。
     """
-    global _data_manager, _image_processor, _gemini_client, _session_output_dir
+    global _data_manager, _gemini_client, _session_output_dir
 
     base = Path(config.OUTPUT_BASE_DIR)
     if not base.exists():
@@ -2975,19 +2906,11 @@ def _auto_load_latest_session():
         _session_output_dir = latest_dir
         _data_manager = DataManager(session_name, latest_dir)
         _data_manager.load_previous_session()
-        _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / session_name)
         _gemini_client = GeminiClient()
         logger.info(
             f"[起動時自動ロード] セッション: {session_name}"
             f" ({_data_manager.total_items}件)"
         )
-        # バックグラウンドで不足画像をローカルキャッシュに同期
-        threading.Thread(
-            target=_background_image_sync,
-            args=(_data_manager, latest_dir),
-            daemon=True,
-            name="image-sync-startup",
-        ).start()
     except Exception as e:
         logger.warning(f"[起動時自動ロード] 失敗（スキップ）: {e}")
         # ロード失敗してもFlaskは起動する
