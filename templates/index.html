@@ -503,6 +503,9 @@
       <button class="btn btn-secondary btn-sm" id="btnExportOfflineHtmlActive" onclick="exportOfflineHtml(true)" title="候補・OK・要確認のみ出力して軽量化（iPhone Safariで開けないときはこちら）">
         📱 HTML保存（候補のみ・軽量）
       </button>
+      <button class="btn btn-secondary btn-sm" id="btnExportPdf" onclick="exportPdf()" title="仕入れ候補・次期候補を件数順→価格順でPDF出力（iPhoneのファイルアプリで開けます）">
+        📄 PDF保存（iPhone用）
+      </button>
       <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="results.csv を読み込んでグリッドに表示します">
         📂 CSV読み込み
         <input type="file" id="gridCsvInput" accept=".csv" style="display:none" onchange="loadGridFromCsv(this)">

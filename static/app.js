@@ -1236,6 +1236,42 @@ async function exportHtml() {
  *
  * @param {boolean} [onlyActive=false] - true のとき候補・OK・要確認のみ出力して軽量化する
  */
+// ─────────────────────────────────────────────
+// PDF エクスポート（iPhone用・仕入れ候補・次期候補）
+// ─────────────────────────────────────────────
+async function exportPdf() {
+  const btn = document.getElementById('btnExportPdf');
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ PDF生成中...'; }
+  showToast('📄 PDF生成中... 画像処理に少し時間がかかります');
+
+  try {
+    const res = await fetch('/api/export/pdf');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      showToast('❌ ' + (err.error || 'PDF生成失敗'), 'error');
+      return;
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    let filename = 'aucfan_仕入れ候補.pdf';
+    const match = disposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
+    if (match) filename = decodeURIComponent(match[1].replace(/"/g, '').trim());
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('✅ PDF保存完了（' + filename + '）');
+  } catch (e) {
+    showToast('❌ PDF書き出しエラー: ' + e, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel || '📄 PDF保存（iPhone用）'; }
+  }
+}
+
 async function exportOfflineHtml(onlyActive = false) {
   const btnId = onlyActive ? 'btnExportOfflineHtmlActive' : 'btnExportOfflineHtml';
   const btn = document.getElementById(btnId);

@@ -870,6 +870,28 @@ def _save_export_files(dm, output_dir: Path):
     except Exception as e:
         logger.error(f"HTML自動保存エラー(iPhone用): {e}")
 
+    # ── PDF（仕入れ候補・次期候補 / 件数降順→価格降順） ──
+    try:
+        from pdf_exporter import generate_pdf
+        pdf_bytes = generate_pdf(dm, output_dir)
+        if pdf_bytes:
+            # セッションフォルダに保存
+            pdf_path = output_dir / "result.pdf"
+            pdf_path.write_bytes(pdf_bytes)
+            logger.info(f"自動PDF保存: {pdf_path}")
+            # Google Drive ルートにもコピー
+            gdrive_pdf = _GDRIVE_DIR / f"{session_name}_仕入れ候補.pdf"
+            try:
+                gdrive_pdf.parent.mkdir(parents=True, exist_ok=True)
+                gdrive_pdf.write_bytes(pdf_bytes)
+                logger.info(f"Google Drive PDF保存: {gdrive_pdf}")
+            except Exception as e2:
+                logger.warning(f"Google Drive PDF保存スキップ: {e2}")
+        else:
+            logger.info("PDF出力スキップ（候補グループなし）")
+    except Exception as e:
+        logger.error(f"PDF自動保存エラー: {e}")
+
 
 def _gdrive_copy_html(html_content: str, dest_path: Path, label: str = ""):
     """
@@ -909,6 +931,38 @@ def api_export_html():
     filename = f"{session_id}_Mac用.html"
 
     response = Response(html, mimetype="text/html; charset=utf-8")
+    response.headers["Content-Disposition"] = (
+        f"attachment; filename*=UTF-8''{quote(filename)}"
+    )
+    return response
+
+
+@app.route("/api/export/pdf")
+def api_export_pdf():
+    """
+    PDF エクスポート（手動ダウンロード用）。
+    仕入れ候補・次期候補を件数降順→価格降順で A4 縦 2 カラム PDF に書き出す。
+    """
+    from urllib.parse import quote
+    from pdf_exporter import generate_pdf
+
+    dm = get_dm()
+    if not dm:
+        return jsonify({"error": "データがありません"}), 400
+
+    # 画像は現在のセッションフォルダ内 images/ を参照
+    session_dir = _session_output_dir
+    if session_dir is None:
+        return jsonify({"error": "セッションが読み込まれていません"}), 400
+
+    pdf_bytes = generate_pdf(dm, session_dir)
+    if not pdf_bytes:
+        return jsonify({"error": "出力対象グループがありません（候補・次期候補 0件）"}), 400
+
+    session_name = session_dir.name
+    filename = f"{session_name}_仕入れ候補.pdf"
+
+    response = Response(pdf_bytes, mimetype="application/pdf")
     response.headers["Content-Disposition"] = (
         f"attachment; filename*=UTF-8''{quote(filename)}"
     )
