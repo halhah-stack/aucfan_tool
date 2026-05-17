@@ -328,6 +328,23 @@ class AucFanScraper:
                         # 全リトライがタイムアウト → ページ読み込み失敗扱いでスキップ
                         logger.warning(f"[一覧] ページ {page}: 全リトライタイムアウト → スキップ")
                         # consecutive_errors はカウントしない
+                        #
+                        # ★ タイムアウト時は _get_next_page_url() をスキップする ★
+                        # タイムアウト後のブラウザには前のページの古いDOMが残っており、
+                        # _get_next_page_url() がそこから別セラー・別URLの「次へ」リンクを
+                        # 拾ってしまうバグを防ぐ。
+                        # current_url から直接次ページURLを構築して continue する。
+                        next_url = self._build_page_url_aucfan(current_url, page + 1)
+                        if not next_url:
+                            break
+                        current_url = next_url
+                        page += 1
+                        self._random_wait()
+                        if not self._navigate(current_url):
+                            consecutive_errors += 1
+                            if consecutive_errors >= 5:
+                                break
+                        continue
                     elif self._last_condition_filtered > 0:
                         # 商品状態フィルタのみで全除外 → 次ページへ（エラーカウントしない）
                         logger.info(
