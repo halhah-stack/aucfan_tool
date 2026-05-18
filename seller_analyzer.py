@@ -110,12 +110,14 @@ class SellerAnalyzer(AucFanScraper):
 
                 seller_id = seller["seller_id"]
                 seller_url = seller.get("seller_url", "").strip()
-                if not seller_url:
-                    seller_url = (
-                        f"https://aucfan.com/search1/?aucnm={seller_id}"
-                    )
+                # seller_url 未設定 or 旧形式(?aucnm=)の場合は正しい形式に補正する
+                # 正しい形式: search1/s-ya/?seller=SELLER_ID&shopid=
+                # 旧形式(?aucnm=)はAucFanに認識されず「安いバイク」ページが表示される
+                if not seller_url or ("aucnm=" in seller_url and "seller=" not in seller_url):
+                    old_url = seller_url or "(空)"
+                    seller_url = f"https://aucfan.com/search1/s-ya/?seller={seller_id}&shopid="
                     logger.info(
-                        f"seller_url 未設定 → フォールバック URL: {seller_url}"
+                        f"seller_url 補正: {old_url} → {seller_url}"
                     )
 
                 total = len(self.sellers)
