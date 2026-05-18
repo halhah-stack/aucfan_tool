@@ -2807,7 +2807,7 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
             "seller_id": r["seller_id"],
             "seller_url": (
                 r.get("seller_url", "").strip()
-                or f"https://aucfan.com/search1/?aucnm={r['seller_id']}"
+                or f"https://aucfan.com/search1/s-ya/?seller={r['seller_id']}&shopid="
             ),
             "status": "pending",
         }

@@ -810,6 +810,10 @@ class AucFanScraper:
             seller_href = seller_el.get("href", "")
             if seller_href:
                 seller_url = seller_href if seller_href.startswith("http") else urljoin(base_url, seller_href)
+        # ?aucnm= 形式のURLは商品が表示されないため正しい形式に変換する
+        # 正しい形式: search1/s-ya/?seller=SELLER_ID&shopid=
+        if seller_id and seller_url and "aucnm=" in seller_url and "seller=" not in seller_url:
+            seller_url = f"https://aucfan.com/search1/s-ya/?seller={seller_id}&shopid="
 
         # 画像URL（AucFanは data-src-original で遅延読み込み）
         img_el = self._find_element_soup(card, config.SELECTORS["list"]["image"])
