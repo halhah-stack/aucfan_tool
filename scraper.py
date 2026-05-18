@@ -425,7 +425,12 @@ class AucFanScraper:
                     self.dm.save_all()
 
                 # 次のページへ
-                next_url = self._get_next_page_url(current_url, page)
+                # セラーURL（seller=含む）はDOMから次ページリンクを読まず直接生成する。
+                # DOMには別URLのo=pNリンクが混在するため誤取得するバグを防ぐ。
+                if "seller=" in start_url:
+                    next_url = self._build_page_url_aucfan(current_url, page + 1)
+                else:
+                    next_url = self._get_next_page_url(current_url, page)
                 if not next_url:
                     logger.info("[一覧] 次のページが見つかりません。一覧取得完了。")
                     break
