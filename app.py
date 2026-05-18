@@ -2799,10 +2799,16 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
         _master_state["dm"] = dm
 
     # SellerAnalyzer に渡す形式に変換
+    # seller_url は sellers_master.json に保存済みのURLを優先して使用する。
+    # 保存されていない場合（旧データ）は ?aucnm= フォールバックURLを使うが、
+    # このURLは商品が表示されないケースがあるため、STEP1を再実行してURLを取得推奨。
     sellers_for_analyzer = [
         {
             "seller_id": r["seller_id"],
-            "seller_url": f"https://aucfan.com/search1/?aucnm={r['seller_id']}",
+            "seller_url": (
+                r.get("seller_url", "").strip()
+                or f"https://aucfan.com/search1/?aucnm={r['seller_id']}"
+            ),
             "status": "pending",
         }
         for r in targets

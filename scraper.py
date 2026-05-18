@@ -252,7 +252,18 @@ class AucFanScraper:
                     and int(i.get("group_size") or 1) >= min_gs
                 })
                 if qualified_sids:
-                    added = SellersMaster().upsert_sellers(qualified_sids, source_keyword=keyword)
+                    # seller_id -> seller_url の辞書を構築（最初に見つかったURLを使用）
+                    seller_url_map = {}
+                    for i in all_items:
+                        sid = str(i.get("seller_id", "")).strip()
+                        url = str(i.get("seller_url", "")).strip()
+                        if sid and url and sid not in seller_url_map:
+                            seller_url_map[sid] = url
+                    added = SellersMaster().upsert_sellers(
+                        qualified_sids,
+                        source_keyword=keyword,
+                        seller_urls=seller_url_map,
+                    )
                     logger.info(
                         f"マスターリストに{added}件追加"
                         f"（グループ{min_gs}件以上セラー{len(qualified_sids)}件"
