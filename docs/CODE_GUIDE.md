@@ -341,17 +341,11 @@ _login_check_event   # ログイン即時確認トリガー（threading.Event）
 | `/api/login_check` | POST | UIの「今すぐ確認して再開」ボタンから呼び出す。`_login_check_event.set()` してスクレイパーの30秒待機ループを即時起動する。STEP1/2/3共通 |
 | `/api/export/csv` | GET | 現在セッションをCSVエクスポート |
 | `/api/export/html` | GET | 現在セッションをHTMLエクスポート（Mac用・画像はサーバー経由） |
-| `/api/export/html_offline` | GET | 現在セッションをオフラインHTML（iPhone/iPad用）としてブラウザダウンロード。`?filter=active` クエリを付けると候補・OK・要確認のみ出力して軽量化 |
-| `/api/export/html_offline_gdrive` | POST | オフラインHTMLをGoogle Drive `AucFanToolData` フォルダに保存（iPhone/Mac両方から押せる）。リクエストボディ `{"filter":"active"}` で軽量版出力 |
 | `/api/gemini_status` | GET | 直近のGemini APIエラー情報を返す（フロントエンドのポーリング用） |
 
 **進捗レスポンスへの `processed_items` フィールド**:
 
 `scrape_status`（STEP 1）、`seller_status`（STEP 2）、`master_status`（STEP 3）の各ステータスレスポンスには `processed_items` フィールドが含まれます。これはスクレイパー側の `_processed_items` カウンター値であり、`app.js` の `updateProgressUI()` / `fetchSellerStatus()` / `fetchMasterStatus()` がこの値を読み取って「X件 / Y件処理済み」カウンターを画面上に更新します。スクレイピング完了時には `app.js` がこのフィールドをもとに緑色の「✅ スクレイピング完了（N件処理）」バナーを表示します（✕ボタンで閉じられます）。
-
-**`_generate_offline_html(dm, images_dir, only_active=False)` 関数**:
-
-`/api/export/html_offline` および `/api/export/html_offline_gdrive` から呼び出されるヘルパー関数です。通常のHTMLエクスポートと異なり、セッションの `images/` ディレクトリにキャッシュ済みの商品画像を読み取り、PIL（Pillow）で **120×120px にリサイズ・JPEG quality=35 で圧縮**してからBase64エンコードして `<img src="data:image/jpeg;base64,...">` として直接埋め込みます。画像1枚あたりのサイズを大幅削減することで iPhone Safari のメモリ制限内で開けるよう設計されています。`only_active=True` を渡すと `candidate` / `next_candidate` / `ok` / `review` のステータス商品のみを出力してさらに軽量化します（`waiting` / `ng` を除外）。ネットワーク接続なしでオフライン閲覧できます（閲覧専用・データ読み込み不可）。
 
 **`/api/gemini_status` エンドポイント仕様**:
 

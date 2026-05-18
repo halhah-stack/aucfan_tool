@@ -215,9 +215,6 @@ async function loadKeywordSessions() {
         <button class="btn btn-secondary btn-sm"
                 title="${disTitle || 'STEP 2にセット'}"
                 ${dis} onclick="sellerIdsFromSession('${escHtml(s.name)}')">→ S2</button>
-        <button class="btn btn-secondary btn-sm"
-                title="iPhone用HTMLをGoogle Driveに保存"
-                ${dis} onclick="exportIphoneHtml('${escHtml(s.name)}', this)">📱</button>
         <button class="btn-delete"
                 title="このセッションを削除（復元不可）"
                 onclick="deleteSession('${escHtml(s.name)}', 1)">🗑</button>
@@ -291,38 +288,6 @@ async function sellerIdsFromSession(sessionName) {
 // ─────────────────────────────────────────────
 // セッション削除
 // ─────────────────────────────────────────────
-
-/**
- * 既存セッションから iPhone 用 HTML を生成して Google Drive に保存する。
- * ボタンを押すとスピナー表示 → API 呼び出し → 完了/失敗をトーストで通知。
- * @param {string} sessionName - セッション名（フォルダ名）
- * @param {Element} btn        - クリックされたボタン要素（処理中に disabled にする）
- */
-async function exportIphoneHtml(sessionName, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
-  showToast(`⏳ iPhone用HTML生成中... (${sessionName})`);
-
-  try {
-    const res = await fetchJSON(
-      `/api/sessions/${encodeURIComponent(sessionName)}/export_iphone`,
-      'POST'
-    );
-
-    if (res.success) {
-      const gdrive = res.gdrive_saved
-        ? 'Google Drive に保存しました ✅'
-        : 'セッションフォルダのみに保存（Google Drive は未接続）';
-      showToast(`📱 iPhone用HTML完了 — ${gdrive}`);
-      if (btn) { btn.textContent = '✅'; }
-    } else {
-      showToast('❌ ' + (res.message || '生成失敗'), 'error');
-      if (btn) { btn.disabled = false; btn.textContent = '📱'; }
-    }
-  } catch (e) {
-    showToast('❌ 通信エラー: ' + e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = '📱'; }
-  }
-}
 
 async function deleteSession(sessionName, step) {
   const { label, dateStr } = parseSessionName(sessionName);
@@ -1272,34 +1237,6 @@ async function exportPdf() {
   }
 }
 
-async function exportOfflineHtml(onlyActive = false) {
-  const btnId = onlyActive ? 'btnExportOfflineHtmlActive' : 'btnExportOfflineHtml';
-  const btn = document.getElementById(btnId);
-  const origLabel = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ 生成中...'; }
-
-  const label = onlyActive ? '候補のみ（軽量）' : '全件';
-  showToast(`📱 iPhone/iPad用HTML生成中（${label}）... Google Driveに保存します`);
-
-  try {
-    const body = onlyActive ? { filter: 'active' } : {};
-    const res = await fetchJSON('/api/export/html_offline_gdrive', 'POST', body);
-    if (res.success) {
-      const where = res.gdrive_saved
-        ? `Google Drive「AucFanToolData」フォルダ ✅`
-        : 'セッションフォルダに保存（Google Drive 未接続）';
-      showToast(`📱 保存完了（${label}） → ${where}`);
-      if (btn) btn.textContent = '✅ 保存済';
-    } else {
-      showToast('❌ ' + (res.message || '書き出し失敗'), 'error');
-      if (btn) { btn.disabled = false; btn.textContent = origLabel; }
-    }
-  } catch (e) {
-    showToast('❌ 書き出しエラー: ' + e, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
-  }
-}
-
 // ─────────────────────────────────────────────
 // セッション管理
 // ─────────────────────────────────────────────
@@ -1699,11 +1636,6 @@ async function loadSellerHistory() {
                 title="${disTitle || '分析結果をグリッドに表示'}"
                 ${dis}
                 onclick="loadSessionToGrid('${escHtml(s.name)}')">📂 表示</button>
-        <button class="btn btn-secondary btn-sm"
-                style="font-size:11px;padding:4px 10px;white-space:nowrap"
-                title="iPhone用HTMLをGoogle Driveに保存"
-                ${dis}
-                onclick="exportIphoneHtml('${escHtml(s.name)}', this)">📱</button>
         <button class="btn-delete"
                 title="このセッションを削除（復元不可）"
                 onclick="deleteSession('${escHtml(s.name)}', 2)">🗑</button>
@@ -1747,10 +1679,6 @@ async function loadStep3History() {
                 title="${disTitle || '結果をグリッドに表示'}"
                 ${dis}
                 onclick="loadSessionToGrid('${escHtml(s.name)}')">📂 表示</button>
-        <button class="btn btn-secondary btn-sm"
-                title="iPhone用HTMLをGoogle Driveに保存"
-                ${dis}
-                onclick="exportIphoneHtml('${escHtml(s.name)}', this)">📱</button>
         <button class="btn-delete"
                 title="このセッションを削除（復元不可）"
                 onclick="deleteSession('${escHtml(s.name)}', 3)">🗑</button>
