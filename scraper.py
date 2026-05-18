@@ -305,6 +305,7 @@ class AucFanScraper:
 
         page = start_page
         consecutive_errors = 0
+        consecutive_timeouts = 0  # 連続タイムアウトカウンター（3回で終了）
 
         while page <= config.MAX_PAGES and not self.stop_event.is_set():
             logger.info(f"[一覧] ページ {page}: {current_url}")
@@ -327,7 +328,18 @@ class AucFanScraper:
                     if all_timed_out:
                         # 全リトライがタイムアウト → ページ読み込み失敗扱いでスキップ
                         logger.warning(f"[一覧] ページ {page}: 全リトライタイムアウト → スキップ")
-                        # consecutive_errors はカウントしない
+                        # consecutive_errors はカウントしない（タイムアウトと空ページは別管理）
+                        #
+                        # ★ 連続タイムアウト3回で終了 ★
+                        # ページ末尾を過ぎると空ページが続いてタイムアウトし続けるため、
+                        # 連続タイムアウトカウンターで早期終了する。
+                        consecutive_timeouts += 1
+                        if consecutive_timeouts >= 3:
+                            logger.info(
+                                f"連続{consecutive_timeouts}回タイムアウト → "
+                                "このセラーの一覧取得を終了します"
+                            )
+                            break
                         #
                         # ★ タイムアウト時は _get_next_page_url() をスキップする ★
                         # タイムアウト後のブラウザには前のページの古いDOMが残っており、
@@ -371,6 +383,7 @@ class AucFanScraper:
                         break
 
                     consecutive_errors = 0
+                    consecutive_timeouts = 0  # 商品取得成功 → タイムアウトカウンターもリセット
                     self._processed_items = self.dm.total_items
                     logger.info(
                         f"[一覧] ページ {page}: {len(items)}件取得"
