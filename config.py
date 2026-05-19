@@ -274,14 +274,24 @@ _GDRIVE_SELLERS = os.path.join(_GDRIVE_ROOT, "sellers_master.json")
 SELLERS_MASTER_PATH = os.getenv("SELLERS_MASTER_PATH", _GDRIVE_SELLERS)
 
 # ─────────────────────────────────────────────
+# Google Drive アップロード設定
+# ─────────────────────────────────────────────
+# GDRIVE_UPLOAD_ENABLED=true  : scraper Mac が画像を GDrive API で直接アップロード（デフォルト）
+# GDRIVE_UPLOAD_ENABLED=false : GDrive へのアップロードを完全に無効化
+#   → GDrive を使わないスタンドアローン運用、または将来的に別の同期手段に切り替える場合
+#   → credentials.json / token.json が不要になる
+#   → google-api-python-client 等の GDrive 系ライブラリも実質不要
+GDRIVE_UPLOAD_ENABLED = os.getenv("GDRIVE_UPLOAD_ENABLED", "true").lower() == "true"
+
+# ─────────────────────────────────────────────
 # サイトロール設定
 # ─────────────────────────────────────────────
 # SITE_ROLE=scraper : 十王Mac（スクレイピング側）
 #   - 画像をローカル(~/Downloads/aucfan_images/)に保存
-#   - スクレイピング後にGDriveの同セッションフォルダ内imagesにもコピー
+#   - GDRIVE_UPLOAD_ENABLED=true のとき GDrive の同セッションフォルダ内 images にもアップロード
 # SITE_ROLE=reader  : 守谷Mac（リード側）
 #   - GDriveをミラーリング済みのため、GDriveのリサーチ結果フォルダを画像パスとして使う
-#   - GDriveコピーは不要（ミラーリングで自動同期）
+#   - GDriveアップロードは不要（ミラーリングで自動同期）
 SITE_ROLE = os.getenv("SITE_ROLE", "scraper")  # デフォルト: scraper
 
 # ローカル画像キャッシュ（アプリはこちらから読む）

@@ -98,39 +98,45 @@ class ImageProcessor:
 
     def _copy_to_gdrive(self, local_path: Path, filename: str):
         """
-        ローカルに保存した画像を Google Drive のセッションフォルダ内にコピーする。
-        SITE_ROLE=scraper（十王Mac）のみ実行。reader（守谷Mac）はGDriveミラーリング済みのためスキップ。
+        ローカルに保存した画像を Google Drive API で直接アップロードする。
+        SITE_ROLE=scraper（十王Mac）かつ GDRIVE_UPLOAD_ENABLED=true のときのみ実行。
 
-        コピー先構成:
+        アップロード先構成:
           GDrive: AucFanToolData/リサーチ結果/セッション名/images/画像ファイル
+
+        【ストリーミングモード対応】
+          GDrive をストリーミングモードで使っている場合、shutil.copy2 は機能しない。
+          Google Drive API で直接アップロードすることでモードに依存しない動作を実現。
+
+        【無効化方法】
+          .env に GDRIVE_UPLOAD_ENABLED=false と記載するだけで GDrive アップロードを完全停止。
+          credentials.json / token.json が不要になる。
+
+        【前提条件（有効時）】
+          - credentials.json を aucfan_tool フォルダに配置済みであること
+          - python setup_gdrive_auth.py で初回認証を完了していること
         """
-        # reader側はGDriveミラーリングで自動同期されるためコピー不要
+        # GDriveアップロードが無効化されている場合はスキップ
+        if not config.GDRIVE_UPLOAD_ENABLED:
+            return
+        # reader側はスキップ（守谷MacはGDriveから直接参照）
         if config.SITE_ROLE != "scraper":
             return
         try:
-            _gdrive_mydrive = (
-                Path.home() / "Library" / "CloudStorage"
-                / "GoogleDrive-shinozakistore@gmail.com"
-                / "マイドライブ"
-            )
-            # マイドライブが存在しない場合はGDrive未接続→スキップ
-            if not _gdrive_mydrive.exists():
-                logger.warning(f"GDrive未接続のためスキップ: {_gdrive_mydrive}")
-                return
-            _gdrive_root = _gdrive_mydrive / "AucFanToolData"
+            import gdrive_uploader
             # self.images_dir = LOCAL_IMAGE_CACHE_DIR/セッション名/images
             # → parent.name = セッション名
             session_id = self.images_dir.parent.name
-            gdrive_images_dir = _gdrive_root / "リサーチ結果" / session_id / "images"
-            if not gdrive_images_dir.exists():
-                gdrive_images_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"GDriveフォルダ作成: {gdrive_images_dir}")
-            dest = gdrive_images_dir / filename
-            if not dest.exists():
-                shutil.copy2(local_path, dest)
-                logger.debug(f"GDriveへコピー: {session_id}/images/{filename}")
+            folder_id = gdrive_uploader.get_or_create_folder_path([
+                "AucFanToolData", "リサーチ結果", session_id, "images"
+            ])
+            if folder_id:
+                gdrive_uploader.upload_file(local_path, folder_id, filename)
+                logger.debug(f"GDriveへアップロード: {session_id}/images/{filename}")
+            else:
+                logger.warning(f"GDriveフォルダID取得失敗のためスキップ: {session_id}/images/")
         except Exception as e:
-            logger.warning(f"GDriveコピー失敗 ({filename}): {e}")
+            logger.warning(f"GDriveアップロード失敗 ({filename}): {e}")
 
     def download_images_batch(
         self, urls: List[str], prefix: str = "img"
