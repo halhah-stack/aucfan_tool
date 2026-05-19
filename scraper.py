@@ -230,6 +230,13 @@ class AucFanScraper:
             logger.info("=" * 50)
             logger.info(f"=== STEP 1 スクレイピング完了 === 全{self.dm.total_items}件処理 ({final_status})")
             logger.info("=" * 50)
+
+            # GDrive へ画像を一括アップロード（スクレイピング完了後にまとめて実行）
+            try:
+                self.img.upload_images_to_gdrive()
+            except Exception as _e:
+                logger.warning(f"GDrive一括アップロードでエラー（スキップ）: {_e}")
+
             logger.info(">>> 待機中 (アプリは起動中) <<<  次の操作をブラウザから行ってください")
 
             # ── マスターセラーリストへ seller_id を追記 ──

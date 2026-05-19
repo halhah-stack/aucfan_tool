@@ -86,10 +86,6 @@ class ImageProcessor:
             img.save(save_path, format="JPEG", quality=85)
 
             logger.debug(f"画像DL成功: {filename}")
-
-            # Google Drive にもコピー（守谷MacのGDriveミラーリング用）
-            self._copy_to_gdrive(save_path, filename)
-
             return save_path
 
         except Exception as e:
@@ -137,6 +133,52 @@ class ImageProcessor:
                 logger.warning(f"GDriveフォルダID取得失敗のためスキップ: {session_id}/images/")
         except Exception as e:
             logger.warning(f"GDriveアップロード失敗 ({filename}): {e}")
+
+    def upload_images_to_gdrive(self):
+        """
+        スクレイピング完了後に images_dir 内の全画像を GDrive へまとめてアップロードする。
+        スクレイピング中は呼ばれない（速度低下を防ぐため）。
+
+        呼び出しタイミング: scraper.py の run() 完了時（done / stopped）
+        """
+        if not config.GDRIVE_UPLOAD_ENABLED:
+            return
+        if config.SITE_ROLE != "scraper":
+            return
+
+        images = list(self.images_dir.glob("*.jpg"))
+        if not images:
+            logger.info("GDriveアップロード対象画像なし")
+            return
+
+        try:
+            import gdrive_uploader
+            session_id = self.images_dir.parent.name
+            folder_id = gdrive_uploader.get_or_create_folder_path([
+                "AucFanToolData", "リサーチ結果", session_id, "images"
+            ])
+            if not folder_id:
+                logger.warning(f"GDriveフォルダID取得失敗: {session_id}/images/")
+                return
+
+            total = len(images)
+            logger.info(f"GDriveへ一括アップロード開始: {total}件")
+            print(f"\n>>> GDriveアップロード中: {total}件 <<<")
+
+            success = 0
+            for i, img_path in enumerate(images, 1):
+                ok = gdrive_uploader.upload_file(img_path, folder_id, img_path.name)
+                if ok:
+                    success += 1
+                if i % 50 == 0:
+                    logger.info(f"GDriveアップロード進捗: {i}/{total}件")
+                    print(f"  アップロード中: {i}/{total}")
+
+            logger.info(f"GDriveアップロード完了: {success}/{total}件")
+            print(f">>> GDriveアップロード完了: {success}/{total}件 <<<\n")
+
+        except Exception as e:
+            logger.warning(f"GDrive一括アップロード失敗: {e}")
 
     def download_images_batch(
         self, urls: List[str], prefix: str = "img"
