@@ -144,28 +144,13 @@ def index():
 @app.route("/images/<path:filename>")
 def serve_image(filename):
     """
-    保存済み画像を配信。検索順序:
-      1. ローカルキャッシュのセッションサブフォルダ  ~/aucfan_images/<session>/
-      2. ローカルキャッシュのルート                  ~/aucfan_images/（旧形式）
-      3. Google Driveセッションフォルダ              （旧形式フォールバック）
+    保存済み画像を配信。
+    構成: LOCAL_IMAGE_CACHE_DIR / セッション名 / images / ファイル名
     """
-    # 1. セッションサブフォルダ（新形式）
     if _session_output_dir is not None:
-        session_cache = Path(config.LOCAL_IMAGE_CACHE_DIR) / _session_output_dir.name
-        if (session_cache / filename).exists():
-            return send_from_directory(str(session_cache), filename)
-    # 2. キャッシュルート（旧形式）
-    root_cache = Path(config.LOCAL_IMAGE_CACHE_DIR)
-    if (root_cache / filename).exists():
-        return send_from_directory(str(root_cache), filename)
-    # 3. Google Driveセッションフォルダ（旧形式フォールバック）
-    if _session_output_dir is not None:
-        session_images = _session_output_dir / "images"
-        try:
-            if (session_images / filename).exists():
-                return send_from_directory(str(session_images), filename)
-        except Exception:
-            pass
+        session_images = Path(config.LOCAL_IMAGE_CACHE_DIR) / _session_output_dir.name / "images"
+        if (session_images / filename).exists():
+            return send_from_directory(str(session_images), filename)
     abort(404)
 
 
@@ -192,7 +177,7 @@ def api_start():
         out_dir, session_id = make_output_dir(keyword, step=1)
         _session_output_dir = out_dir
         _data_manager = DataManager(session_id, out_dir)
-        _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name)
+        _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name / "images")
         _gemini_client = GeminiClient()
 
         # 再開の場合は前回データをロード
@@ -543,7 +528,7 @@ def _save_export_files(dm, output_dir: Path):
     )
 
     session_name = output_dir.name   # 例: S1_20260508_01_LEDライト
-    images_dir   = Path(config.LOCAL_IMAGE_CACHE_DIR)
+    images_dir   = Path(config.LOCAL_IMAGE_CACHE_DIR) / session_name / "images"
 
     # ── CSV ──
     try:
@@ -616,7 +601,10 @@ def api_export_html():
     if not dm:
         return jsonify({"error": "データがありません"}), 400
 
-    images_dir = Path(config.LOCAL_IMAGE_CACHE_DIR)
+    images_dir = (
+        Path(config.LOCAL_IMAGE_CACHE_DIR) / _session_output_dir.name / "images"
+        if _session_output_dir else Path(config.LOCAL_IMAGE_CACHE_DIR)
+    )
     html = _generate_export_html(dm, images_dir)
     if not html:
         return jsonify({"error": "商品データがありません"}), 400
@@ -1044,7 +1032,7 @@ def api_load_csv():
 
         with _lock:
             _data_manager = dm
-            _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name)
+            _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name / "images")
             _gemini_client = GeminiClient()
             _session_output_dir = out_dir
 
@@ -2002,7 +1990,7 @@ def _run_seller_analysis(stop_ev: threading.Event):
     # 1 セッションフォルダを作成 (S2_YYYYMMDD_NN)
     out_dir, session_id = make_output_dir("seller_analysis", step=2)
     dm = DataManager(session_id, out_dir)
-    img = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name)
+    img = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name / "images")
     gc = GeminiClient()
 
     # 元キーワードをセッション情報として記録（セッション履歴で表示するため）
@@ -2328,7 +2316,7 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
 
     out_dir, session_id = make_output_dir("master_analysis", step=3)
     dm = DataManager(session_id, out_dir)
-    img = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name)
+    img = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name / "images")
     gc = GeminiClient()
 
     with _master_lock:

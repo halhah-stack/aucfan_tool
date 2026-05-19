@@ -3,6 +3,7 @@ image_processor.py - 画像ダウンロード・pHash計算・同一商品グル
 """
 import io
 import os
+import shutil
 import time
 import uuid
 import hashlib
@@ -85,11 +86,47 @@ class ImageProcessor:
             img.save(save_path, format="JPEG", quality=85)
 
             logger.debug(f"画像DL成功: {filename}")
+
+            # Google Drive にもコピー（守谷MacのGDriveミラーリング用）
+            self._copy_to_gdrive(save_path, filename)
+
             return save_path
 
         except Exception as e:
             logger.warning(f"画像DL失敗 {url}: {e}")
             return None
+
+    def _copy_to_gdrive(self, local_path: Path, filename: str):
+        """
+        ローカルに保存した画像を Google Drive のセッションフォルダ内にコピーする。
+        SITE_ROLE=scraper（十王Mac）のみ実行。reader（守谷Mac）はGDriveミラーリング済みのためスキップ。
+
+        コピー先構成:
+          GDrive: AucFanToolData/リサーチ結果/セッション名/images/画像ファイル
+        """
+        # reader側はGDriveミラーリングで自動同期されるためコピー不要
+        if config.SITE_ROLE != "scraper":
+            return
+        try:
+            _gdrive_root = (
+                Path.home() / "Library" / "CloudStorage"
+                / "GoogleDrive-shinozakistore@gmail.com"
+                / "マイドライブ" / "AucFanToolData"
+            )
+            # AucFanToolData が存在しない場合はGDrive未接続→スキップ
+            if not _gdrive_root.exists():
+                return
+            # self.images_dir = LOCAL_IMAGE_CACHE_DIR/セッション名/images
+            # → parent.name = セッション名
+            session_id = self.images_dir.parent.name
+            gdrive_images_dir = _gdrive_root / "リサーチ結果" / session_id / "images"
+            gdrive_images_dir.mkdir(parents=True, exist_ok=True)
+            dest = gdrive_images_dir / filename
+            if not dest.exists():
+                shutil.copy2(local_path, dest)
+                logger.debug(f"GDriveへコピー: {session_id}/images/{filename}")
+        except Exception as e:
+            logger.debug(f"GDriveコピースキップ ({filename}): {e}")
 
     def download_images_batch(
         self, urls: List[str], prefix: str = "img"
