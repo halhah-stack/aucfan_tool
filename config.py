@@ -254,6 +254,26 @@ MAX_PHASH_ITEMS = int(os.getenv("MAX_PHASH_ITEMS", "15000"))
 IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "10"))  # 画像DLタイムアウト(秒)
 
 # ─────────────────────────────────────────────
+# 出力設定
+# ─────────────────────────────────────────────
+# セッションデータの保存先。
+# デフォルトは Google Drive（2拠点からアクセス可能）。
+# Google Drive for Desktop がインストールされていない環境では
+# .env に OUTPUT_BASE_DIR=リサーチ結果 と記載してローカルに切り替え可能。
+_GDRIVE_ROOT = os.path.expanduser(
+    "~/Library/CloudStorage/"
+    "GoogleDrive-shinozakistore@gmail.com/"
+    "マイドライブ/AucFanToolData"
+)
+_GDRIVE_BASE = os.path.join(_GDRIVE_ROOT, "リサーチ結果")
+OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
+
+# マスターセラーリストも Google Drive に保存（2拠点で共有）。
+# Google Drive 未接続時はローカルの data/sellers_master.json にフォールバック。
+_GDRIVE_SELLERS = os.path.join(_GDRIVE_ROOT, "sellers_master.json")
+SELLERS_MASTER_PATH = os.getenv("SELLERS_MASTER_PATH", _GDRIVE_SELLERS)
+
+# ─────────────────────────────────────────────
 # サイトロール設定
 # ─────────────────────────────────────────────
 # SITE_ROLE=scraper : 十王Mac（スクレイピング側）
@@ -291,26 +311,6 @@ GEMINI_ENABLED = os.getenv("GEMINI_ENABLED", "true").lower() == "true"
 # ─────────────────────────────────────────────
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5001"))
 FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
-
-# ─────────────────────────────────────────────
-# 出力設定
-# ─────────────────────────────────────────────
-# セッションデータの保存先。
-# デフォルトは Google Drive（2拠点からアクセス可能）。
-# Google Drive for Desktop がインストールされていない環境では
-# .env に OUTPUT_BASE_DIR=リサーチ結果 と記載してローカルに切り替え可能。
-_GDRIVE_ROOT = os.path.expanduser(
-    "~/Library/CloudStorage/"
-    "GoogleDrive-shinozakistore@gmail.com/"
-    "マイドライブ/AucFanToolData"
-)
-_GDRIVE_BASE = os.path.join(_GDRIVE_ROOT, "リサーチ結果")
-OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
-
-# マスターセラーリストも Google Drive に保存（2拠点で共有）。
-# Google Drive 未接続時はローカルの data/sellers_master.json にフォールバック。
-_GDRIVE_SELLERS = os.path.join(_GDRIVE_ROOT, "sellers_master.json")
-SELLERS_MASTER_PATH = os.getenv("SELLERS_MASTER_PATH", _GDRIVE_SELLERS)
 
 # ─────────────────────────────────────────────
 # STEP2/3 セラーリサーチ 商品状態フィルター
