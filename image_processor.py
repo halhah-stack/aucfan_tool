@@ -108,14 +108,15 @@ class ImageProcessor:
         if config.SITE_ROLE != "scraper":
             return
         try:
-            _gdrive_root = (
+            _gdrive_mydrive = (
                 Path.home() / "Library" / "CloudStorage"
                 / "GoogleDrive-shinozakistore@gmail.com"
-                / "マイドライブ" / "AucFanToolData"
+                / "マイドライブ"
             )
-            # AucFanToolData が存在しない場合はGDrive未接続→スキップ
-            if not _gdrive_root.exists():
+            # マイドライブが存在しない場合はGDrive未接続→スキップ
+            if not _gdrive_mydrive.exists():
                 return
+            _gdrive_root = _gdrive_mydrive / "AucFanToolData"
             # self.images_dir = LOCAL_IMAGE_CACHE_DIR/セッション名/images
             # → parent.name = セッション名
             session_id = self.images_dir.parent.name
