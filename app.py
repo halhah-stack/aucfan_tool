@@ -520,12 +520,12 @@ def _save_export_files(dm, output_dir: Path):
     """
     import shutil
 
-    # Google Drive 保存先フォルダ
-    _GDRIVE_DIR = Path(
-        "/Users/shino/Library/CloudStorage/"
+    # Google Drive 保存先フォルダ（config._GDRIVE_ROOT と同じパス）
+    _GDRIVE_DIR = Path(os.path.expanduser(
+        "~/Library/CloudStorage/"
         "GoogleDrive-shinozakistore@gmail.com/"
         "マイドライブ/AucFanToolData"
-    )
+    ))
 
     session_name = output_dir.name   # 例: S1_20260508_01_LEDライト
     images_dir   = Path(config.LOCAL_IMAGE_CACHE_DIR) / session_name / "images"

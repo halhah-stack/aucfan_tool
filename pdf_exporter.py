@@ -177,7 +177,9 @@ def _generate(dm, session_dir: Path) -> Optional[bytes]:
     exported   = datetime.now().strftime("%Y年%m月%d日 %H:%M")
     n_cand     = sum(1 for g in groups if g["status"] == "candidate")
     n_next     = sum(1 for g in groups if g["status"] == "next_candidate")
-    images_dir = session_dir / "images"
+    # 画像はローカルキャッシュ（img_cache/セッション名/images/）を参照する
+    import config as _cfg
+    images_dir = _cfg.LOCAL_IMAGE_CACHE_DIR / session_dir.name / "images"
 
     pdf.add_page()
 
