@@ -1380,6 +1380,12 @@ def api_delete_session(session_name):
         shutil.rmtree(session_dir)
         logger.info(f"セッション削除: {session_dir}")
 
+        # ローカル画像キャッシュも削除（img_cache/セッション名/）
+        local_img_dir = Path(config.LOCAL_IMAGE_CACHE_DIR) / session_name
+        if local_img_dir.exists():
+            shutil.rmtree(local_img_dir)
+            logger.info(f"ローカル画像キャッシュ削除: {local_img_dir}")
+
         # 削除したセッションが現在ロード中なら状態をリセット
         if _session_output_dir is not None and _session_output_dir.resolve() == session_dir.resolve():
             _data_manager = None
