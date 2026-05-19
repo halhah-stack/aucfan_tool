@@ -115,19 +115,22 @@ class ImageProcessor:
             )
             # マイドライブが存在しない場合はGDrive未接続→スキップ
             if not _gdrive_mydrive.exists():
+                logger.warning(f"GDrive未接続のためスキップ: {_gdrive_mydrive}")
                 return
             _gdrive_root = _gdrive_mydrive / "AucFanToolData"
             # self.images_dir = LOCAL_IMAGE_CACHE_DIR/セッション名/images
             # → parent.name = セッション名
             session_id = self.images_dir.parent.name
             gdrive_images_dir = _gdrive_root / "リサーチ結果" / session_id / "images"
-            gdrive_images_dir.mkdir(parents=True, exist_ok=True)
+            if not gdrive_images_dir.exists():
+                gdrive_images_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"GDriveフォルダ作成: {gdrive_images_dir}")
             dest = gdrive_images_dir / filename
             if not dest.exists():
                 shutil.copy2(local_path, dest)
                 logger.debug(f"GDriveへコピー: {session_id}/images/{filename}")
         except Exception as e:
-            logger.debug(f"GDriveコピースキップ ({filename}): {e}")
+            logger.warning(f"GDriveコピー失敗 ({filename}): {e}")
 
     def download_images_batch(
         self, urls: List[str], prefix: str = "img"
