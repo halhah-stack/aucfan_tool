@@ -254,34 +254,13 @@ MAX_PHASH_ITEMS = int(os.getenv("MAX_PHASH_ITEMS", "15000"))
 IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "10"))  # 画像DLタイムアウト(秒)
 
 # ─────────────────────────────────────────────
-# Google Drive ルートパス 自動検出
+# 出力設定
 # ─────────────────────────────────────────────
-# ミラーリングモード・ストリーミングモード・どのMacユーザーでも自動対応。
-# .env に OUTPUT_BASE_DIR を明示した場合はそちらが優先される。
-
-def _find_gdrive_aucfan_root() -> str:
-    """AucFanToolData フォルダのパスを自動検出して返す。
-    見つからない場合は None を返す。
-    検出順序:
-      1. ミラーリングモード: ~/マイドライブ*/AucFanToolData
-      2. ストリーミングモード: ~/Library/CloudStorage/GoogleDrive-*/マイドライブ/AucFanToolData
-    """
-    home = Path.home()
-    # 1. ミラーリングモード（全角カッコ付き含む）
-    for candidate in sorted(home.glob("マイドライブ*")):
-        p = candidate / "AucFanToolData"
-        if p.exists():
-            return str(p)
-    # 2. ストリーミングモード
-    cloud = home / "Library" / "CloudStorage"
-    if cloud.exists():
-        for gd in sorted(cloud.glob("GoogleDrive-*")):
-            p = gd / "マイドライブ" / "AucFanToolData"
-            if p.exists():
-                return str(p)
-    return None
-
-_GDRIVE_ROOT = _find_gdrive_aucfan_root() or os.path.expanduser(
+# セッションデータの保存先。
+# デフォルトは Google Drive（2拠点からアクセス可能）。
+# Google Drive for Desktop がインストールされていない環境では
+# .env に OUTPUT_BASE_DIR=リサーチ結果 と記載してローカルに切り替え可能。
+_GDRIVE_ROOT = os.path.expanduser(
     "~/Library/CloudStorage/"
     "GoogleDrive-shinozakistore@gmail.com/"
     "マイドライブ/AucFanToolData"
@@ -307,22 +286,21 @@ GDRIVE_UPLOAD_ENABLED = os.getenv("GDRIVE_UPLOAD_ENABLED", "true").lower() == "t
 # ─────────────────────────────────────────────
 # サイトロール設定
 # ─────────────────────────────────────────────
-# SITE_ROLE=scraper : スクレイピング側（デフォルト）
-#   - 画像をローカル img_cache/ に保存
-#   - GDRIVE_UPLOAD_ENABLED=true のとき GDrive にもアップロード
-# SITE_ROLE=reader  : 閲覧側
-#   - GDrive ミラーリング済みフォルダを画像ソースとして使う
+# SITE_ROLE=scraper : 十王Mac（スクレイピング側）
+#   - 画像をローカル(~/Downloads/aucfan_images/)に保存
+#   - GDRIVE_UPLOAD_ENABLED=true のとき GDrive の同セッションフォルダ内 images にもアップロード
+# SITE_ROLE=reader  : 守谷Mac（リード側）
+#   - GDriveをミラーリング済みのため、GDriveのリサーチ結果フォルダを画像パスとして使う
 #   - GDriveアップロードは不要（ミラーリングで自動同期）
-# どちらのMacでも SITE_ROLE を切り替えるだけで役割を入れ替え可能。
 SITE_ROLE = os.getenv("SITE_ROLE", "scraper")  # デフォルト: scraper
 
 # ローカル画像キャッシュ（アプリはこちらから読む）
 # SITE_ROLE で自動設定。個別に上書きしたい場合は .env に LOCAL_IMAGE_CACHE_DIR= を記載。
 if SITE_ROLE == "reader":
-    # reader: GDriveミラーリング済みのリサーチ結果フォルダを画像ソースとして使う（自動検出）
-    _default_image_cache = _GDRIVE_BASE  # = AucFanToolData/リサーチ結果/（自動検出済み）
+    # 守谷Mac: GDriveミラーリング済みのリサーチ結果フォルダを画像ソースとして使う
+    _default_image_cache = _GDRIVE_BASE  # = AucFanToolData/リサーチ結果/
 else:
-    # scraper: ローカルの img_cache/ に保存
+    # 十王Mac: aucfan_tool フォルダ内に集約（ツール関連を1フォルダにまとめる）
     _default_image_cache = str(Path(__file__).parent / "img_cache")
 
 LOCAL_IMAGE_CACHE_DIR = Path(os.path.expanduser(
