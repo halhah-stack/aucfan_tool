@@ -195,6 +195,10 @@ def api_start():
                 login_check_event=_login_check_event,
             )
             scraper.run(resume=resume, start_url=start_url or None)
+            # STEP1完了後にCSV・HTML・PDFを自動保存
+            final_status = _data_manager.get_progress().get("status", "done")
+            if final_status in ("done", "stopped"):
+                _save_export_files(_data_manager, out_dir)
 
         _scraper_thread = threading.Thread(target=run_scraper, daemon=True, name="scraper")
         _scraper_thread.start()
@@ -564,14 +568,35 @@ def _save_export_files(dm, output_dir: Path):
             pdf_path = output_dir / "result.pdf"
             pdf_path.write_bytes(pdf_bytes)
             logger.info(f"自動PDF保存: {pdf_path}")
-            # Google Drive ルートにもコピー
-            gdrive_pdf = _GDRIVE_DIR / f"{session_name}_仕入れ候補.pdf"
-            try:
-                gdrive_pdf.parent.mkdir(parents=True, exist_ok=True)
-                gdrive_pdf.write_bytes(pdf_bytes)
-                logger.info(f"Google Drive PDF保存: {gdrive_pdf}")
-            except Exception as e2:
-                logger.warning(f"Google Drive PDF保存スキップ: {e2}")
+            # Google Drive にPDFを保存
+            # scraper Mac（十王）: GDrive API で直接アップロード
+            # reader  Mac（守谷）: ミラーリング経由でファイル書き込み
+            if config.SITE_ROLE == "scraper" and config.GDRIVE_UPLOAD_ENABLED:
+                try:
+                    import gdrive_uploader
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                        tf.write(pdf_bytes)
+                        tmp_path = Path(tf.name)
+                    folder_id = gdrive_uploader.get_or_create_folder_path(
+                        ["AucFanToolData", "リサーチ結果", session_name]
+                    )
+                    if folder_id:
+                        gdrive_uploader.upload_file(
+                            tmp_path, folder_id, f"{session_name}_仕入れ候補.pdf"
+                        )
+                        logger.info(f"Google Drive PDF保存(API): {session_name}_仕入れ候補.pdf")
+                    tmp_path.unlink(missing_ok=True)
+                except Exception as e2:
+                    logger.warning(f"Google Drive PDF保存(API)スキップ: {e2}")
+            else:
+                gdrive_pdf = _GDRIVE_DIR / f"{session_name}_仕入れ候補.pdf"
+                try:
+                    gdrive_pdf.parent.mkdir(parents=True, exist_ok=True)
+                    gdrive_pdf.write_bytes(pdf_bytes)
+                    logger.info(f"Google Drive PDF保存: {gdrive_pdf}")
+                except Exception as e2:
+                    logger.warning(f"Google Drive PDF保存スキップ: {e2}")
         else:
             logger.info("PDF出力スキップ（候補グループなし）")
     except Exception as e:
