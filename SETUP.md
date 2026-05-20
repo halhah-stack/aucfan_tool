@@ -112,8 +112,8 @@ MIN_GROUP_SIZE=5
 PHASH_THRESHOLD=2
 
 # Geminiモデル
-GEMINI_MODEL_TEXT=gemini-2.5-flash
-GEMINI_MODEL_VISION=gemini-2.5-flash
+GEMINI_MODEL_TEXT=gemini-3.5-flash
+GEMINI_MODEL_VISION=gemini-3.5-flash
 GEMINI_ENABLED=true
 
 # Flask
