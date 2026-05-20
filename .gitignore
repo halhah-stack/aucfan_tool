@@ -36,3 +36,7 @@ aucfan_results_*.csv
 # Google Drive API 認証情報（機密情報のため除外）
 credentials.json
 token.json
+client_secret_*.json
+
+# Mac別設定ファイル（各Macで個別管理）
+*Mac用.env
