@@ -117,6 +117,36 @@ def _load_prompts() -> dict:
 
 _PROMPTS = _load_prompts()
 
+
+def _load_custom_rules() -> list:
+    """rules.yaml の custom_rules セクションを読み込む"""
+    rules_path = Path(__file__).parent / "rules.yaml"
+    try:
+        with open(rules_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        rules = data.get("custom_rules") or []
+        if rules:
+            logger.info(f"custom_rules を読み込みました: {len(rules)}件")
+        return rules
+    except Exception as e:
+        logger.warning(f"rules.yaml custom_rules 読み込みエラー: {e}")
+        return []
+
+
+def _build_custom_rules_prompt() -> str:
+    """custom_rules をGeminiプロンプト用テキストに変換する"""
+    rules = _load_custom_rules()
+    if not rules:
+        return ""
+    lines = ["【ユーザー定義の追加除外ルール】"]
+    for r in rules:
+        kw = r.get("keyword", "")
+        cat = r.get("category", "")
+        reason = r.get("reason", "")
+        if kw:
+            lines.append(f"- 「{kw}」: {cat}のため除外（{reason}）")
+    return "\n".join(lines) + "\n"
+
 def _get_prompt(key: str) -> str:
     """指定キーのプロンプトを返す（yamlになければデフォルト）"""
     return _PROMPTS.get(key, _DEFAULT_PROMPTS.get(key, ""))
@@ -404,13 +434,23 @@ class GeminiClient:
 
     def check_excluded_category(self, title: str) -> Tuple[bool, str]:
         """
-        絶対除外カテゴリか判定。
+        絶対除外カテゴリか判定。rules.yaml の custom_rules も自動で追加する。
         Returns: (excluded: bool, reason: str)
         """
         if not self.available:
             return False, ""
 
-        prompt = _get_prompt("exclude_absolute").format(title=title)
+        # custom_rules をプロンプトに注入
+        custom_section = _build_custom_rules_prompt()
+        base_prompt = _get_prompt("exclude_absolute").format(title=title)
+        if custom_section:
+            # JSONフォーマット指示の直前に挿入
+            prompt = base_prompt.replace(
+                "商品タイトル: {title}".format(title=title),
+                f"{custom_section}\n商品タイトル: {title}"
+            )
+        else:
+            prompt = base_prompt
         result = self._parse_json(self._call_text(prompt))
 
         if result is None:
