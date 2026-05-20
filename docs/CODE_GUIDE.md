@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-10（ログイン切れ検知・自動再開、グループ化高速化、ヘッダーステータス修正）
+> 最終更新：2026-05-20（GDrive API対応・STEP1 PDF自動生成・スクレイピング速度改善）
 
 ---
 
@@ -14,11 +14,17 @@ aucfan_tool/
 ├── scraper.py              # AucFan Seleniumスクレイパー（STEP 1 リスト取得 + 詳細取得）
 ├── seller_analyzer.py      # セラー分析スクレイパー（AucFanScraper継承、STEP 2）
 ├── data_manager.py         # セッションデータ管理・CSV/JSON保存・再開機能
-├── image_processor.py      # 画像ダウンロード・pHash計算・グループ化
+├── image_processor.py      # 画像ダウンロード・pHash計算・グループ化・GDrive一括アップロード
 ├── gemini_client.py        # Gemini Vision/Text API による除外判定
 ├── sellers_master.py       # マスターセラーリスト管理（data/sellers_master.json）
+├── pdf_exporter.py         # PDF自動生成（STEP完了時にCSV・HTML・PDFを保存）
+├── gdrive_uploader.py      # Google Drive API 直接アップロードモジュール（scraper Macのみ使用）
+├── setup_gdrive_auth.py    # GDrive初回OAuth認証スクリプト（scraper Macで1回だけ実行）
 ├── prompts.yaml            # Gemini用プロンプト定義（外部ファイル）
 ├── .env                    # 環境変数（Git管理外）
+├── .env.example            # .envのテンプレート
+├── credentials.json        # GDrive OAuth認証情報（Git管理外・手動配置）
+├── token.json              # GDrive認証トークン（Git管理外・setup_gdrive_auth.pyが自動生成）
 ├── requirements.txt        # Python依存ライブラリ
 │
 ├── templates/
@@ -31,14 +37,8 @@ aucfan_tool/
 ├── data/
 │   └── sellers_master.json # マスターセラーリスト（永続データ）
 │
-├── リサーチ結果/            # セッションフォルダ群（ローカルフォールバック用。通常はGoogle Drive）
-│   ├── S1_20260506_01_バフ/   # STEP 1セッション例
-│   │   ├── progress.json
-│   │   ├── items.json
-│   │   ├── results.csv
-│   │   └── images/
-│   ├── S2_20260506_01/        # STEP 2セッション例
-│   └── S3_20260506_01/        # STEP 3セッション例
+├── img_cache/              # 画像ローカルキャッシュ（スクレイピング完了後にGDriveへ一括アップロード）
+│   └── セッション名/images/
 │
 └── docs/
     ├── USER_GUIDE.md        # ユーザー向けマニュアル

@@ -14,6 +14,15 @@
 | ブラウザ | Google Chrome（通常版） |
 | ストレージ | Google Drive for Desktop（ストリーミングモード） |
 
+### 2台構成について
+
+このツールは2台のMacで役割を分担して運用することを想定しています。
+
+| Mac | 役割 | SITE_ROLE |
+|-----|------|-----------|
+| 十王Mac | スクレイピング実行・画像/PDF を GDrive API でアップロード | `scraper` |
+| 守谷Mac | GDriveミラーリングで結果を参照・閲覧専用 | `reader` |
+
 ---
 
 ## 1. リポジトリをクローン
@@ -49,100 +58,104 @@ pip install -r requirements.txt
 `.env` ファイルを作成・編集します（既存ファイルをコピーして修正する場合も同様）。
 
 ```bash
-# リポジトリ直下に .env を作成
+cp .env.example .env
 nano .env
 ```
 
 ### .env のテンプレート
 
 ```dotenv
-# ──────────────────────────────────────────────
 # Gemini API キー（Google AI Studio で取得）
 # https://aistudio.google.com/app/apikey
-# ──────────────────────────────────────────────
 GEMINI_API_KEY=AIzaSy...（自分のAPIキーを入力）
 
-# ──────────────────────────────────────────────
 # Chrome リモートデバッグ設定（通常は変更不要）
-# ──────────────────────────────────────────────
 CHROME_DEBUG_HOST=127.0.0.1
 CHROME_DEBUG_PORT=9222
 
-# ──────────────────────────────────────────────
-# スクレイピング設定
-# ──────────────────────────────────────────────
+# STEP1 スクレイピング設定
+# MIN_DELAY / MAX_DELAY : ページ取得間の待機秒数
+# MAX_PAGES             : 取得する最大ページ数
+# ITEMS_PER_PAGE        : 1ページあたりの商品件数
 MIN_DELAY=3.0
 MAX_DELAY=5.0
 MAX_PAGES=50
 ITEMS_PER_PAGE=50
 
-# ──────────────────────────────────────────────
-# フィルタリング設定
-# ──────────────────────────────────────────────
+# STEP1 フィルタリング設定
+# MIN_PRICE / MAX_PRICE : 一覧取得時の価格帯フィルター（円）
+# MIN_GROUP_SIZE        : 仕入れ候補とする最小グループ件数（この件数以上 = 緑ラベル）
+# PHASH_THRESHOLD       : 画像の類似度閾値（0=完全一致のみ / 大きいほど緩い判定）
 MIN_PRICE=1000
 MAX_PRICE=3000
 MIN_GROUP_SIZE=5
 PHASH_THRESHOLD=2
 
-# ──────────────────────────────────────────────
-# Flask 設定
-# ──────────────────────────────────────────────
+# Flask 設定（通常は変更不要）
 FLASK_PORT=5001
 
-# ──────────────────────────────────────────────
-# 出力先・データ保存先（★ここをMacごとに書き換える）
-# ──────────────────────────────────────────────
-OUTPUT_BASE_DIR=/Users/【ユーザー名】/Library/CloudStorage/GoogleDrive-【Gmailアドレス】/マイドライブ/AucFanToolData
+# sellers_master.json の保存先（Google Drive）
 SELLERS_MASTER_PATH=/Users/【ユーザー名】/Library/CloudStorage/GoogleDrive-【Gmailアドレス】/マイドライブ/AucFanToolData/sellers_master.json
 
-# ──────────────────────────────────────────────
 # Gemini モデル設定
-# ──────────────────────────────────────────────
 GEMINI_MODEL_TEXT=gemini-2.5-flash
 GEMINI_MODEL_VISION=gemini-2.5-flash
+
+# Gemini 有効/無効（false にすると pHash のみで動作）
 GEMINI_ENABLED=true
+
+# ──────────────────────────────────────────────
+# Mac間の違いはここだけ（2行）
+# ──────────────────────────────────────────────
+# GDrive アップロード有効/無効（false にすると credentials.json 不要）
+GDRIVE_UPLOAD_ENABLED=true
+
+# サイトロール（scraper=十王Mac／reader=守谷Mac）
+SITE_ROLE=scraper
 ```
-
-### ★ パスの確認方法（ユーザー名・Gmailアドレスを確認）
-
-```bash
-# ユーザー名を確認
-whoami
-
-# Google Drive のパスを確認（フォルダが存在するか確認）
-ls ~/Library/CloudStorage/
-# → "GoogleDrive-xxxx@gmail.com" という名前のフォルダが表示される
-
-# 正しいパスをフルパスで確認
-ls ~/Library/CloudStorage/GoogleDrive-【Gmailアドレス】/マイドライブ/
-# → AucFanToolData フォルダが表示されればOK
-```
-
-**記入例（ユーザー名が `yamada`、Gmail が `yamada@gmail.com` の場合）:**
-
-```dotenv
-OUTPUT_BASE_DIR=/Users/yamada/Library/CloudStorage/GoogleDrive-yamada@gmail.com/マイドライブ/AucFanToolData
-SELLERS_MASTER_PATH=/Users/yamada/Library/CloudStorage/GoogleDrive-yamada@gmail.com/マイドライブ/AucFanToolData/sellers_master.json
-```
-
-> **Google Drive が未インストールの場合:** パスをローカルフォルダに変更できます。
-> ```dotenv
-> OUTPUT_BASE_DIR=/Users/【ユーザー名】/Documents/AucFanToolData
-> SELLERS_MASTER_PATH=/Users/【ユーザー名】/Documents/AucFanToolData/sellers_master.json
-> ```
 
 ---
 
-## 4. Google Drive for Desktop の設定
+## 4. Google Drive API 認証（scraper Mac のみ・十王Mac）
+
+> `SITE_ROLE=reader`（守谷Mac）はこの手順不要です。
+
+画像・PDFをGoogle Drive APIで直接アップロードするため、初回のみOAuth認証が必要です。
+
+### 4-1. credentials.json を配置
+
+`credentials.json`（Google Cloud ConsoleのOAuth2認証情報）を `aucfan_tool/` フォルダに配置してください。  
+このファイルはGit管理外（`.gitignore`）のため、AirDropまたはGoogle Drive経由で転送してください。
+
+### 4-2. 初回認証を実行
+
+```bash
+cd ~/Downloads/aucfan_tool
+.venv/bin/python setup_gdrive_auth.py
+```
+
+ブラウザが開くのでGoogleアカウントにログインして許可してください。  
+完了すると `token.json` が生成されます。
+
+**確認メッセージ：**
+```
+✅ Google Drive に接続できました。アカウント: shinozakistore@gmail.com
+```
+
+> `token.json` はGit管理外です。機器ごとに生成されます。
+
+---
+
+## 5. Google Drive for Desktop の設定
 
 1. [Google Drive for Desktop](https://www.google.com/drive/download/) をインストール
 2. `shinozakistore@gmail.com` でサインイン
-3. 設定 → 「ストリーミング」モードに設定（ミラーリング不要）
-4. `AucFanToolData` フォルダが `~/Library/CloudStorage/GoogleDrive-.../マイドライブ/` に表示されることを確認
+3. **十王Mac**：「ストリーミング」モードに設定（PDFやHTMLのミラーリング用途のみ）
+4. **守谷Mac**：「ミラーリング」モードに設定（スクレイピング結果を自動同期して参照）
 
 ---
 
-## 5. 動作確認
+## 6. 動作確認
 
 ```bash
 cd ~/Downloads/aucfan_tool
@@ -158,7 +171,7 @@ bash start.sh
 
 ---
 
-## 6. AucFan にログイン
+## 7. AucFan にログイン
 
 `start.sh` 起動後、Chrome で以下の操作をしてください：
 
@@ -204,15 +217,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Google Drive パスが見つからない（FileNotFoundError）
+### GDrive認証エラー（credentials.json が見つかりません）
 
-```bash
-# パスを再確認
-ls ~/Library/CloudStorage/
-```
-
-`.env` の `OUTPUT_BASE_DIR` が実際のパスと一致しているか確認してください。  
-パス中の **Gmailアドレス** と **ユーザー名** を正確に記入することが重要です。
+`credentials.json` が `aucfan_tool/` フォルダに存在するか確認してください。  
+存在する場合は `setup_gdrive_auth.py` を再実行してください。
 
 ### `.env` の変更が反映されない
 
@@ -226,19 +234,25 @@ ls ~/Library/CloudStorage/
 aucfan_tool/
 ├── app.py               # Flask メインアプリ
 ├── config.py            # 設定値（.env から読み込み）
-├── scraper.py           # AucFan スクレイパー
-├── seller_analyzer.py   # セラー分析
+├── scraper.py           # AucFan スクレイパー（STEP 1）
+├── seller_analyzer.py   # セラー分析（STEP 2/3）
 ├── sellers_master.py    # マスターセラーリスト管理
 ├── data_manager.py      # データ保存・ロード
-├── image_processor.py   # pHash 計算
+├── image_processor.py   # 画像ダウンロード・pHash計算・GDrive一括アップロード
 ├── gemini_client.py     # Gemini API クライアント
+├── pdf_exporter.py      # PDF自動生成（STEP1/2/3完了時）
+├── gdrive_uploader.py   # Google Drive API アップロードモジュール
+├── setup_gdrive_auth.py # GDrive初回OAuth認証スクリプト（scraper Macのみ実行）
 ├── requirements.txt     # Python 依存パッケージ
 ├── start.sh             # 一発起動スクリプト
 ├── .env                 # 環境設定（★Gitで管理されない・各Macで作成）
+├── .env.example         # .envのテンプレート
+├── credentials.json     # GDrive OAuth認証情報（★Gitで管理されない・手動配置）
+├── token.json           # GDrive認証トークン（★Gitで管理されない・自動生成）
 ├── .venv/               # 仮想環境（★Gitで管理されない・各Macで再作成）
 ├── templates/           # HTMLテンプレート
 └── static/              # CSS/JS
 ```
 
-> `.env` と `.venv` は `.gitignore` に含まれており、Gitで管理されません。  
-> 別Macへ移植するときは必ず手動で作成してください。
+> `.env`・`credentials.json`・`token.json`・`.venv` は `.gitignore` に含まれており、Gitで管理されません。  
+> 別Macへ移植するときは必ず手動で用意してください。
