@@ -1113,41 +1113,122 @@ async function submitNgReason(groupId, skipReason = false) {
   closeNgModal();
   await updateGroupStatus(groupId, 'ng', reason);
 
-  // ブランド・メーカーキーワードを含む場合は追加提案を表示
-  if (reason && /ブランド|メーカー|brand|maker/i.test(reason)) {
-    // 理由から最初の単語（商品名）を抽出して提案
-    const word = reason.split(/[はがのをにで\s]/)[0];
-    setTimeout(() => {
-      showExcludeKeywordSuggestion(word, reason);
-    }, 800);
+  // 理由があればGeminiで分析してパネル表示
+  if (reason) {
+    setTimeout(() => showNgAnalysisPanel(reason), 600);
   }
 }
 
-function showExcludeKeywordSuggestion(word, fullReason) {
-  const toast = document.createElement('div');
-  toast.style.cssText = `
-    position:fixed; bottom:80px; right:20px; background:#fff3cd;
-    border:1px solid #e67e00; border-radius:8px; padding:14px 18px;
-    max-width:340px; z-index:9998; box-shadow:0 4px 12px rgba(0,0,0,.15);
-    font-size:13px; line-height:1.5;`;
-  toast.innerHTML = `
-    <p style="margin:0 0 6px; font-weight:600; color:#856404;">
-      💡 除外キーワードへの追加を提案
+async function showNgAnalysisPanel(reason) {
+  // 既存パネルを削除
+  const existing = document.getElementById('ngAnalysisPanel');
+  if (existing) existing.remove();
+
+  // ローディング表示
+  const panel = document.createElement('div');
+  panel.id = 'ngAnalysisPanel';
+  panel.style.cssText = `
+    position:fixed; bottom:80px; right:20px; background:#fff;
+    border:1px solid #dee2e6; border-radius:10px; padding:16px 18px;
+    max-width:360px; min-width:280px; z-index:9998;
+    box-shadow:0 4px 16px rgba(0,0,0,.18); font-size:13px; line-height:1.6;`;
+  panel.innerHTML = `
+    <p style="margin:0 0 8px; font-weight:600; color:#495057;">
+      🤖 Gemini NG分析中…
     </p>
-    <p style="margin:0 0 10px; color:#555;">
-      「<b>${escHtml(word)}</b>」を .env の
-      <code>EXCLUDE_MAKER_KEYWORDS</code> に追加すると<br>
-      次回から自動除外されます。
-    </p>
-    <code style="display:block; background:#f8f9fa; padding:6px 8px;
-                 border-radius:4px; font-size:12px; margin-bottom:10px; word-break:break-all;">
-      EXCLUDE_MAKER_KEYWORDS=${escHtml(word)}
-    </code>
-    <button onclick="this.closest('div').remove()"
-      style="padding:4px 12px; border:1px solid #ccc; border-radius:4px;
-             background:#fff; cursor:pointer; font-size:12px;">閉じる</button>`;
-  document.body.appendChild(toast);
-  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 15000);
+    <p style="margin:0; color:#888; font-size:12px;">しばらくお待ちください</p>`;
+  document.body.appendChild(panel);
+
+  try {
+    const res = await fetch('/api/ng/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      panel.innerHTML = `
+        <p style="margin:0 0 6px; font-weight:600; color:#dc3545;">⚠️ 分析失敗</p>
+        <p style="margin:0 0 10px; color:#666; font-size:12px;">${escHtml(data.error || '不明なエラー')}</p>
+        <button onclick="document.getElementById('ngAnalysisPanel').remove()"
+          style="padding:4px 12px; border:1px solid #ccc; border-radius:4px;
+                 background:#fff; cursor:pointer; font-size:12px;">閉じる</button>`;
+      setTimeout(() => { if (panel.parentNode) panel.remove(); }, 8000);
+      return;
+    }
+
+    const { category = '', explanation = '', keywords = [] } = data;
+
+    // キーワードボタン生成
+    const kwButtons = keywords.map(kw => `
+      <button onclick="showKwCopyHint('${escHtml(kw)}')"
+        style="display:inline-block; margin:3px 4px 3px 0; padding:4px 10px;
+               border:1px solid #0d6efd; border-radius:14px; background:#e7f1ff;
+               color:#0d6efd; cursor:pointer; font-size:12px; font-weight:600;">
+        + ${escHtml(kw)}
+      </button>`).join('');
+
+    panel.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;">
+        <p style="margin:0; font-weight:700; color:#212529; font-size:14px;">🤖 Gemini NG分析結果</p>
+        <button onclick="document.getElementById('ngAnalysisPanel').remove()"
+          style="border:none; background:none; font-size:16px; cursor:pointer;
+                 color:#999; line-height:1; padding:0 0 0 8px;">✕</button>
+      </div>
+      <div style="background:#f8f9fa; border-radius:6px; padding:10px 12px; margin-bottom:10px;">
+        <p style="margin:0 0 4px; font-size:11px; color:#888; font-weight:600; letter-spacing:.5px;">
+          カテゴリ
+        </p>
+        <p style="margin:0; font-weight:600; color:#495057;">${escHtml(category)}</p>
+      </div>
+      <div style="margin-bottom:12px;">
+        <p style="margin:0 0 4px; font-size:11px; color:#888; font-weight:600; letter-spacing:.5px;">
+          NG理由
+        </p>
+        <p style="margin:0; color:#333;">${escHtml(explanation)}</p>
+      </div>
+      ${keywords.length > 0 ? `
+      <div>
+        <p style="margin:0 0 6px; font-size:11px; color:#888; font-weight:600; letter-spacing:.5px;">
+          除外キーワード候補 <span style="font-weight:400;">（クリックで追加方法を表示）</span>
+        </p>
+        <div>${kwButtons}</div>
+      </div>` : ''}
+      <div id="kwCopyHintArea" style="margin-top:10px;"></div>`;
+
+    // 20秒後に自動消去
+    setTimeout(() => { if (panel.parentNode) panel.remove(); }, 20000);
+
+  } catch (err) {
+    panel.innerHTML = `
+      <p style="margin:0 0 6px; font-weight:600; color:#dc3545;">⚠️ 通信エラー</p>
+      <p style="margin:0 0 10px; color:#666; font-size:12px;">${escHtml(String(err))}</p>
+      <button onclick="document.getElementById('ngAnalysisPanel').remove()"
+        style="padding:4px 12px; border:1px solid #ccc; border-radius:4px;
+               background:#fff; cursor:pointer; font-size:12px;">閉じる</button>`;
+    setTimeout(() => { if (panel.parentNode) panel.remove(); }, 8000);
+  }
+}
+
+function showKwCopyHint(kw) {
+  const area = document.getElementById('kwCopyHintArea');
+  if (!area) return;
+  area.innerHTML = `
+    <div style="background:#fff3cd; border:1px solid #e67e00; border-radius:6px;
+                padding:8px 10px; font-size:12px;">
+      <p style="margin:0 0 4px; color:#856404; font-weight:600;">
+        💡 .env に追加してください
+      </p>
+      <code style="display:block; background:#fef9ee; padding:5px 8px; border-radius:4px;
+                   word-break:break-all; font-size:11px; margin-bottom:4px;">
+        EXCLUDE_KEYWORDS=${escHtml(kw)}
+      </code>
+      <p style="margin:0; color:#6c757d; font-size:11px;">
+        すでに EXCLUDE_KEYWORDS がある場合はカンマ区切りで追記してください。<br>
+        変更後は <b>bash start.sh</b> で再起動が必要です。
+      </p>
+    </div>`;
 }
 
 // ─────────────────────────────────────────────

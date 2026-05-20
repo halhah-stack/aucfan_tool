@@ -228,6 +228,25 @@ _DEFAULT_PROMPTS = {
   "confidence": "high" または "medium" または "low"
 }}
 """,
+    "ng_reason_analyze": """
+以下は、中古品リサーチツールでユーザーが手動で入力した「NG理由」テキストです。
+このNG理由を分析して、除外ルールの整理に役立つ情報をJSON形式で返してください。
+
+NG理由テキスト: {reason}
+
+分析のポイント:
+- どのカテゴリに相当するNGか（衛生リスク・ブランド品・サイズ問題・転売規制・AC100V・危険物・その他）
+- なぜNGなのかを1〜2文で簡潔に説明する
+- 将来の自動除外に使えるキーワード候補を最大4個提案する（短く具体的な単語）
+- 「フライパン」なら調理器具全般に広げて「フライパン」「鍋」なども候補にする
+
+以下のJSON形式のみで回答してください（前後の説明不要）:
+{{
+  "category": "カテゴリ名（例: 衛生リスク商品 / ブランド品 / 大型サイズ / 転売規制品 / AC100V機器 / 危険物 / その他）",
+  "explanation": "NGである理由の説明（1〜2文、日本語）",
+  "keywords": ["キーワード1", "キーワード2", "キーワード3"]
+}}
+""",
     "vision_classify": """
 以下の商品画像とタイトルを見て、販売可否を判定してください。
 
@@ -559,4 +578,36 @@ class GeminiClient:
         if is_branded:
             result["gemini_reason"] = f"ブランド品: {brand_name}"
 
+        return result
+
+    def analyze_ng_reason(self, reason: str) -> Optional[dict]:
+        """
+        ユーザーが手動入力したNG理由テキストをGeminiで分析し、
+        除外ルール整理に役立つ情報を返す。
+
+        Returns:
+            {
+              "category": "衛生リスク商品",
+              "explanation": "フライパンは食品と直接接触するため...",
+              "keywords": ["フライパン", "鍋", "調理器具"]
+            }
+            Gemini利用不可または失敗時は None を返す。
+        """
+        if not self.available or not reason.strip():
+            return None
+
+        prompt = _get_prompt("ng_reason_analyze").format(reason=reason.strip())
+        result = self._parse_json(self._call_text(prompt))
+
+        if result is None:
+            logger.warning(f"NG理由分析: Geminiの応答をパースできませんでした (reason={reason[:40]})")
+            return None
+
+        # キーワードが文字列で返ってきた場合はリストに変換
+        kws = result.get("keywords", [])
+        if isinstance(kws, str):
+            kws = [k.strip() for k in kws.split(",") if k.strip()]
+        result["keywords"] = kws[:4]  # 最大4個に制限
+
+        logger.info(f"NG理由分析完了: category={result.get('category')} keywords={result.get('keywords')}")
         return result

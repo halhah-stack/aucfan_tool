@@ -445,6 +445,29 @@ def api_update_group_status(group_id):
     return jsonify({"success": True, "updated": updated, "ng_reason": ng_reason})
 
 
+@app.route("/api/ng/analyze", methods=["POST"])
+def api_ng_analyze():
+    """
+    手動NG理由テキストをGeminiで分析し、除外ルール整理情報を返す。
+    Request:  { "reason": "フライパンなのでNG" }
+    Response: { "category": "衛生リスク商品", "explanation": "...", "keywords": [...] }
+    """
+    data = request.get_json(silent=True) or {}
+    reason = data.get("reason", "").strip()
+    if not reason:
+        return jsonify({"error": "理由テキストが空です"}), 400
+
+    gc = _gemini_client
+    if gc is None or not gc.available:
+        return jsonify({"error": "Gemini API が無効です"}), 503
+
+    result = gc.analyze_ng_reason(reason)
+    if result is None:
+        return jsonify({"error": "Gemini分析に失敗しました"}), 500
+
+    return jsonify(result)
+
+
 # ─────────────────────────────────────────────
 # CSV エクスポート
 # ─────────────────────────────────────────────
