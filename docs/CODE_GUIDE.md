@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-20（3モード対応・GDriveパス自動検出・credentials.json説明追加）
+> 最終更新：2026-05-20（GDrive API対応・STEP1 PDF自動生成・スクレイピング速度改善）
 
 ---
 
@@ -23,14 +23,8 @@ aucfan_tool/
 ├── prompts.yaml            # Gemini用プロンプト定義（外部ファイル）
 ├── .env                    # 環境変数（Git管理外）
 ├── .env.example            # .envのテンプレート
-├── credentials.json        # GDrive OAuth クライアントシークレット（Git管理外・手動配置）
-│                           #   Google Cloud Console でダウンロードした
-│                           #   client_secret_xxx.apps.googleusercontent.com.json を
-│                           #   credentials.json にリネームして配置する。
-│                           #   scraper Mac のみ必要。GDRIVE_UPLOAD_ENABLED=false なら不要。
-├── token.json              # GDrive アクセストークン（Git管理外・setup_gdrive_auth.pyが自動生成）
-│                           #   setup_gdrive_auth.py 実行後に生成される。90日で期限切れになり
-│                           #   自動更新されるが、期限切れ・削除時は再度 setup_gdrive_auth.py を実行。
+├── credentials.json        # GDrive OAuth認証情報（Git管理外・手動配置）
+├── token.json              # GDrive認証トークン（Git管理外・setup_gdrive_auth.pyが自動生成）
 ├── requirements.txt        # Python依存ライブラリ
 │
 ├── templates/
@@ -278,63 +272,25 @@ else:
 
 ### Google Drive連携の技術的説明
 
-複数のMacでリサーチデータを共有するための仕組みです。コードの変更は不要で、`.env` の `SITE_ROLE` と `GDRIVE_UPLOAD_ENABLED` を変更するだけで動作します。
+複数のMacでリサーチデータを共有するための仕組みです。コードの変更は不要で、`.env` の2変数を変更するだけで動作します。
 
-**`config.py` での GDriveパス自動検出 (`_find_gdrive_aucfan_root`)**:
+**`config.py` での読み込み**:
 
-`config.py` に `_find_gdrive_aucfan_root()` 関数があり、以下の順序で AucFanToolData のパスを自動検出します。Mac のユーザー名が違っても `Path.home()` を使うため問題ありません。
+`config.py` は `python-dotenv` 経由で `.env` を読み込み、`OUTPUT_BASE_DIR` と `SELLERS_MASTER_PATH` を `Path` オブジェクトとして公開します。`SELLERS_MASTER_PATH` が未設定の場合のフォールバックロジックも `config.py` 内で完結しています。
 
 ```python
-def _find_gdrive_aucfan_root() -> str:
-    home = Path.home()
-    # 1. ミラーリングモード: ~/マイドライブ*/AucFanToolData
-    for candidate in sorted(home.glob("マイドライブ*")):
-        p = candidate / "AucFanToolData"
-        if p.exists():
-            return str(p)
-    # 2. ストリーミングモード: ~/Library/CloudStorage/GoogleDrive-*/マイドライブ/AucFanToolData
-    cloud = home / "Library" / "CloudStorage"
-    if cloud.exists():
-        for gd in sorted(cloud.glob("GoogleDrive-*")):
-            p = gd / "マイドライブ" / "AucFanToolData"
-            if p.exists():
-                return str(p)
-    return None
-
-_GDRIVE_ROOT = _find_gdrive_aucfan_root() or os.path.expanduser(
-    "~/Library/CloudStorage/GoogleDrive-shinozakistore@gmail.com/マイドライブ/AucFanToolData"
+# config.py 内のパス解決（概略）
+_GDRIVE_BASE = os.path.expanduser(
+    "~/Library/CloudStorage/GoogleDrive-shinozakistore@gmail.com/マイドライブ/AucFanToolData/リサーチ結果"
 )
-_GDRIVE_BASE = os.path.join(_GDRIVE_ROOT, "リサーチ結果")
 OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
 ```
 
-`.env` に `OUTPUT_BASE_DIR` を明示した場合はそちらが優先（スタンドアロン運用時に `OUTPUT_BASE_DIR=リサーチ結果` と指定するケースなど）。
-
-**3つの動作モード**:
-
-| モード | `SITE_ROLE` | `GDRIVE_UPLOAD_ENABLED` | 画像保存先 | `credentials.json` |
-|---|---|---|---|---|
-| scraper（十王Mac） | `scraper` | `true` | GDrive API 経由でアップロード | 必要 |
-| reader（守谷Mac） | `reader` | `false` | GDriveミラーリングから直接参照 | 不要 |
-| standalone（1台完結） | `scraper` | `false` | ローカル `リサーチ結果/` | 不要 |
-
-**`SITE_ROLE` による `LOCAL_IMAGE_CACHE_DIR` の自動切り替え**:
-
-```python
-if SITE_ROLE == "reader":
-    _default_image_cache = _GDRIVE_BASE  # ミラーリング済みフォルダを画像ソースとして使う
-else:
-    _default_image_cache = str(Path(__file__).parent / "img_cache")  # ローカルキャッシュ
-LOCAL_IMAGE_CACHE_DIR = Path(os.path.expanduser(
-    os.getenv("LOCAL_IMAGE_CACHE_DIR", _default_image_cache)
-))
-```
-
-`app.py` の画像配信エンドポイント `/images/<session>/<path>` は `config.LOCAL_IMAGE_CACHE_DIR` を基点として `send_from_directory()` で画像を返すため、reader Mac では GDrive ミラーリングフォルダから直接画像が配信されます。
+デフォルトで Google Drive パスを使うため、`.env` の変更なしに2拠点から同じデータを参照できます。`.env` に `OUTPUT_BASE_DIR=リサーチ結果` と書けばローカル保存に切り替えられます。
 
 **`data_manager.py` の `make_output_dir()`**:
 
-セッションフォルダを作成する `make_output_dir(keyword, step=1)` は `config.OUTPUT_BASE_DIR` を親ディレクトリとして使います。`app.py` の `_list_sessions()` も同様のロジックで同じ親ディレクトリを走査します。
+セッションフォルダを作成する `make_output_dir(keyword, step=1)` は `config.OUTPUT_BASE_DIR` を親ディレクトリとして使います。Google Drive が未接続（`~/Library/CloudStorage/` が存在しない）の場合はローカルの `リサーチ結果/` に自動フォールバックします。`app.py` の `_list_sessions()` も同様のフォールバックロジックを持ちます。
 
 **`sellers_master.py` の参照先**:
 
@@ -494,8 +450,8 @@ _login_check_event   # ログイン即時確認トリガー（threading.Event）
 |---|---|---|
 | `GEMINI_API_KEY` | `""` | Gemini APIキー（必須）|
 | `GEMINI_ENABLED` | `true` | `false` にするとGeminiをスキップしてpHashのみ動作 |
-| `GEMINI_MODEL_VISION` | `gemini-3.5-flash` | 画像判定に使用するGeminiモデル |
-| `GEMINI_MODEL_TEXT` | `gemini-3.5-flash` | テキスト判定に使用するGeminiモデル |
+| `GEMINI_MODEL_VISION` | `gemini-1.5-flash` | 画像判定に使用するGeminiモデル |
+| `GEMINI_MODEL_TEXT` | `gemini-1.5-flash` | テキスト判定に使用するGeminiモデル |
 | `GEMINI_RPM_LIMIT` | `14` | 1分あたりリクエスト上限（無料枠=15、安全マージンで14） |
 | `CHROME_DEBUG_HOST` | `127.0.0.1` | Chromeリモートデバッグホスト |
 | `CHROME_DEBUG_PORT` | `9222` | Chromeリモートデバッグポート |
@@ -518,11 +474,8 @@ _login_check_event   # ログイン即時確認トリガー（threading.Event）
 | `MAX_BOX_H` | `20` | 除外する箱サイズ（高さcm） |
 | `FLASK_PORT` | `5001` | FlaskサーバーのListenポート |
 | `FLASK_HOST` | `0.0.0.0` | FlaskサーバーのListenホスト（`0.0.0.0`でLAN公開） |
-| `SITE_ROLE` | `scraper` | 動作モード。`scraper`=スクレイピング機（十王Mac・standalone）/ `reader`=閲覧専用機（守谷Mac）。`reader` のとき `LOCAL_IMAGE_CACHE_DIR` が GDriveミラーリングフォルダに自動切り替わる |
-| `GDRIVE_UPLOAD_ENABLED` | `true` | `true`: scraper Mac が GDrive API で画像・PDFをアップロード（`credentials.json` 必要）。`false`: アップロード無効（reader機・standalone時） |
-| `OUTPUT_BASE_DIR` | `（自動検出）` | セッションフォルダの保存先。`config.py` の `_find_gdrive_aucfan_root()` が GDrive パスを自動検出するため通常設定不要。standalone 時のみ `OUTPUT_BASE_DIR=リサーチ結果` を追加 |
-| `LOCAL_IMAGE_CACHE_DIR` | `（SITE_ROLEに応じて自動設定）` | アプリが画像を読む基底ディレクトリ。`SITE_ROLE=scraper` なら `img_cache/`、`reader` なら GDriveミラーリング済みフォルダに自動設定。手動上書きしたい場合のみ `.env` に追加 |
-| `SELLERS_MASTER_PATH` | `（自動検出）` | マスターセラーリストのフルパス。GDriveパスを自動検出するため通常設定不要。standalone 時のみ `SELLERS_MASTER_PATH=data/sellers_master.json` を追加 |
+| `OUTPUT_BASE_DIR` | `（Google Driveパス）` | セッションフォルダの保存先。デフォルトは `~/Library/CloudStorage/.../AucFanToolData/リサーチ結果`。ローカルに切り替えたい場合は `OUTPUT_BASE_DIR=リサーチ結果` を `.env` に追加 |
+| `SELLERS_MASTER_PATH` | `（Google DriveパスのAucFanToolData/sellers_master.json）` | マスターセラーリストのフルパス。デフォルトは Google Drive の `AucFanToolData/sellers_master.json`。ローカルに切り替えたい場合は `SELLERS_MASTER_PATH=data/sellers_master.json` を `.env` に追加 |
 | `EXCLUDE_TITLE_KEYWORDS` | `""` | 追加の除外タイトルキーワード（カンマ区切り） |
 | `EXCLUDE_MAKER_KEYWORDS` | `""` | 追加の除外メーカー名（カンマ区切り） |
 | `SELLER_SCRAPE_DETAIL` | `false` | `true` にするとSTEP 2でも詳細ページを取得する（非推奨・低速） |

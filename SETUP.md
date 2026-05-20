@@ -1,19 +1,7 @@
-# AucFan リサーチツール — セットアップ手順
+# AucFan リサーチツール — 移植・セットアップ手順
 
 別のMacへ移植する際の完全手順書です。  
-ユーザー名・コンピュータ名が変わる場合も考慮しています。
-
----
-
-## 運用モードを選ぶ
-
-セットアップ前に、このMacをどのモードで使うか決めてください。
-
-| モード | 用途 | `SITE_ROLE` | `GDRIVE_UPLOAD_ENABLED` | GDriveアプリ | `credentials.json` |
-|---|---|---|---|---|---|
-| ① scraper（十王Mac） | スクレイピング実行・GDriveへアップロード | `scraper` | `true` | ストリーミング | 必要 |
-| ② reader（守谷Mac） | GDriveミラーリングで閲覧のみ | `reader` | `false` | ミラーリング | 不要 |
-| ③ standalone（1台完結） | Google Driveなしで1台完結 | `scraper` | `false` | 不要 | 不要 |
+コンピュータ名・ユーザー名が変わる場合も考慮しています。
 
 ---
 
@@ -24,7 +12,16 @@
 | OS | macOS |
 | Python | 3.11 以上（推奨 3.12〜3.14） |
 | ブラウザ | Google Chrome（通常版） |
-| GDrive | モード①②のみ必要。③は不要 |
+| ストレージ | Google Drive for Desktop（ストリーミングモード） |
+
+### 2台構成について
+
+このツールは2台のMacで役割を分担して運用することを想定しています。
+
+| Mac | 役割 | SITE_ROLE |
+|-----|------|-----------|
+| 十王Mac | スクレイピング実行・画像/PDF を GDrive API でアップロード | `scraper` |
+| 守谷Mac | GDriveミラーリングで結果を参照・閲覧専用 | `reader` |
 
 ---
 
@@ -41,7 +38,7 @@ cd aucfan_tool
 ## 2. Python 仮想環境を作成・依存パッケージをインストール
 
 ```bash
-# 仮想環境を作成（既存の .venv は引き継がない — 別Macでは必ず再作成）
+# 仮想環境を作成（既存の .venv は引き継がない — 別Macでは再作成すること）
 python3 -m venv .venv
 
 # 有効化
@@ -52,133 +49,113 @@ pip install -r requirements.txt
 ```
 
 > **注意**: `.venv` フォルダはGitで管理されていません。  
-> 別Macに `.venv` フォルダをコピーしても動きません。必ず `pip install` をやり直してください。
+> 別Macに .venv フォルダをコピーしても動きません。必ず `pip install` をやり直してください。
 
 ---
 
 ## 3. .env ファイルを設定する
 
-テンプレートをコピーして編集します。
+`.env` ファイルを作成・編集します（既存ファイルをコピーして修正する場合も同様）。
 
 ```bash
 cp .env.example .env
-nano .env   # または好みのエディタで開く
+nano .env
 ```
 
-### モード別 .env 設定例
-
-**モード① 十王Mac（scraper）**
+### .env のテンプレート
 
 ```dotenv
-GEMINI_API_KEY=AIzaSy...（取得済みのキー）
-SITE_ROLE=scraper
-GDRIVE_UPLOAD_ENABLED=true
-# 以下は config.py が自動検出するため設定不要
-# （OUTPUT_BASE_DIR / SELLERS_MASTER_PATH / LOCAL_IMAGE_CACHE_DIR）
-```
+# Gemini API キー（Google AI Studio で取得）
+# https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=AIzaSy...（自分のAPIキーを入力）
 
-**モード② 守谷Mac（reader）**
+# Chrome リモートデバッグ設定（通常は変更不要）
+CHROME_DEBUG_HOST=127.0.0.1
+CHROME_DEBUG_PORT=9222
 
-```dotenv
-GEMINI_API_KEY=AIzaSy...（取得済みのキー）
-SITE_ROLE=reader
-GDRIVE_UPLOAD_ENABLED=false
-# 以下は config.py が自動検出するため設定不要
-```
-
-**モード③ スタンドアロン（1台完結・GDriveなし）**
-
-```dotenv
-GEMINI_API_KEY=AIzaSy...（取得済みのキー）
-SITE_ROLE=scraper
-GDRIVE_UPLOAD_ENABLED=false
-OUTPUT_BASE_DIR=リサーチ結果
-SELLERS_MASTER_PATH=data/sellers_master.json
-```
-
-### 共通オプション設定（任意）
-
-```dotenv
-# スクレイピング速度（短すぎるとBANリスク）
+# STEP1 スクレイピング設定
+# MIN_DELAY / MAX_DELAY : ページ取得間の待機秒数
+# MAX_PAGES             : 取得する最大ページ数
+# ITEMS_PER_PAGE        : 1ページあたりの商品件数
 MIN_DELAY=3.0
 MAX_DELAY=5.0
 MAX_PAGES=50
 ITEMS_PER_PAGE=50
 
-# 価格フィルター（円）
+# STEP1 フィルタリング設定
+# MIN_PRICE / MAX_PRICE : 一覧取得時の価格帯フィルター（円）
+# MIN_GROUP_SIZE        : 仕入れ候補とする最小グループ件数（この件数以上 = 緑ラベル）
+# PHASH_THRESHOLD       : 画像の類似度閾値（0=完全一致のみ / 大きいほど緩い判定）
 MIN_PRICE=1000
 MAX_PRICE=3000
 MIN_GROUP_SIZE=5
 PHASH_THRESHOLD=2
 
-# Geminiモデル
-GEMINI_MODEL_TEXT=gemini-3.5-flash
-GEMINI_MODEL_VISION=gemini-3.5-flash
+# Flask 設定（通常は変更不要）
+FLASK_PORT=5001
+
+# sellers_master.json の保存先（Google Drive）
+SELLERS_MASTER_PATH=/Users/【ユーザー名】/Library/CloudStorage/GoogleDrive-【Gmailアドレス】/マイドライブ/AucFanToolData/sellers_master.json
+
+# Gemini モデル設定
+GEMINI_MODEL_TEXT=gemini-2.5-flash
+GEMINI_MODEL_VISION=gemini-2.5-flash
+
+# Gemini 有効/無効（false にすると pHash のみで動作）
 GEMINI_ENABLED=true
 
-# Flask
-FLASK_PORT=5001
-```
+# ──────────────────────────────────────────────
+# Mac間の違いはここだけ（2行）
+# ──────────────────────────────────────────────
+# GDrive アップロード有効/無効（false にすると credentials.json 不要）
+GDRIVE_UPLOAD_ENABLED=true
 
-> **パスの手動指定について**: `OUTPUT_BASE_DIR` などにパスを書く場合は、そのMacのユーザー名に合わせてください。別Macの `/Users/ユーザー名/...` をそのままコピーしても動きません（パスが存在しないためエラーになります）。`config.py` が自動検出するため、通常は書かなくてOKです。
+# サイトロール（scraper=十王Mac／reader=守谷Mac）
+SITE_ROLE=scraper
+```
 
 ---
 
-## 4. credentials.json の配置（モード①のみ）
+## 4. Google Drive API 認証（scraper Mac のみ・十王Mac）
 
-> モード②③ はこの手順不要です。
+> `SITE_ROLE=reader`（守谷Mac）はこの手順不要です。
 
-画像・PDFをGoogle Drive APIで直接アップロードするため、**OAuth認証用ファイル**が必要です。
+画像・PDFをGoogle Drive APIで直接アップロードするため、初回のみOAuth認証が必要です。
 
-### credentials.json とは
+### 4-1. credentials.json を配置
 
-Google Cloud Consoleで発行する認証情報ファイルです。Google Cloud Consoleからダウンロードした際のファイル名は `client_secret_xxxxxxxxx.apps.googleusercontent.com.json` ですが、**`credentials.json` にリネームして `aucfan_tool/` フォルダに配置**してください。
+`credentials.json`（Google Cloud ConsoleのOAuth2認証情報）を `aucfan_tool/` フォルダに配置してください。  
+このファイルはGit管理外（`.gitignore`）のため、AirDropまたはGoogle Drive経由で転送してください。
 
-```
-aucfan_tool/
-└── credentials.json   ← ここに配置（Git管理外・AirDropまたはGDrive経由で転送）
-```
-
-### 初回OAuth認証を実行
+### 4-2. 初回認証を実行
 
 ```bash
 cd ~/Downloads/aucfan_tool
 .venv/bin/python setup_gdrive_auth.py
 ```
 
-ブラウザが開くので Googleアカウントにログインして「許可」をクリックしてください。  
-完了すると `token.json` が自動生成されます。
+ブラウザが開くのでGoogleアカウントにログインして許可してください。  
+完了すると `token.json` が生成されます。
 
+**確認メッセージ：**
 ```
 ✅ Google Drive に接続できました。アカウント: shinozakistore@gmail.com
 ```
 
-> `token.json` はGit管理外です。機器ごとに生成されます。  
-> `credentials.json` と `token.json` は他人に見せないでください（Googleアカウントへのアクセス権が含まれます）。
+> `token.json` はGit管理外です。機器ごとに生成されます。
 
 ---
 
-## 5. Google Drive for Desktop の設定（モード①②のみ）
-
-> モード③ はこの手順不要です。
+## 5. Google Drive for Desktop の設定
 
 1. [Google Drive for Desktop](https://www.google.com/drive/download/) をインストール
 2. `shinozakistore@gmail.com` でサインイン
-3. モードに応じて同期方式を設定：
-
-| モード | 設定 | 説明 |
-|---|---|---|
-| ① scraper（十王Mac） | **ストリーミング** | ファイルは必要なときだけダウンロード。GDrive API でアップロードするのでミラーリング不要 |
-| ② reader（守谷Mac） | **ミラーリング** | 全ファイルをローカルに同期。`~/マイドライブ（メールアドレス）/` が作成され、画像がすぐ表示できる |
-
-**ミラーリングの設定手順（守谷Mac）**：  
-Google Driveアプリを開く → 環境設定 → 「マイドライブの同期オプション」→「このデバイスにファイルをミラーリング」を選択 → 保存
-
-同期完了すると `~/マイドライブ（shinozakistore@gmail.com）/AucFanToolData/` が利用可能になります。
+3. **十王Mac**：「ストリーミング」モードに設定（PDFやHTMLのミラーリング用途のみ）
+4. **守谷Mac**：「ミラーリング」モードに設定（スクレイピング結果を自動同期して参照）
 
 ---
 
-## 6. 動作確認・起動
+## 6. 動作確認
 
 ```bash
 cd ~/Downloads/aucfan_tool
@@ -188,13 +165,13 @@ bash start.sh
 `start.sh` は以下を自動で行います：
 
 1. Chrome を通常終了
-2. Flask（`app.py`）をバックグラウンドで起動
+2. Flask（Python app.py）をバックグラウンドで起動
 3. Chrome をリモートデバッグポート（9222）付きで再起動
 4. ブラウザで `http://localhost:5001` を自動オープン
 
 ---
 
-## 7. AucFan にログイン（モード①③のみ）
+## 7. AucFan にログイン
 
 `start.sh` 起動後、Chrome で以下の操作をしてください：
 
@@ -204,39 +181,15 @@ bash start.sh
 
 ---
 
-## 役割の切り替え方（scraper ↔ reader）
-
-どちらのMacでも `.env` の2行を変更するだけで役割を入れ替えられます。
-
-### scraper → reader に変える場合
-
-```dotenv
-SITE_ROLE=reader
-GDRIVE_UPLOAD_ENABLED=false
-```
-
-Google Driveアプリを「ストリーミング」→「**ミラーリング**」に変更し、同期完了後にアプリを再起動してください。
-
-### reader → scraper に変える場合
-
-```dotenv
-SITE_ROLE=scraper
-GDRIVE_UPLOAD_ENABLED=true
-```
-
-`credentials.json` を配置して `setup_gdrive_auth.py` で認証を実行してから再起動してください。
-
----
-
 ## Tailscale 経由で別Macから閲覧する場合
 
-スクレイピングをするMacに Tailscale をインストールしてMeshVPNに接続すれば、別MacからもFlaskアプリにアクセスできます。
+スクレイピングをするMac（このツールが動いているMac）に Tailscale をインストールしてMeshVPNに接続すれば、別MacからもFlaskアプリにアクセスできます。
 
 ```
 http://【TailscaleのMac IP】:5001
 ```
 
-別Macでは**このツールのインストール・起動は不要**です。
+別Macでは **このツールのインストール・起動は不要** です。
 
 ---
 
@@ -271,19 +224,7 @@ pip install -r requirements.txt
 
 ### `.env` の変更が反映されない
 
-`.env` を編集したあとは **アプリを再起動**（`Ctrl+C` で停止 → `bash start.sh`）してください。  
-また、ターミナルで `echo $OUTPUT_BASE_DIR` などを実行して古い環境変数が残っていないか確認してください。残っている場合は `unset OUTPUT_BASE_DIR` を実行してから再起動してください。
-
-### Google Drive のセッションが見つからない
-
-ターミナルで以下を実行して `config.py` が参照しているパスを確認してください：
-
-```bash
-cd ~/Downloads/aucfan_tool
-.venv/bin/python3 -c "import config; print('OUTPUT:', config.OUTPUT_BASE_DIR); print('IMAGE:', config.LOCAL_IMAGE_CACHE_DIR)"
-```
-
-表示されたパスが実際に存在するか Finder で確認してください。
+`.env` を編集したあとは **Flask を再起動**（`start.sh` を再実行）してください。
 
 ---
 
@@ -292,32 +233,26 @@ cd ~/Downloads/aucfan_tool
 ```
 aucfan_tool/
 ├── app.py               # Flask メインアプリ
-├── config.py            # 設定値（.envから読み込み・GDriveパス自動検出）
+├── config.py            # 設定値（.env から読み込み）
 ├── scraper.py           # AucFan スクレイパー（STEP 1）
 ├── seller_analyzer.py   # セラー分析（STEP 2/3）
 ├── sellers_master.py    # マスターセラーリスト管理
 ├── data_manager.py      # データ保存・ロード
 ├── image_processor.py   # 画像ダウンロード・pHash計算・GDrive一括アップロード
 ├── gemini_client.py     # Gemini API クライアント
-├── pdf_exporter.py      # PDF自動生成（STEP完了時）
+├── pdf_exporter.py      # PDF自動生成（STEP1/2/3完了時）
 ├── gdrive_uploader.py   # Google Drive API アップロードモジュール
-├── setup_gdrive_auth.py # GDrive初回OAuth認証スクリプト（モード①のみ実行）
+├── setup_gdrive_auth.py # GDrive初回OAuth認証スクリプト（scraper Macのみ実行）
 ├── requirements.txt     # Python 依存パッケージ
 ├── start.sh             # 一発起動スクリプト
-├── .env                 # ★ 環境設定（Gitで管理されない・各Macで作成）
-├── .env.example         # .env のテンプレート（3モードのコメント付き）
-├── credentials.json     # ★ GDrive OAuth認証情報（Gitで管理されない・モード①のみ必要）
-│                        #   Google Cloud Console からダウンロードした
-│                        #   client_secret_xxx.json を credentials.json にリネームして配置
-├── token.json           # ★ GDrive認証トークン（Gitで管理されない・自動生成）
-├── .venv/               # ★ 仮想環境（Gitで管理されない・各Macで再作成）
+├── .env                 # 環境設定（★Gitで管理されない・各Macで作成）
+├── .env.example         # .envのテンプレート
+├── credentials.json     # GDrive OAuth認証情報（★Gitで管理されない・手動配置）
+├── token.json           # GDrive認証トークン（★Gitで管理されない・自動生成）
+├── .venv/               # 仮想環境（★Gitで管理されない・各Macで再作成）
 ├── templates/           # HTMLテンプレート
 └── static/              # CSS/JS
 ```
 
-> ★ のファイル・フォルダは `.gitignore` で管理対象外です。  
-> 別Macへ移植するときは手動で用意してください。
-
----
-
-*最終更新: 2026年5月20日（3モード対応・credentials.json説明・トラブルシューティング追加）*
+> `.env`・`credentials.json`・`token.json`・`.venv` は `.gitignore` に含まれており、Gitで管理されません。  
+> 別Macへ移植するときは必ず手動で用意してください。

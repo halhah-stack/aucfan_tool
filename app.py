@@ -427,16 +427,22 @@ def api_update_group_status(group_id):
 
     data = request.get_json(silent=True) or {}
     new_status = data.get("status")
+    ng_reason = data.get("ng_reason", "").strip()  # 手動NG理由（任意）
 
     all_items = dm.get_all_items()
     updated = 0
     for item in all_items:
         if item.get("group_id") == group_id or item["item_id"] == group_id:
-            dm.update_status(item["item_id"], new_status)
+            updates = {"status": new_status}
+            # NG理由が入力された場合は exclude_reason に保存
+            if new_status == "ng" and ng_reason:
+                updates["exclude_reason"] = ng_reason
+                updates["gemini_source"] = "manual"
+            dm.update_item(item["item_id"], updates)
             updated += 1
 
     dm.save_csv()
-    return jsonify({"success": True, "updated": updated})
+    return jsonify({"success": True, "updated": updated, "ng_reason": ng_reason})
 
 
 # ─────────────────────────────────────────────

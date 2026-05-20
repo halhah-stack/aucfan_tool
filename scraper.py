@@ -967,7 +967,7 @@ class AucFanScraper:
 
             try:
                 logger.info(f"詳細ページ [{done+1}/{len(targets)}]: {url}")
-                detail = self._scrape_detail_page(url, item_id, fallback_price=item.get("price", 0))
+                detail = self._scrape_detail_page(url, item_id)
 
                 if detail:
                     updates = {
@@ -1024,7 +1024,7 @@ class AucFanScraper:
         self.dm.save_all()
         logger.info(f"詳細ページ取得完了: {done}件")
 
-    def _scrape_detail_page(self, url: str, item_id: str, fallback_price: int = 0) -> Optional[dict]:
+    def _scrape_detail_page(self, url: str, item_id: str) -> Optional[dict]:
         """
         詳細ページをスクレイプして情報を返す。
         """
@@ -1074,15 +1074,11 @@ class AucFanScraper:
         # 価格を再取得（詳細ページで正確な値を取得）
         price_el = self._find_element_soup(soup, config.SELECTORS["list"]["price"])
         price = self._extract_price(price_el.get_text() if price_el else "")
-        # 詳細ページで価格が取れない場合は一覧ページの価格をフォールバック
-        if not price and fallback_price:
-            price = fallback_price
-            logger.debug(f"詳細ページ価格取得失敗 → 一覧価格にフォールバック: ¥{price}")
 
         return {
             "title_full": title_full,
             "shipping": shipping,
-            "total": price + shipping,
+            "total": (price or 0) + shipping,
             "images_local": images_local,
             "size_info": size_info,
         }

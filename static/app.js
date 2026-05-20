@@ -1039,7 +1039,7 @@ function renderGroupCard(group) {
       <button class="btn btn-success btn-sm" onclick="updateGroupStatus('${groupId}', 'ok')">
         ✅ OK
       </button>
-      <button class="btn btn-danger btn-sm" onclick="updateGroupStatus('${groupId}', 'ng')">
+      <button class="btn btn-danger btn-sm" onclick="showNgReasonModal('${groupId}')">
         ❌ NG
       </button>
     </div>
@@ -1047,10 +1047,116 @@ function renderGroupCard(group) {
 }
 
 // ─────────────────────────────────────────────
+// NG 理由入力モーダル
+// ─────────────────────────────────────────────
+function showNgReasonModal(groupId) {
+  // 既存モーダルを削除
+  const existing = document.getElementById('ngReasonModal');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'ngReasonModal';
+  modal.style.cssText = `
+    position:fixed; inset:0; background:rgba(0,0,0,.45);
+    display:flex; align-items:center; justify-content:center; z-index:9999;`;
+  modal.innerHTML = `
+    <div style="background:#fff; border-radius:10px; padding:24px; width:360px;
+                box-shadow:0 8px 32px rgba(0,0,0,.2);">
+      <p style="margin:0 0 12px; font-weight:600; font-size:15px;">❌ NG理由を入力（任意）</p>
+      <input id="ngReasonInput" type="text" placeholder="例: KOVAXはブランド名なので除外"
+        style="width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #ccc;
+               border-radius:6px; font-size:14px; margin-bottom:8px;"
+        onkeydown="if(event.key==='Enter') submitNgReason('${groupId}');
+                   if(event.key==='Escape') closeNgModal();" />
+      <p id="ngReasonHint" style="font-size:12px; color:#888; margin:0 0 14px; min-height:16px;"></p>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button onclick="closeNgModal()"
+          style="padding:7px 16px; border:1px solid #ccc; border-radius:6px;
+                 background:#fff; cursor:pointer;">キャンセル</button>
+        <button onclick="submitNgReason('${groupId}', true)"
+          style="padding:7px 16px; border:none; border-radius:6px;
+                 background:#6c757d; color:#fff; cursor:pointer;">理由なしでNG</button>
+        <button onclick="submitNgReason('${groupId}')"
+          style="padding:7px 16px; border:none; border-radius:6px;
+                 background:#dc3545; color:#fff; cursor:pointer; font-weight:600;">❌ NGにする</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const input = document.getElementById('ngReasonInput');
+  input.focus();
+
+  // 入力内容に応じてヒントを表示
+  input.addEventListener('input', () => {
+    const hint = document.getElementById('ngReasonHint');
+    const val = input.value;
+    if (/ブランド|メーカー|brand|maker/i.test(val)) {
+      hint.style.color = '#e67e00';
+      hint.textContent = '💡 ブランド・メーカー除外を検出。NGにすると除外キーワード追加を提案します。';
+    } else {
+      hint.style.color = '#888';
+      hint.textContent = '';
+    }
+  });
+
+  // モーダル外クリックで閉じる
+  modal.addEventListener('click', e => { if (e.target === modal) closeNgModal(); });
+}
+
+function closeNgModal() {
+  const m = document.getElementById('ngReasonModal');
+  if (m) m.remove();
+}
+
+async function submitNgReason(groupId, skipReason = false) {
+  const input = document.getElementById('ngReasonInput');
+  const reason = skipReason ? '' : (input ? input.value.trim() : '');
+  closeNgModal();
+  await updateGroupStatus(groupId, 'ng', reason);
+
+  // ブランド・メーカーキーワードを含む場合は追加提案を表示
+  if (reason && /ブランド|メーカー|brand|maker/i.test(reason)) {
+    // 理由から最初の単語（商品名）を抽出して提案
+    const word = reason.split(/[はがのをにで\s]/)[0];
+    setTimeout(() => {
+      showExcludeKeywordSuggestion(word, reason);
+    }, 800);
+  }
+}
+
+function showExcludeKeywordSuggestion(word, fullReason) {
+  const toast = document.createElement('div');
+  toast.style.cssText = `
+    position:fixed; bottom:80px; right:20px; background:#fff3cd;
+    border:1px solid #e67e00; border-radius:8px; padding:14px 18px;
+    max-width:340px; z-index:9998; box-shadow:0 4px 12px rgba(0,0,0,.15);
+    font-size:13px; line-height:1.5;`;
+  toast.innerHTML = `
+    <p style="margin:0 0 6px; font-weight:600; color:#856404;">
+      💡 除外キーワードへの追加を提案
+    </p>
+    <p style="margin:0 0 10px; color:#555;">
+      「<b>${escHtml(word)}</b>」を .env の
+      <code>EXCLUDE_MAKER_KEYWORDS</code> に追加すると<br>
+      次回から自動除外されます。
+    </p>
+    <code style="display:block; background:#f8f9fa; padding:6px 8px;
+                 border-radius:4px; font-size:12px; margin-bottom:10px; word-break:break-all;">
+      EXCLUDE_MAKER_KEYWORDS=${escHtml(word)}
+    </code>
+    <button onclick="this.closest('div').remove()"
+      style="padding:4px 12px; border:1px solid #ccc; border-radius:4px;
+             background:#fff; cursor:pointer; font-size:12px;">閉じる</button>`;
+  document.body.appendChild(toast);
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 15000);
+}
+
+// ─────────────────────────────────────────────
 // ステータス更新
 // ─────────────────────────────────────────────
-async function updateGroupStatus(groupId, status) {
-  const res = await fetchJSON(`/api/group/${groupId}/status`, 'POST', { status });
+async function updateGroupStatus(groupId, status, ngReason = '') {
+  const body = { status };
+  if (ngReason) body.ng_reason = ngReason;
+  const res = await fetchJSON(`/api/group/${groupId}/status`, 'POST', body);
   if (res.success) {
     showToast(`${res.updated}件を${status === 'ok' ? '✅ OK' : '❌ NG'}に更新しました`);
     loadGroups();
