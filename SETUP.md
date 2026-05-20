@@ -204,6 +204,28 @@ bash start.sh
 
 ---
 
+## 除外ルールのメンテナンス
+
+除外キーワードはすべて **`rules.yaml`** で一元管理しています。コードを触る必要はありません。
+
+```bash
+# rules.yaml を編集（テキストエディタで開く）
+open ~/Downloads/aucfan_tool/rules.yaml   # macOS のデフォルトエディタで開く
+
+# 変更を反映するには再起動
+bash start.sh
+```
+
+**追記する場所の目安**：
+
+| 追加したい内容 | 書く場所 |
+|---|---|
+| 商品名キーワード除外 | `title_keywords:` セクション |
+| メーカー・ブランド名除外 | `maker_keywords:` セクション |
+| Gemini分析で提案されたキーワード | `title_keywords:` と `custom_rules:` の両方 |
+
+---
+
 ## 役割の切り替え方（scraper ↔ reader）
 
 どちらのMacでも `.env` の2行を変更するだけで役割を入れ替えられます。

@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-20（3モード対応・GDriveパス自動検出・credentials.json説明追加）
+> 最終更新：2026-05-21（rules.yaml 一元管理・NGモーダルGemini分析・custom_rules学習機能追加）
 
 ---
 
@@ -20,7 +20,12 @@ aucfan_tool/
 ├── pdf_exporter.py         # PDF自動生成（STEP完了時にCSV・HTML・PDFを保存）
 ├── gdrive_uploader.py      # Google Drive API 直接アップロードモジュール（scraper Macのみ使用）
 ├── setup_gdrive_auth.py    # GDrive初回OAuth認証スクリプト（scraper Macで1回だけ実行）
-├── prompts.yaml            # Gemini用プロンプト定義（外部ファイル）
+├── prompts.yaml            # Gemini用プロンプトテンプレート定義（外部ファイル）
+├── rules.yaml              # 除外ルール一元管理ファイル（★メンテはここだけ）
+│                           #   title_keywords    : タイトルキーワード除外リスト
+│                           #   maker_keywords    : メーカー・ブランド名除外リスト
+│                           #   trading_card_keywords / automotive_keywords : 判定補助
+│                           #   custom_rules      : Gemini学習済みカスタムルール
 ├── .env                    # 環境変数（Git管理外）
 ├── .env.example            # .envのテンプレート
 ├── credentials.json        # GDrive OAuth クライアントシークレット（Git管理外・手動配置）
@@ -58,6 +63,17 @@ aucfan_tool/
 ### `config.py` — 設定の集約点
 
 すべての設定値は `config.py` に集中管理されており、`.env` ファイルから `python-dotenv` 経由で読み込まれます。ハードコードの変更は不要で、`.env` の書き換えだけで動作を調整できます。
+
+**除外ルールは `rules.yaml` で管理**：起動時に `_load_rules()` で `rules.yaml` を読み込み、`EXCLUDE_TITLE_KEYWORDS`・`EXCLUDE_MAKER_KEYWORDS`・`TRADING_CARD_KEYWORDS`・`AUTOMOTIVE_KEYWORDS` を生成します。コードに直接キーワードを書く必要はありません。
+
+```python
+# config.py 起動時の読み込みフロー
+_RULES = _load_rules()                             # rules.yaml を読み込む
+EXCLUDE_TITLE_KEYWORDS = _RULES.get("title_keywords", [])
+EXCLUDE_MAKER_KEYWORDS = {w.lower() for w in _RULES.get("maker_keywords", [])}
+TRADING_CARD_KEYWORDS  = set(_RULES.get("trading_card_keywords", []))
+AUTOMOTIVE_KEYWORDS    = set(_RULES.get("automotive_keywords", []))
+```
 
 主な設定グループ：
 
@@ -187,13 +203,44 @@ aucfan_tool/
 
 `GeminiClient` クラスがGemini APIとのやり取りを管理します。プロンプトは `prompts.yaml` から読み込まれ、ファイルが存在しない場合はコード内のデフォルトプロンプトにフォールバックします。
 
+**`rules.yaml` の `custom_rules` を自動注入**：
+
+`check_excluded_category()` の呼び出し時に `_build_custom_rules_prompt()` で `rules.yaml` の `custom_rules` セクションを読み込み、Geminiの除外判定プロンプトに自動追加します。これにより `custom_rules` に書いたカスタムルールがスクレイピング中のGemini判定に反映されます。
+
+```python
+# custom_rules の注入フロー（gemini_client.py 内）
+custom_section = _build_custom_rules_prompt()   # rules.yaml から生成
+# 例: 「【ユーザー定義の追加除外ルール】\n- 「フライパン」: 衛生リスク商品のため除外」
+prompt = base_prompt.replace("商品タイトル: {title}", f"{custom_section}\n商品タイトル: {title}")
+```
+
 **主要メソッド**：
 
 | メソッド | 使用モデル | 用途 |
 |---|---|---|
-| `classify_item_text(title)` | `GEMINI_MODEL_TEXT` | タイトルテキストのみで除外判定 |
-| `classify_item_vision(images, title)` | `GEMINI_MODEL_VISION` | 画像＋タイトルで同一商品・除外判定 |
-| `classify_item_full(images, title)` | Vision | Vision単体で全判定（テキスト+Vision統合プロンプト） |
+| `check_excluded_category(title)` | `GEMINI_MODEL_TEXT` | 絶対除外カテゴリ判定（custom_rules も自動注入） |
+| `check_needs_review(title)` | `GEMINI_MODEL_TEXT` | 要確認フラグ判定（車の保安部品等） |
+| `check_branded(title)` | `GEMINI_MODEL_TEXT` | 有名ブランド品判定 |
+| `check_oversized(title, size_info)` | `GEMINI_MODEL_TEXT` | 大型サイズ商品判定 |
+| `check_same_product_vision(image_paths)` | `GEMINI_MODEL_VISION` | 複数画像が同一商品か判定 |
+| `classify_item_full(title, image_path)` | Vision / Text | 商品の総合判定（Vision優先、なければText3回） |
+| `analyze_ng_reason(reason)` | `GEMINI_MODEL_TEXT` | 手動NG理由を分析してカテゴリ・説明・除外キーワード候補を返す |
+
+**`analyze_ng_reason()` の仕様**：
+
+ユーザーが手動でNG入力した理由テキストをGeminiに送り、除外ルール整理に役立つ情報を返します。
+
+```python
+# 入力
+gc.analyze_ng_reason("フライパンなのでNG")
+
+# 出力（dict）
+{
+  "category": "衛生リスク商品",
+  "explanation": "フライパンは食品と直接接触する調理器具のため、中古品は衛生リスクがある",
+  "keywords": ["フライパン", "鍋", "調理器具"]
+}
+```
 
 **レート制限**: `GEMINI_RPM_LIMIT=14` でリクエスト間隔を自動調整します（無料枠15RPMに対して安全マージンを設けています）。`GEMINI_ENABLED=false` または `GEMINI_API_KEY` 未設定の場合はAPI呼び出しをスキップしてpHashのみで動作します。
 
@@ -386,6 +433,8 @@ _login_check_event   # ログイン即時確認トリガー（threading.Event）
 | `/api/export/csv` | GET | 現在セッションをCSVエクスポート |
 | `/api/export/html` | GET | 現在セッションをHTMLエクスポート（Mac用・画像はサーバー経由） |
 | `/api/gemini_status` | GET | 直近のGemini APIエラー情報を返す（フロントエンドのポーリング用） |
+| `/api/group/<id>/status` | POST | グループのステータスを更新。`{"status": "ng", "ng_reason": "..."}` で手動NG理由を `exclude_reason` フィールドに保存。`gemini_source=manual` も記録 |
+| `/api/ng/analyze` | POST | 手動NG理由テキストをGeminiで分析。`{"reason": "フライパンなのでNG"}` を送ると `{"category": "...", "explanation": "...", "keywords": [...]}` を返す |
 
 **進捗レスポンスへの `processed_items` フィールド**:
 
@@ -523,8 +572,8 @@ _login_check_event   # ログイン即時確認トリガー（threading.Event）
 | `OUTPUT_BASE_DIR` | `（自動検出）` | セッションフォルダの保存先。`config.py` の `_find_gdrive_aucfan_root()` が GDrive パスを自動検出するため通常設定不要。standalone 時のみ `OUTPUT_BASE_DIR=リサーチ結果` を追加 |
 | `LOCAL_IMAGE_CACHE_DIR` | `（SITE_ROLEに応じて自動設定）` | アプリが画像を読む基底ディレクトリ。`SITE_ROLE=scraper` なら `img_cache/`、`reader` なら GDriveミラーリング済みフォルダに自動設定。手動上書きしたい場合のみ `.env` に追加 |
 | `SELLERS_MASTER_PATH` | `（自動検出）` | マスターセラーリストのフルパス。GDriveパスを自動検出するため通常設定不要。standalone 時のみ `SELLERS_MASTER_PATH=data/sellers_master.json` を追加 |
-| `EXCLUDE_TITLE_KEYWORDS` | `""` | 追加の除外タイトルキーワード（カンマ区切り） |
-| `EXCLUDE_MAKER_KEYWORDS` | `""` | 追加の除外メーカー名（カンマ区切り） |
+| `EXCLUDE_TITLE_KEYWORDS` | `""` | （非推奨）追加の除外タイトルキーワード。`rules.yaml` の `title_keywords` に追記する方法を推奨 |
+| `EXCLUDE_MAKER_KEYWORDS` | `""` | （非推奨）追加の除外メーカー名。`rules.yaml` の `maker_keywords` に追記する方法を推奨 |
 | `SELLER_SCRAPE_DETAIL` | `false` | `true` にするとSTEP 2でも詳細ページを取得する（非推奨・低速） |
 | `SELLER_NEW_ONLY` | `true` | STEP 2/3で「商品状態」が新品系ワード以外の商品を除外する。`false` で無効化 |
 | `SELLER_NEW_CONDITIONS` | `新品,未使用,未開封,未着用` | 新品とみなす商品状態ワード（カンマ区切り） |

@@ -28,6 +28,20 @@ bash ~/Downloads/aucfan_tool/start.sh
 
 ブラウザで http://localhost:5001 を開く。
 
+## 除外ルールのメンテナンス
+
+除外キーワード・メーカー名・カスタムルールはすべて **`rules.yaml`** で一元管理しています。
+
+```bash
+# rules.yaml を編集してルールを追加・変更
+nano rules.yaml   # または好みのエディタで開く
+
+# 変更を反映（再起動）
+bash start.sh
+```
+
+アプリのNGボタンでGemini分析パネルを使うと、除外キーワード候補が提案されます。提案されたキーワードを `rules.yaml` に追記してください。詳細は [docs/USER_GUIDE.md §10](docs/USER_GUIDE.md) を参照。
+
 ## 初回セットアップ
 
 ```bash
