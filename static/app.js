@@ -766,7 +766,7 @@ function renderGroups(groups) {
 function getGroupMinTotal(group) {
   if (!group.items || group.items.length === 0) return group.min_price || 0;
   return Math.min(
-    ...group.items.map(i => i.total || ((i.price || 0) + (i.shipping || 0)))
+    ...group.items.map(i => i.total || (i.price || 0))
   );
 }
 
@@ -972,8 +972,10 @@ function renderGroupCard(group) {
   // 価格表示
   const firstItem = group.items[0];
   const price = firstItem.price || 0;
-  const shipping = firstItem.shipping || 0;
-  const total = firstItem.total || (price + shipping);
+  // shipping: null/undefined = AucFanでは不明（「—」表示）、0 = 送料無料、正数 = 実額
+  const shipping = (firstItem.shipping !== null && firstItem.shipping !== undefined)
+    ? firstItem.shipping : null;
+  const total = firstItem.total || price;
 
   // セラーID（全員表示、5件超は "+N" で省略）
   const allSellers = (group.seller_ids || []).filter(Boolean);
@@ -1015,15 +1017,10 @@ function renderGroupCard(group) {
           <div class="card-price-label">${shipping > 0 ? '合計' : '価格'}</div>
           <div class="card-price">¥${(shipping > 0 ? total : price).toLocaleString()}</div>
         </div>
-        ${shipping > 0 ? `
-        <div class="card-price-sub">
-          <div class="card-price-label">価格</div>
-          <div class="price-val">¥${price.toLocaleString()}</div>
-        </div>
         <div class="card-price-sub">
           <div class="card-price-label">送料</div>
-          <div class="price-val">¥${shipping.toLocaleString()}</div>
-        </div>` : ''}
+          <div class="price-val">${shipping === null ? '—' : shipping === 0 ? '無料' : '¥' + shipping.toLocaleString()}</div>
+        </div>
       </div>
       <div class="card-sellers${multiSellerClass}">
         出品者${sellerCountLabel}: ${sellerBadges || '—'}${sellerExtra}
@@ -1268,8 +1265,8 @@ async function openItemDetail(itemId) {
     <table class="detail-table">
       <tr><th>完全タイトル</th><td>${escHtml(item.title_full || item.title_short || '—')}</td></tr>
       <tr><th>落札価格</th><td>¥${(item.price||0).toLocaleString()}</td></tr>
-      <tr><th>送料</th><td>${item.shipping === 0 ? '無料' : '¥' + (item.shipping||0).toLocaleString()}</td></tr>
-      <tr><th>合計</th><td><strong>¥${(item.total||0).toLocaleString()}</strong></td></tr>
+      <tr><th>送料</th><td>${item.shipping === null || item.shipping === undefined ? '—（AucFanでは非表示）' : item.shipping === 0 ? '無料' : '¥' + item.shipping.toLocaleString()}</td></tr>
+      <tr><th>合計</th><td><strong>¥${(item.total || item.price || 0).toLocaleString()}</strong></td></tr>
       <tr><th>セラーID</th><td>${escHtml(item.seller_id || '—')}</td></tr>
       <tr><th>グループ</th><td>${item.group_id ? `同一${item.group_size}件グループ` : '単品'}</td></tr>
       <tr><th>ステータス</th><td>${item.status || '—'}</td></tr>

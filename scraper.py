@@ -1081,8 +1081,8 @@ class AucFanScraper:
 
         return {
             "title_full": title_full,
-            "shipping": shipping,
-            "total": price + shipping,
+            "shipping": shipping,  # None = 不明（AucFanは送料非表示）
+            "total": price if shipping is None else price + shipping,
             "images_local": images_local,
             "size_info": size_info,
         }
@@ -1455,11 +1455,18 @@ class AucFanScraper:
                 continue
         return 0
 
-    def _extract_shipping(self, soup) -> int:
+    def _extract_shipping(self, soup) -> Optional[int]:
         """
         詳細ページから送料を抽出。
-        「送料無料」→ 0、数字 → その値、不明 → 0
+        「送料無料」→ 0、数字 → その値、不明 → None（AucFanは送料非表示のため通常None）
         """
+        full_text = soup.get_text()
+
+        # 先に「送料無料」「送料込」を確認（誤マッチ防止）
+        if "送料無料" in full_text or "送料込" in full_text:
+            return 0
+
+        # CSS セレクタで専用要素を探す
         for sel in config.SELECTORS["detail"]["shipping"]:
             try:
                 el = soup.select_one(sel)
@@ -1476,25 +1483,22 @@ class AucFanScraper:
             except Exception:
                 continue
 
-        # 全テキストから送料を検索
-        full_text = soup.get_text()
+        # 「送料：XXX円」「配送料：XXX円」形式のみ信頼（価格誤マッチ防止のため順序限定）
         patterns = [
             r"送料[：:]\s*([\d,]+)円",
             r"配送料[：:]\s*([\d,]+)円",
-            r"([\d,]+)円.*送料",
         ]
         for pat in patterns:
             m = re.search(pat, full_text)
             if m:
                 try:
-                    return int(m.group(1).replace(",", ""))
+                    v = int(m.group(1).replace(",", ""))
+                    if 0 < v < 10000:
+                        return v
                 except Exception:
                     pass
 
-        if "送料無料" in full_text or "送料込" in full_text:
-            return 0
-
-        return 0  # 不明な場合は0として処理
+        return None  # AucFanは送料を表示しないため不明（UIでは「—」表示）
 
     def _extract_size_info(self, soup) -> str:
         """詳細ページからサイズ情報を抽出"""
