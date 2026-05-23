@@ -322,6 +322,9 @@ aucfan_tool/
 ├── image_processor.py   # 画像ダウンロード・pHash計算・GDrive一括アップロード
 ├── gemini_client.py     # Gemini API クライアント
 ├── pdf_exporter.py      # PDF自動生成（STEP完了時）
+├── excel_exporter.py    # Excel リサーチシート生成（商品カードの📗ボタンから呼び出し）
+├── build_template.py    # リサーチ_テンプレート.xlsx を生成するスクリプト（初回・再生成時に実行）
+├── リサーチ_テンプレート.xlsx  # Excelエクスポートのフォーマットテンプレート（Excelで自由に編集可）
 ├── gdrive_uploader.py   # Google Drive API アップロードモジュール
 ├── setup_gdrive_auth.py # GDrive初回OAuth認証スクリプト（モード①のみ実行）
 ├── requirements.txt     # Python 依存パッケージ
@@ -342,4 +345,4 @@ aucfan_tool/
 
 ---
 
-*最終更新: 2026年5月20日（3モード対応・credentials.json説明・トラブルシューティング追加）*
+*最終更新: 2026年5月23日（Excelエクスポート機能追加・ファイル構成更新）*

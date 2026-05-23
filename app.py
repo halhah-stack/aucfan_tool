@@ -711,40 +711,39 @@ def api_export_pdf():
     return response
 
 
-@app.route("/api/export/excel")
-def api_export_excel():
+@app.route("/api/export/excel/<group_id>", methods=["POST"])
+def api_export_excel_single(group_id):
     """
-    Excel エクスポート（リサーチシート形式）。
-    4件以上グループを件数降順でリサーチシートとして生成し、
-    セッションフォルダ（Google Drive）に直接保存する。
+    指定した group_id 1件分を Excel リサーチシートとして生成し、
+    リサーチ結果フォルダ直下に保存する。
+    ファイル名 = 商品タイトル_リサーチ.xlsx
     """
-    from excel_exporter import generate_excel
+    from excel_exporter import generate_excel_single
 
     dm = get_dm()
     if not dm:
         return jsonify({"error": "データがありません"}), 400
 
-    session_dir = _session_output_dir
-    if session_dir is None:
+    if _session_output_dir is None:
         return jsonify({"error": "セッションが読み込まれていません"}), 400
 
-    session_name = session_dir.name
-    excel_bytes = generate_excel(dm, session_name, embed_images=True)
-    if not excel_bytes:
-        return jsonify({"error": "出力対象グループがありません（4件以上 0件）"}), 400
+    result = generate_excel_single(dm, group_id, embed_images=True)
+    if not result:
+        return jsonify({"error": "グループが見つかりません"}), 404
 
-    # リサーチ結果フォルダ直下に保存（セッションフォルダの外）
-    filename = f"{session_name}_リサーチ.xlsx"
+    excel_bytes, filename = result
+
+    # リサーチ結果フォルダ直下に保存
     save_path = Path(config.OUTPUT_BASE_DIR) / filename
     try:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         save_path.write_bytes(excel_bytes)
-        logger.info(f"Excel保存: {save_path}")
+        logger.info(f"Excel(単品)保存: {save_path}")
     except Exception as e:
-        logger.error(f"Excel保存エラー: {e}")
+        logger.error(f"Excel(単品)保存エラー: {e}")
         return jsonify({"error": f"保存に失敗しました: {e}"}), 500
 
-    return jsonify({"success": True, "path": str(save_path), "filename": filename})
+    return jsonify({"success": True, "filename": filename})
 
 
 def _build_export_html(groups_data, keyword, exported_at, total_items, total_groups):

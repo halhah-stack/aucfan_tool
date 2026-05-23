@@ -1039,8 +1039,33 @@ function renderGroupCard(group) {
       <button class="btn btn-danger btn-sm" onclick="showNgReasonModal('${groupId}')">
         ❌ NG
       </button>
+      <button class="btn btn-success btn-sm" onclick="exportGroupExcel('${groupId}', this)" title="このグループのリサーチシートをExcel保存">
+        📗 Excel
+      </button>
     </div>
   </div>`;
+}
+
+// ─────────────────────────────────────────────
+// Excel エクスポート（1商品）
+// ─────────────────────────────────────────────
+async function exportGroupExcel(groupId, btn) {
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+
+  try {
+    const res = await fetch(`/api/export/excel/${encodeURIComponent(groupId)}`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast('❌ ' + (data.error || 'Excel保存失敗'), 'error');
+      return;
+    }
+    showToast('📗 Excel保存: ' + (data.filename || ''));
+  } catch (e) {
+    showToast('❌ Excelエラー: ' + e, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel || '📗 Excel'; }
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -1418,27 +1443,6 @@ async function exportPdf() {
     showToast('❌ PDF書き出しエラー: ' + e, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = origLabel || '📄 PDF保存（iPhone用）'; }
-  }
-}
-
-async function exportExcel() {
-  const btn = document.getElementById('btnExportExcel');
-  const origLabel = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Excel生成中...'; }
-  showToast('📗 Excelリサーチシート生成中... しばらくお待ちください');
-
-  try {
-    const res = await fetch('/api/export/excel');
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      showToast('❌ ' + (data.error || 'Excel生成失敗'), 'error');
-      return;
-    }
-    showToast('✅ Excel保存完了: ' + (data.filename || 'リサーチ.xlsx'));
-  } catch (e) {
-    showToast('❌ Excel書き出しエラー: ' + e, 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = origLabel || '📗 Excelエクスポート'; }
   }
 }
 

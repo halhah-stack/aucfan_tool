@@ -28,6 +28,20 @@ bash ~/Downloads/aucfan_tool/start.sh
 
 ブラウザで http://localhost:5001 を開く。
 
+## Excel リサーチシート出力
+
+商品カードの **📗 Excel** ボタンを押すと、その商品1件分のリサーチシートを  
+`AucFanToolData/リサーチ結果/商品タイトル_リサーチ.xlsx` として保存します。
+
+出力書式は **`リサーチ_テンプレート.xlsx`** を直接Excelで編集するだけで変更できます。  
+コードは「どのセルに何を書くか」だけを担当しています。
+
+テンプレートを作り直したいときは：
+```bash
+cd ~/Downloads/aucfan_tool
+python3 build_template.py
+```
+
 ## 除外ルールのメンテナンス
 
 除外キーワード・メーカー名・カスタムルールはすべて **`rules.yaml`** で一元管理しています。

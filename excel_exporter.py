@@ -345,7 +345,92 @@ def _build_workbook(groups: list[dict], session_name: str,
     return wb
 
 
+# ── ファイル名サニタイズ ────────────────────────────────────────────────
+def sanitize_filename(title: str, max_len: int = 60) -> str:
+    """タイトルをファイル名に使える文字列に変換する。"""
+    import re
+    # Windowsでも使えない文字を除去
+    title = re.sub(r'[\\/:*?"<>|]', '', title)
+    # 連続スペースを1つに
+    title = re.sub(r'\s+', ' ', title).strip()
+    return title[:max_len] if title else "リサーチ"
+
+
 # ── 公開 API ───────────────────────────────────────────────────────────
+def generate_excel_single(dm, group_id: str, embed_images: bool = True) -> Optional[tuple[bytes, str]]:
+    """
+    指定した group_id 1件分の Excel を生成し (bytes, filename) を返す。
+    失敗時は None を返す。
+
+    Args:
+        dm           : DataManager インスタンス
+        group_id     : 対象グループID
+        embed_images : True なら thumbnail_local の画像を埋め込む
+
+    Returns:
+        (excel_bytes, filename) または None
+    """
+    try:
+        all_items = dm.get_all_items()
+
+        # 対象グループのアイテムを取得
+        g_items = [i for i in all_items
+                   if (i.get("group_id") or i.get("item_id")) == group_id]
+        if not g_items:
+            logger.warning(f"グループが見つかりません: {group_id}")
+            return None
+
+        rep = next((i for i in g_items if i.get("item_id") == group_id), g_items[0])
+
+        group_size = int(rep.get("group_size") or len(g_items))
+        title      = rep.get("title_short") or rep.get("title_full") or ""
+        url        = rep.get("url", "") or ""
+
+        totals = [float(i.get("total") or 0) for i in g_items if float(i.get("total") or 0) > 0]
+        min_total = int(min(totals)) if totals else 0
+
+        sellers: list[str] = []
+        seen: set[str] = set()
+        for i in g_items:
+            sid = (i.get("seller_id") or "").strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                sellers.append(sid)
+            if len(sellers) >= 3:
+                break
+
+        thumb_path: Optional[Path] = None
+        th = rep.get("thumbnail_local", "") or ""
+        if th:
+            p = Path(th)
+            if p.exists():
+                thumb_path = p
+
+        group = {
+            "title":      title,
+            "group_size": group_size,
+            "min_total":  min_total,
+            "sellers":    sellers,
+            "url":        url,
+            "thumb_path": thumb_path,
+        }
+
+        research_date = datetime.now()
+        wb = _build_workbook([group], title or group_id, research_date, embed_images)
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        filename = f"{sanitize_filename(title)}_リサーチ.xlsx"
+        logger.info(f"Excel(単品)生成完了: {filename}")
+        return buf.read(), filename
+
+    except Exception as e:
+        logger.error(f"Excel(単品)生成エラー: {e}", exc_info=True)
+        return None
+
+
 def generate_excel(dm, session_name: str, embed_images: bool = True) -> Optional[bytes]:
     """
     DataManager からリサーチシート Excel を生成し bytes で返す。
