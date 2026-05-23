@@ -1421,6 +1421,27 @@ async function exportPdf() {
   }
 }
 
+async function exportExcel() {
+  const btn = document.getElementById('btnExportExcel');
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Excel生成中...'; }
+  showToast('📗 Excelリサーチシート生成中... しばらくお待ちください');
+
+  try {
+    const res = await fetch('/api/export/excel');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast('❌ ' + (data.error || 'Excel生成失敗'), 'error');
+      return;
+    }
+    showToast('✅ Excel保存完了: ' + (data.filename || 'リサーチ.xlsx'));
+  } catch (e) {
+    showToast('❌ Excel書き出しエラー: ' + e, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel || '📗 Excelエクスポート'; }
+  }
+}
+
 // ─────────────────────────────────────────────
 // セッション管理
 // ─────────────────────────────────────────────

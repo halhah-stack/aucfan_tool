@@ -500,6 +500,9 @@
       <button class="btn btn-secondary btn-sm" id="btnExportPdf" onclick="exportPdf()" title="仕入れ候補・次期候補を件数順→価格順でPDF出力（iPhoneのファイルアプリで開けます）">
         📄 PDF保存（iPhone用）
       </button>
+      <button class="btn btn-success btn-sm" id="btnExportExcel" onclick="exportExcel()" title="4件以上グループをAucfanリサーチシート（Excel）として書き出す">
+        📗 Excelエクスポート
+      </button>
       <label class="btn btn-secondary btn-sm" style="cursor:pointer" title="results.csv を読み込んでグリッドに表示します">
         📂 CSV読み込み
         <input type="file" id="gridCsvInput" accept=".csv" style="display:none" onchange="loadGridFromCsv(this)">
