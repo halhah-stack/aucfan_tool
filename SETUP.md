@@ -226,27 +226,38 @@ bash start.sh
 
 ---
 
-## 役割の切り替え方（scraper ↔ reader）
+## 役割の切り替え方（scraper ↔ reader ↔ standalone）
 
-どちらのMacでも `.env` の2行を変更するだけで役割を入れ替えられます。
+`switch_role.sh` スクリプトでワンコマンド切り替えができます。`.env` の手作業編集は不要です。
 
-### scraper → reader に変える場合
-
-```dotenv
-SITE_ROLE=reader
-GDRIVE_UPLOAD_ENABLED=false
+```bash
+bash ~/Downloads/aucfan_tool/switch_role.sh scraper     # スクレイピング専用に切り替え
+bash ~/Downloads/aucfan_tool/switch_role.sh reader      # 閲覧専用に切り替え
+bash ~/Downloads/aucfan_tool/switch_role.sh standalone  # 1台完結（GDrive不要）に切り替え
 ```
 
-Google Driveアプリを「ストリーミング」→「**ミラーリング**」に変更し、同期完了後にアプリを再起動してください。
+実行すると `.env` が自動更新され、残りの手動作業（GDriveアプリのモード変更など）が画面に表示されます。
 
-### reader → scraper に変える場合
+### scraper → reader に変える場合（スクリプト実行後の手動作業）
 
-```dotenv
-SITE_ROLE=scraper
-GDRIVE_UPLOAD_ENABLED=true
-```
+1. Google Driveアプリを「ストリーミング」→「**ミラーリング**」に変更
+   - Google Driveアプリ → 環境設定 → マイドライブの同期オプション → 「このデバイスにファイルをミラーリング」→ 保存
+2. GDriveの同期完了を待つ
+3. `bash start.sh` でアプリを再起動
 
-`credentials.json` を配置して `setup_gdrive_auth.py` で認証を実行してから再起動してください。
+### reader → scraper に変える場合（スクリプト実行後の手動作業）
+
+1. Google Driveアプリを「ミラーリング」→「**ストリーミング**」に変更
+2. `credentials.json` を配置（初回のみ）
+3. `setup_gdrive_auth.py` で認証を実行（初回のみ）：
+   ```bash
+   cd ~/Downloads/aucfan_tool && .venv/bin/python setup_gdrive_auth.py
+   ```
+4. `bash start.sh` でアプリを再起動
+
+### standalone に変える場合（スクリプト実行後の手動作業）
+
+`bash start.sh` でアプリを再起動するだけでOKです。GDrive・credentials.json は不要です。
 
 ---
 
@@ -329,6 +340,7 @@ aucfan_tool/
 ├── setup_gdrive_auth.py # GDrive初回OAuth認証スクリプト（モード①のみ実行）
 ├── requirements.txt     # Python 依存パッケージ
 ├── start.sh             # 一発起動スクリプト
+├── switch_role.sh       # 役割切り替えスクリプト（scraper/reader/standalone）
 ├── .env                 # ★ 環境設定（Gitで管理されない・各Macで作成）
 ├── .env.example         # .env のテンプレート（3モードのコメント付き）
 ├── credentials.json     # ★ GDrive OAuth認証情報（Gitで管理されない・モード①のみ必要）
@@ -345,4 +357,4 @@ aucfan_tool/
 
 ---
 
-*最終更新: 2026年5月23日（Excelエクスポート機能追加・ファイル構成更新）*
+*最終更新: 2026年5月24日（switch_role.sh による役割切り替えスクリプト追加）*
