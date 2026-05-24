@@ -257,6 +257,12 @@ class SellerAnalyzer(AucFanScraper):
             )
             logger.info("=" * 50)
 
+            # GDrive へ画像を一括アップロード（スクレイピング完了後にまとめて実行）
+            try:
+                self.img.upload_images_to_gdrive()
+            except Exception as _e:
+                logger.warning(f"GDrive一括アップロードでエラー（スキップ）: {_e}")
+
         except Exception as e:
             logger.error(
                 f"セラー分析中に予期しないエラー: {e}", exc_info=True
