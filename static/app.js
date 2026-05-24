@@ -1043,7 +1043,10 @@ function renderGroupCard(group) {
       <button class="btn btn-danger btn-sm" onclick="showNgReasonModal('${groupId}')">
         ❌ NG
       </button>
-      <button class="btn btn-success btn-sm" onclick="exportGroupExcel('${groupId}', this)" title="このグループのリサーチシートをExcel保存">
+      <button class="btn btn-secondary btn-sm" id="amazonInvestBtn_${groupId}" onclick="investigateAmazon('${groupId}')" title="AmazonページのデータをこのグループにひもづけてAmazonタブで取得する">
+        🔍 Amazon調査
+      </button>
+      <button class="btn btn-success btn-sm" onclick="exportGroupExcel('${groupId}', this)" title="このグループのリサーチシートをExcel保存（Amazon調査済みの場合はAmazonデータも含まれます）">
         📗 Excel
       </button>
     </div>
@@ -2897,6 +2900,42 @@ function showToast(msg, type = 'info') {
 let _lastAmazonData = null;
 
 /**
+ * 現在調査中のグループID（商品カードの「Amazon調査」ボタンで設定される）
+ * このグループIDを Amazon データ取得時にサーバーに送り、DataManager に保存する。
+ */
+let _currentAmazonGroupId = null;
+
+/**
+ * 商品カードの「Amazon調査」ボタンから呼ばれる。
+ * グループIDを記憶してAmazonタブに切り替える。
+ */
+function investigateAmazon(groupId) {
+  _currentAmazonGroupId = groupId;
+
+  // Amazon タブに切り替え
+  switchStep('amazon');
+
+  // タブ上部に「調査対象グループ」を表示
+  const targetDiv = document.getElementById('amazonTargetGroup');
+  if (targetDiv) {
+    targetDiv.textContent = `調査対象: グループ ${groupId}`;
+    targetDiv.style.display = '';
+  }
+
+  // 取得済みデータがあれば読み込んで表示
+  fetch(`/api/amazon/data/${encodeURIComponent(groupId)}`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        _lastAmazonData = data;
+        _renderAmazonResult(data);
+        showToast('✅ 保存済みのAmazonデータを表示しています');
+      }
+    })
+    .catch(() => {});
+}
+
+/**
  * 今Chromeで開いているAmazon商品ページの情報を取得してパネルに表示する。
  * ボタン onclick="fetchAmazonProduct()" から呼ばれる。
  */
@@ -2911,7 +2950,14 @@ async function fetchAmazonProduct() {
   if (btn)       { btn.disabled = true; btn.textContent = '⏳ 取得中…'; }
 
   try {
-    const res  = await fetch('/api/amazon/fetch', { method: 'POST' });
+    const body = _currentAmazonGroupId
+      ? JSON.stringify({ group_id: _currentAmazonGroupId })
+      : null;
+    const res  = await fetch('/api/amazon/fetch', {
+      method: 'POST',
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body,
+    });
     const data = await res.json();
 
     if (!data.success) {
@@ -2923,84 +2969,19 @@ async function fetchAmazonProduct() {
       return;
     }
 
-    // ── データをキャッシュ ──
+    // ── データをキャッシュして描画 ──
     _lastAmazonData = data;
+    _renderAmazonResult(data);
 
-    // ── 画像 ──
-    const imgEl = document.getElementById('amazonImage');
-    if (imgEl) {
-      imgEl.src = data.image_url || '';
-      imgEl.style.display = data.image_url ? '' : 'none';
+    // ── 商品カードのボタンを「調査済み」に更新 ──
+    if (_currentAmazonGroupId) {
+      const cardBtn = document.getElementById(`amazonInvestBtn_${_currentAmazonGroupId}`);
+      if (cardBtn) {
+        cardBtn.textContent = '✅ Amazon調査済';
+        cardBtn.classList.remove('btn-secondary');
+        cardBtn.classList.add('btn-success');
+      }
     }
-
-    // ── タイトル ──
-    const titleEl = document.getElementById('amazonTitle');
-    if (titleEl) titleEl.textContent = data.title || '（タイトル不明）';
-
-    // ── 価格 ──
-    const priceEl = document.getElementById('amazonPrice');
-    if (priceEl) priceEl.textContent = data.price || '価格不明';
-
-    // ── 評価 ──
-    const ratingEl = document.getElementById('amazonRating');
-    if (ratingEl) ratingEl.textContent = data.rating || '—';
-    const reviewEl = document.getElementById('amazonReviewCount');
-    if (reviewEl) reviewEl.textContent = data.review_count || '0件';
-
-    // ── ASIN ──
-    const asinEl = document.getElementById('amazonAsin');
-    if (asinEl) asinEl.textContent = data.asin || '—';
-
-    // ── URLリンク ──
-    const urlEl = document.getElementById('amazonUrl');
-    if (urlEl) {
-      urlEl.href = data.url || '#';
-      urlEl.style.display = data.url ? '' : 'none';
-    }
-
-    // ── 箇条書き ──
-    const bulletsEl      = document.getElementById('amazonBullets');
-    const bulletsSect    = document.getElementById('amazonBulletsSection');
-    if (bulletsEl) {
-      bulletsEl.innerHTML = '';
-      (data.bullets || []).forEach(b => {
-        const li = document.createElement('li');
-        li.textContent = b;
-        bulletsEl.appendChild(li);
-      });
-    }
-    if (bulletsSect) bulletsSect.style.display = (data.bullets || []).length ? '' : 'none';
-
-    // ── 商品説明 ──
-    const descEl   = document.getElementById('amazonDescription');
-    const descSect = document.getElementById('amazonDescSection');
-    if (descEl) descEl.textContent = data.description || '';
-    if (descSect) descSect.style.display = data.description ? '' : 'none';
-
-    // ── 仕様表 ──
-    const specsTable = document.getElementById('amazonSpecsTable');
-    const specsSect  = document.getElementById('amazonSpecsSection');
-    if (specsTable) {
-      specsTable.innerHTML = '';
-      const specs = data.specs || {};
-      const keys  = Object.keys(specs);
-      keys.forEach((k, i) => {
-        const tr = specsTable.insertRow();
-        tr.style.background = i % 2 === 0 ? '#f9fafb' : '#ffffff';
-        const th = document.createElement('td');
-        th.style.cssText = 'padding:5px 10px;font-weight:bold;color:#374151;width:38%;border-bottom:1px solid #e5e7eb;vertical-align:top';
-        th.textContent = k;
-        const td = document.createElement('td');
-        td.style.cssText = 'padding:5px 10px;color:#111827;border-bottom:1px solid #e5e7eb;vertical-align:top';
-        td.textContent = specs[k];
-        tr.appendChild(th);
-        tr.appendChild(td);
-      });
-      if (specsSect) specsSect.style.display = keys.length ? '' : 'none';
-    }
-
-    // ── 結果エリア表示 ──
-    if (resultDiv) resultDiv.style.display = '';
 
   } catch (e) {
     if (errDiv) {
@@ -3010,6 +2991,98 @@ async function fetchAmazonProduct() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🛒 今開いているAmazonページから取得'; }
   }
+}
+
+/**
+ * Amazonデータをパネルに描画する共通関数。
+ * fetchAmazonProduct() と investigateAmazon()（既存データ読み込み）から呼ばれる。
+ */
+function _renderAmazonResult(data) {
+  const resultDiv = document.getElementById('amazonResult');
+
+  // ── 画像 ──
+  const imgEl = document.getElementById('amazonImage');
+  if (imgEl) {
+    imgEl.src = data.image_url || '';
+    imgEl.style.display = data.image_url ? '' : 'none';
+  }
+
+  // ── タイトル ──
+  const titleEl = document.getElementById('amazonTitle');
+  if (titleEl) titleEl.textContent = data.title || '（タイトル不明）';
+
+  // ── 価格 ──
+  const priceEl = document.getElementById('amazonPrice');
+  if (priceEl) priceEl.textContent = data.price || '価格不明';
+
+  // ── 評価 ──
+  const ratingEl = document.getElementById('amazonRating');
+  if (ratingEl) ratingEl.textContent = data.rating || '—';
+  const reviewEl = document.getElementById('amazonReviewCount');
+  if (reviewEl) reviewEl.textContent = data.review_count || '0件';
+
+  // ── A+フラグ ──
+  const aplusEl = document.getElementById('amazonAplus');
+  if (aplusEl) {
+    aplusEl.textContent  = data.has_aplus ? '✓ A+あり' : 'A+なし';
+    aplusEl.style.color  = data.has_aplus ? '#16a34a' : '#9ca3af';
+    aplusEl.style.fontWeight = data.has_aplus ? 'bold' : 'normal';
+  }
+
+  // ── ASIN ──
+  const asinEl = document.getElementById('amazonAsin');
+  if (asinEl) asinEl.textContent = data.asin || '—';
+
+  // ── URLリンク ──
+  const urlEl = document.getElementById('amazonUrl');
+  if (urlEl) {
+    urlEl.href = data.url || '#';
+    urlEl.style.display = data.url ? '' : 'none';
+  }
+
+  // ── 箇条書き ──
+  const bulletsEl   = document.getElementById('amazonBullets');
+  const bulletsSect = document.getElementById('amazonBulletsSection');
+  if (bulletsEl) {
+    bulletsEl.innerHTML = '';
+    (data.bullets || []).forEach(b => {
+      const li = document.createElement('li');
+      li.textContent = b;
+      bulletsEl.appendChild(li);
+    });
+  }
+  if (bulletsSect) bulletsSect.style.display = (data.bullets || []).length ? '' : 'none';
+
+  // ── 商品説明 ──
+  const descEl   = document.getElementById('amazonDescription');
+  const descSect = document.getElementById('amazonDescSection');
+  if (descEl) descEl.textContent = data.description || '';
+  if (descSect) descSect.style.display = data.description ? '' : 'none';
+
+  // ── 仕様表 ──
+  const specsTable = document.getElementById('amazonSpecsTable');
+  const specsSect  = document.getElementById('amazonSpecsSection');
+  if (specsTable) {
+    specsTable.innerHTML = '';
+    const specs = data.specs || {};
+    const keys  = Object.keys(specs);
+    keys.forEach((k, i) => {
+      const tr = specsTable.insertRow();
+      tr.style.background = i % 2 === 0 ? '#f9fafb' : '#ffffff';
+      const th = document.createElement('td');
+      th.style.cssText = 'padding:5px 10px;font-weight:bold;color:#374151;width:38%;border-bottom:1px solid #e5e7eb;vertical-align:top';
+      th.textContent = k;
+      const td = document.createElement('td');
+      td.style.cssText = 'padding:5px 10px;color:#111827;border-bottom:1px solid #e5e7eb;vertical-align:top';
+      td.textContent = specs[k];
+      tr.appendChild(th);
+      tr.appendChild(td);
+    });
+    if (specsSect) specsSect.style.display = keys.length ? '' : 'none';
+  }
+
+  // ── 結果エリア表示 ──
+  if (resultDiv) resultDiv.style.display = '';
 }
 
 /**

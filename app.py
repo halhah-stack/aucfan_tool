@@ -2525,6 +2525,10 @@ def api_gemini_status_reset():
 def api_amazon_fetch():
     """
     現在Chromeで開いているAmazon商品ページからデータを取得する。
+    group_id が指定された場合は DataManager に保存する。
+
+    Request body（JSON、任意）:
+      {"group_id": "グループID"}
 
     Response（成功時）:
       {
@@ -2538,15 +2542,39 @@ def api_amazon_fetch():
         "specs": {"重量": "300g", ...},
         "rating": "4.3",
         "review_count": "1,234件の評価",
+        "has_aplus": true,
         "url": "https://www.amazon.co.jp/dp/B0XXXXXXXX"
       }
     Response（失敗時）:
       {"success": false, "error": "エラーメッセージ"}
     """
     from amazon_scraper import fetch_amazon_product
+
+    # group_id が送られてきた場合は DataManager に保存する
+    body = request.get_json(silent=True) or {}
+    group_id = body.get("group_id", "").strip()
+
     result = fetch_amazon_product()
+
+    if result.get("success") and group_id:
+        dm = get_dm()
+        if dm:
+            dm.save_amazon_data(group_id, result)
+
     status_code = 200 if result.get("success") else 400
     return jsonify(result), status_code
+
+
+@app.route("/api/amazon/data/<group_id>", methods=["GET"])
+def api_amazon_get(group_id: str):
+    """保存済みのAmazonデータをグループIDで取得する。"""
+    dm = get_dm()
+    if not dm:
+        return jsonify({"success": False, "error": "セッションがありません"}), 404
+    data = dm.get_amazon_data(group_id)
+    if data is None:
+        return jsonify({"success": False, "error": "Amazonデータ未取得"}), 404
+    return jsonify({"success": True, **data})
 
 
 # ─────────────────────────────────────────────

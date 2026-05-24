@@ -465,9 +465,12 @@
       <span class="step3-col-title">🛒 Amazon商品情報取得</span>
     </div>
 
+    <!-- 調査対象グループ表示（商品カードから遷移した場合） -->
+    <div id="amazonTargetGroup" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:13px;color:#1d4ed8"></div>
+
     <p class="step2-col-desc">
-      Chrome で <strong>amazon.co.jp の商品ページ（/dp/...）</strong>を開いた状態でボタンを押してください。<br>
-      ASIN・タイトル・価格・説明・仕様・評価件数を自動取得します。
+      商品カードの「🔍 Amazon調査」ボタンを押してからこのタブに来るか、直接 Chrome で <strong>amazon.co.jp の商品ページ（/dp/...）</strong>を開いた状態でボタンを押してください。<br>
+      ASIN・タイトル・価格・説明・仕様・評価件数・A+有無を自動取得します。
     </p>
 
     <div style="margin-bottom:16px">
@@ -491,6 +494,7 @@
             <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
               <span style="font-size:18px;font-weight:bold;color:#16a34a" id="amazonPrice"></span>
               <span style="color:#6b7280;font-size:13px">⭐ <span id="amazonRating"></span>&nbsp;(<span id="amazonReviewCount"></span>)</span>
+              <span id="amazonAplus" style="font-size:13px"></span>
             </div>
           </div>
         </div>

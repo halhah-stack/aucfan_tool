@@ -244,6 +244,9 @@ def fetch_amazon_product() -> dict:
         )
         # ライバル件数はAmazon検索結果ページで取るのが正確なので、ここでは取得しない
 
+        # ── A+コンテンツ検出 ──────────────────────────────────────────────
+        has_aplus = bool(soup.select_one("#aplus, #aplus3PModule, .aplus-v2"))
+
         result = {
             "success":      True,
             "url":          current_url,
@@ -256,6 +259,7 @@ def fetch_amazon_product() -> dict:
             "specs":        specs,
             "rating":       rating,
             "review_count": review_count,
+            "has_aplus":    has_aplus,
         }
 
         logger.info(f"Amazon取得完了: {asin} / {title[:40]}")

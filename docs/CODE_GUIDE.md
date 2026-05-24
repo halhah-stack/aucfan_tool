@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-24（switch_role.sh 追加・excel_exporter.py バグ修正・reader Mac での Excel 画像出力対応）
+> 最終更新：2026-05-24（Amazon調査機能追加・group_id紐付け・5シートExcel仕様確定）
 
 ---
 
@@ -19,13 +19,20 @@ aucfan_tool/
 ├── sellers_master.py       # マスターセラーリスト管理（data/sellers_master.json）
 ├── pdf_exporter.py         # PDF自動生成（STEP完了時にCSV・HTML・PDFを保存）
 ├── excel_exporter.py       # Excelリサーチシート生成（商品カードの📗ボタンから呼び出し）
+│                           #   現状はAucFanデータのみ出力（Amazon/1688は未実装）
 │                           #   テンプレート（リサーチ_テンプレート.xlsx）を load_workbook() で読み込み
 │                           #   値だけを書き込んで返す。書式変更はテンプレートを直接編集するだけでOK
+│                           #   ★次回: 5シート構成に全面改修予定（Task #33）
 ├── build_template.py       # リサーチ_テンプレート.xlsx を新規生成するスクリプト
 │                           #   `python3 build_template.py` で実行。書式を変更したいときはこの
 │                           #   スクリプトを編集して再実行するか、生成済みファイルをExcelで直接編集
-├── リサーチ_テンプレート.xlsx  # Excelエクスポート用フォーマットテンプレート（Git管理下・aucfan_tool/に配置）
+├── build_template_amazon.py # 5シートExcelテンプレート生成スクリプト（要全面書き直し）
+│                           #   現状は旧2シート設計。5シート設計への改修が必要（Task #33）
+├── リサーチ_テンプレート.xlsx  # Excelエクスポート用フォーマットテンプレート【現役・使用中】
 │                           #   Excelで開いて書式を変更後に上書き保存するだけで次回エクスポートに反映
+├── リサーチ_テンプレート_Amazon.xlsx  # 【旧設計・使用しない】2シート設計の残骸。削除または無視。
+├── amazon_scraper.py       # Amazon商品ページデータ取得（Chromeリモートデバッグ接続）
+│                           #   A+コンテンツ検出・group_id紐付け保存に対応
 ├── gdrive_uploader.py      # Google Drive API 直接アップロードモジュール（scraper Macのみ使用）
 ├── setup_gdrive_auth.py    # GDrive初回OAuth認証スクリプト（scraper Macで1回だけ実行）
 ├── switch_role.sh          # 役割切り替えスクリプト（scraper/reader/standalone）
@@ -63,7 +70,10 @@ aucfan_tool/
 │
 └── docs/
     ├── USER_GUIDE.md        # ユーザー向けマニュアル
-    └── CODE_GUIDE.md        # 本ドキュメント
+    ├── CODE_GUIDE.md        # 本ドキュメント
+    ├── SETUP.md             # 環境構築手順
+    ├── QUICKSTART.md        # クイックスタート
+    └── HANDOVER.md          # 引き継ぎメモ（次回セッション向け・仕様確定内容を記録）
 ```
 
 ---
@@ -118,6 +128,13 @@ AUTOMOTIVE_KEYWORDS    = set(_RULES.get("automotive_keywords", []))
 | `save_all()` | `progress.json` + `items.json` + `results.csv` を一括保存 |
 | `load_previous_session()` | 前回の `progress.json` / `items.json` を読み込んで再開 |
 | `get_stats()` | グループ単位のステータス集計を返す |
+| `save_amazon_data(group_id, data)` | Amazonデータを `amazon_data.json` に group_id をキーとして保存 |
+| `get_amazon_data(group_id)` | 指定 group_id のAmazonデータを返す。未取得の場合は `None` |
+| `get_all_amazon_data()` | 全group_idのAmazonデータを dict で返す |
+
+**Amazonデータ保存**（`amazon_data.json`）：`save_amazon_data(group_id, data)` で group_id ごとにAmazonデータを保存します。`data` は `amazon_scraper.fetch_amazon_product()` の戻り値（ASIN・タイトル・価格・評価・レビュー数・A+フラグ・URL・箇条書き・説明・仕様等）に `saved_at` タイムスタンプを付加したものです。
+
+**★次回追加予定（Task #36）**：1688データ保存メソッド。1group_idに対してショップのリスト（複数ショップ追記式）を管理する `save_1688_shop(group_id, shop_data)` / `get_1688_data(group_id)` / `reset_1688_data(group_id)` を追加する。
 
 **セッションフォルダ作成**: `make_output_dir(keyword, step=1)` 関数（クラス外）がフォルダを作成し、`(out_dir: Path, session_id: str)` を返します。新命名規則は `S{step}_YYYYMMDD_NN[_keyword]/`。同日・同ステップの既存フォルダ数を走査して連番を決定します。
 
@@ -887,3 +904,45 @@ Chrome のリモートデバッグポート（9222）に接続し、現在開い
 **呼び出し元**：`app.py` の `/api/amazon/fetch` エンドポイント（POST）から `fetch_amazon_product()` を直接呼び出します。フロントエンド（`app.js` の `fetchAmazonProduct()`）がボタンクリック時に fetch します。
 
 **ボット対策について**：ユーザーが手動でページを開いた後、アプリが既存タブの HTML を読むだけです。新規リクエストは発生しないため Amazon のボット検出には引っかかりません。
+
+**group_id 紐付けフロー**：
+
+1. フロントエンドが商品カードの「🔍 Amazon調査」ボタンをクリック → `investigateAmazon(groupId)` が `_currentAmazonGroupId` にセット
+2. Amazonタブで「取得」ボタン → `fetchAmazonProduct()` が `POST /api/amazon/fetch` に `{"group_id": "xxxx"}` を送信
+3. `app.py` が `dm.save_amazon_data(group_id, result)` でデータを保存
+4. 取得済みの場合は `GET /api/amazon/data/<group_id>` で既存データを呼び出して表示
+
+**APIエンドポイント（app.py）**：
+
+| エンドポイント | メソッド | 説明 |
+|---|---|---|
+| `/api/amazon/fetch` | POST | 現在のChromeタブからデータ取得。ボディに `{"group_id": "xxxx"}` を含めると保存 |
+| `/api/amazon/data/<group_id>` | GET | 指定group_idの保存済みAmazonデータを返す |
+
+**★次回追加予定（Task #37）**：同パターンで1688エンドポイントを追加。`/api/1688/fetch`（追記式・複数ショップ対応）・`/api/1688/data/<group_id>`・`/api/1688/reset/<group_id>`。
+
+---
+
+## 9. Excelリサーチシート — 現状と計画
+
+### 現在の実装（AucFanデータのみ）
+
+`excel_exporter.py` → `リサーチ_テンプレート.xlsx` を使用。AucFanのスクレイピングデータ（タイトル・件数・最安値・セラーID等）を1行で出力。1シート構成。
+
+### 確定済み次期仕様（5シート構成・未実装）
+
+**実装担当タスク: Task #33**
+
+| シート | 名称 | 内容 |
+|---|---|---|
+| Sheet1 | ①概要 | 意思決定ダッシュボード。AucFan参考価格・Amazon競合サマリー（Sheet2参照）・販売予定価格入力・1688候補集計（Sheet4参照）・仕入れGO/STOP判定 |
+| Sheet2 | ②Amazon競合 | ライバル1件1行。ASIN・タイトル・価格・評価・レビュー数・A+あり・URL |
+| Sheet3 | ③Amazonテキスト | スペック文オマージュ用。縦並び。ライバルごとにタイトル・商品説明・仕様・箇条書き |
+| Sheet4 | ④1688仕入れ | バリアント1件1行。ショップ名・バリアント・単価(元)・MOQ・原価(円)=単価×35・利益・利益率・判定◎× |
+| Sheet5 | ⑤1688テキスト | ショップ情報+バリアント詳細（縦並び） |
+
+**計算ロジック（Sheet4）**：
+- 原価（円）= 単価（元）× 35（固定係数：送料・関税・代行手数料込み）
+- 利益 = Sheet1の「販売予定価格」 − 原価 − Sheet1の「FBA手数料」
+- 利益率 = 利益 ÷ 販売予定価格
+- 判定 = 利益率 ≥ 25% かつ 利益 ≥ 450円 → ◎ / それ以外 ×

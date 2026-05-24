@@ -76,9 +76,13 @@ class DataManager:
         }
 
         # ファイルパス
-        self._progress_file = output_dir / "progress.json"
-        self._csv_file = output_dir / "results.csv"
-        self._items_file = output_dir / "items.json"
+        self._progress_file  = output_dir / "progress.json"
+        self._csv_file       = output_dir / "results.csv"
+        self._items_file     = output_dir / "items.json"
+        self._amazon_file    = output_dir / "amazon_data.json"
+
+        # Amazonデータ辞書 {group_id: amazon_data_dict}
+        self._amazon_data: Dict[str, dict] = self._load_amazon_data()
 
     # ─────────────────────────────────────────────
     # 保存・ロード
@@ -134,6 +138,49 @@ class DataManager:
         self.save_progress()
         self.save_items()
         self.save_csv()
+
+    # ─────────────────────────────────────────────
+    # Amazon データ管理
+    # ─────────────────────────────────────────────
+
+    def _load_amazon_data(self) -> Dict[str, dict]:
+        """amazon_data.json をロードして返す。ファイルがなければ空辞書。"""
+        if self._amazon_file.exists():
+            try:
+                with open(self._amazon_file, encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"[DataManager] amazon_data.json ロードエラー: {e}")
+        return {}
+
+    def save_amazon_data(self, group_id: str, data: dict):
+        """
+        グループIDに紐づくAmazonデータを保存する。
+
+        Args:
+            group_id: グループID（商品カードのID）
+            data:     fetch_amazon_product() の戻り値
+        """
+        with self._lock:
+            self._amazon_data[group_id] = {
+                **data,
+                "saved_at": datetime.now().isoformat(),
+            }
+        try:
+            with open(self._amazon_file, "w", encoding="utf-8") as f:
+                json.dump(self._amazon_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[DataManager] amazon_data.json 保存エラー: {e}")
+
+    def get_amazon_data(self, group_id: str) -> Optional[dict]:
+        """グループIDに紐づくAmazonデータを返す。なければ None。"""
+        with self._lock:
+            return self._amazon_data.get(group_id)
+
+    def get_all_amazon_data(self) -> Dict[str, dict]:
+        """全グループのAmazonデータを返す。"""
+        with self._lock:
+            return dict(self._amazon_data)
 
     def load_previous_session(self) -> bool:
         """
