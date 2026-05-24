@@ -84,20 +84,24 @@ function switchStep(step) {
   const p2  = document.getElementById('step2Panel');
   const p3  = document.getElementById('step3Panel');
   const pm  = document.getElementById('masterPanel');
+  const pa  = document.getElementById('amazonPanel');
   const t1  = document.getElementById('stepTab1');
   const t2  = document.getElementById('stepTab2');
   const t3  = document.getElementById('stepTab3');
   const tm  = document.getElementById('stepTabMaster');
+  const ta  = document.getElementById('stepTabAmazon');
 
   if (p1) p1.style.display = step === 1        ? '' : 'none';
   if (p2) p2.style.display = step === 2        ? '' : 'none';
   if (p3) p3.style.display = step === 3        ? '' : 'none';
   if (pm) pm.style.display = step === 'master' ? '' : 'none';
+  if (pa) pa.style.display = step === 'amazon' ? '' : 'none';
 
   if (t1) t1.classList.toggle('active', step === 1);
   if (t2) t2.classList.toggle('active', step === 2);
   if (t3) t3.classList.toggle('active', step === 3);
   if (tm) tm.classList.toggle('active', step === 'master');
+  if (ta) ta.classList.toggle('active', step === 'amazon');
 
   // ソートバーの価格グループをステップに応じて表示切替
   const _sortPriceGroup = document.getElementById('sortPriceGroup');
@@ -2883,4 +2887,208 @@ function showToast(msg, type = 'info') {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ─────────────────────────────────────────────
+// Amazon商品情報取得
+// ─────────────────────────────────────────────
+
+/** 最後に取得したAmazonデータをキャッシュする（copyAsin / copyAllAmazonData で参照）*/
+let _lastAmazonData = null;
+
+/**
+ * 今Chromeで開いているAmazon商品ページの情報を取得してパネルに表示する。
+ * ボタン onclick="fetchAmazonProduct()" から呼ばれる。
+ */
+async function fetchAmazonProduct() {
+  const btn       = document.getElementById('amazonFetchBtn');
+  const errDiv    = document.getElementById('amazonError');
+  const resultDiv = document.getElementById('amazonResult');
+
+  // ── UI 初期化 ──
+  if (errDiv)    { errDiv.style.display    = 'none'; errDiv.textContent = ''; }
+  if (resultDiv) { resultDiv.style.display = 'none'; }
+  if (btn)       { btn.disabled = true; btn.textContent = '⏳ 取得中…'; }
+
+  try {
+    const res  = await fetch('/api/amazon/fetch', { method: 'POST' });
+    const data = await res.json();
+
+    if (!data.success) {
+      // エラー表示
+      if (errDiv) {
+        errDiv.textContent  = '❌ ' + (data.error || '取得に失敗しました');
+        errDiv.style.display = '';
+      }
+      return;
+    }
+
+    // ── データをキャッシュ ──
+    _lastAmazonData = data;
+
+    // ── 画像 ──
+    const imgEl = document.getElementById('amazonImage');
+    if (imgEl) {
+      imgEl.src = data.image_url || '';
+      imgEl.style.display = data.image_url ? '' : 'none';
+    }
+
+    // ── タイトル ──
+    const titleEl = document.getElementById('amazonTitle');
+    if (titleEl) titleEl.textContent = data.title || '（タイトル不明）';
+
+    // ── 価格 ──
+    const priceEl = document.getElementById('amazonPrice');
+    if (priceEl) priceEl.textContent = data.price || '価格不明';
+
+    // ── 評価 ──
+    const ratingEl = document.getElementById('amazonRating');
+    if (ratingEl) ratingEl.textContent = data.rating || '—';
+    const reviewEl = document.getElementById('amazonReviewCount');
+    if (reviewEl) reviewEl.textContent = data.review_count || '0件';
+
+    // ── ASIN ──
+    const asinEl = document.getElementById('amazonAsin');
+    if (asinEl) asinEl.textContent = data.asin || '—';
+
+    // ── URLリンク ──
+    const urlEl = document.getElementById('amazonUrl');
+    if (urlEl) {
+      urlEl.href = data.url || '#';
+      urlEl.style.display = data.url ? '' : 'none';
+    }
+
+    // ── 箇条書き ──
+    const bulletsEl      = document.getElementById('amazonBullets');
+    const bulletsSect    = document.getElementById('amazonBulletsSection');
+    if (bulletsEl) {
+      bulletsEl.innerHTML = '';
+      (data.bullets || []).forEach(b => {
+        const li = document.createElement('li');
+        li.textContent = b;
+        bulletsEl.appendChild(li);
+      });
+    }
+    if (bulletsSect) bulletsSect.style.display = (data.bullets || []).length ? '' : 'none';
+
+    // ── 商品説明 ──
+    const descEl   = document.getElementById('amazonDescription');
+    const descSect = document.getElementById('amazonDescSection');
+    if (descEl) descEl.textContent = data.description || '';
+    if (descSect) descSect.style.display = data.description ? '' : 'none';
+
+    // ── 仕様表 ──
+    const specsTable = document.getElementById('amazonSpecsTable');
+    const specsSect  = document.getElementById('amazonSpecsSection');
+    if (specsTable) {
+      specsTable.innerHTML = '';
+      const specs = data.specs || {};
+      const keys  = Object.keys(specs);
+      keys.forEach((k, i) => {
+        const tr = specsTable.insertRow();
+        tr.style.background = i % 2 === 0 ? '#f9fafb' : '#ffffff';
+        const th = document.createElement('td');
+        th.style.cssText = 'padding:5px 10px;font-weight:bold;color:#374151;width:38%;border-bottom:1px solid #e5e7eb;vertical-align:top';
+        th.textContent = k;
+        const td = document.createElement('td');
+        td.style.cssText = 'padding:5px 10px;color:#111827;border-bottom:1px solid #e5e7eb;vertical-align:top';
+        td.textContent = specs[k];
+        tr.appendChild(th);
+        tr.appendChild(td);
+      });
+      if (specsSect) specsSect.style.display = keys.length ? '' : 'none';
+    }
+
+    // ── 結果エリア表示 ──
+    if (resultDiv) resultDiv.style.display = '';
+
+  } catch (e) {
+    if (errDiv) {
+      errDiv.textContent  = '❌ 通信エラー: ' + e.message;
+      errDiv.style.display = '';
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🛒 今開いているAmazonページから取得'; }
+  }
+}
+
+/**
+ * ASINをクリップボードにコピーする。
+ * ボタン onclick="copyAsin()" から呼ばれる。
+ */
+async function copyAsin() {
+  const asinEl = document.getElementById('amazonAsin');
+  const asin   = asinEl ? asinEl.textContent.trim() : '';
+  if (!asin || asin === '—') {
+    showToast('ASINが取得されていません', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(asin);
+    showToast('✅ ASIN をコピーしました: ' + asin);
+  } catch (e) {
+    // clipboard API が使えない場合のフォールバック
+    const ta = document.createElement('textarea');
+    ta.value = asin;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('✅ ASIN をコピーしました: ' + asin);
+  }
+}
+
+/**
+ * 取得したAmazon商品データ全体をテキスト形式でクリップボードにコピーする。
+ * ボタン onclick="copyAllAmazonData()" から呼ばれる。
+ */
+async function copyAllAmazonData() {
+  const d = _lastAmazonData;
+  if (!d) {
+    showToast('先に商品情報を取得してください', 'error');
+    return;
+  }
+
+  const lines = [];
+  lines.push('【Amazon商品情報】');
+  lines.push('ASIN: '     + (d.asin  || '—'));
+  lines.push('タイトル: ' + (d.title || '—'));
+  lines.push('価格: '     + (d.price || '—'));
+  lines.push('評価: '     + (d.rating || '—') + '  レビュー: ' + (d.review_count || '—'));
+  lines.push('URL: '      + (d.url   || '—'));
+
+  if (d.bullets && d.bullets.length) {
+    lines.push('');
+    lines.push('【商品の特徴】');
+    d.bullets.forEach((b, i) => lines.push(`${i + 1}. ${b}`));
+  }
+
+  if (d.description) {
+    lines.push('');
+    lines.push('【商品説明】');
+    lines.push(d.description);
+  }
+
+  const specs = d.specs || {};
+  const specKeys = Object.keys(specs);
+  if (specKeys.length) {
+    lines.push('');
+    lines.push('【仕様・詳細】');
+    specKeys.forEach(k => lines.push(`${k}: ${specs[k]}`));
+  }
+
+  const text = lines.join('\n');
+
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('✅ 全データをコピーしました');
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('✅ 全データをコピーしました');
+  }
 }

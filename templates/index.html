@@ -42,6 +42,12 @@
       <span class="step-name">マスターリスト</span>
       <span class="step-desc">セラーIDを管理・追加・削除・エクスポート</span>
     </button>
+    <div class="step-sep"></div>
+    <button class="step-tab" id="stepTabAmazon" onclick="switchStep('amazon')">
+      <span class="step-num">🛒</span>
+      <span class="step-name">Amazon確認</span>
+      <span class="step-desc">今開いているAmazonページから商品情報を取得</span>
+    </button>
   </div>
 </nav>
 
@@ -451,6 +457,78 @@
     </div>
 
   </div><!-- /masterPanel -->
+
+  <!-- ══ Amazon確認 ══ -->
+  <div id="amazonPanel" class="control-inner" style="display:none">
+
+    <div class="step3-col-head">
+      <span class="step3-col-title">🛒 Amazon商品情報取得</span>
+    </div>
+
+    <p class="step2-col-desc">
+      Chrome で <strong>amazon.co.jp の商品ページ（/dp/...）</strong>を開いた状態でボタンを押してください。<br>
+      ASIN・タイトル・価格・説明・仕様・評価件数を自動取得します。
+    </p>
+
+    <div style="margin-bottom:16px">
+      <button class="btn btn-primary" id="amazonFetchBtn" onclick="fetchAmazonProduct()">
+        🛒 今開いているAmazonページから取得
+      </button>
+    </div>
+
+    <!-- エラーメッセージ -->
+    <div id="amazonError" style="display:none;color:#dc2626;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:10px 14px;margin-bottom:12px"></div>
+
+    <!-- 取得結果 -->
+    <div id="amazonResult" style="display:none">
+
+      <!-- ヘッダー（ASIN・タイトル・価格） -->
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:14px 16px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <img id="amazonImage" src="" alt="" style="width:72px;height:72px;object-fit:contain;border:1px solid #e5e7eb;border-radius:4px;background:#fff">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:bold;font-size:14px;line-height:1.4;margin-bottom:4px" id="amazonTitle"></div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <span style="font-size:18px;font-weight:bold;color:#16a34a" id="amazonPrice"></span>
+              <span style="color:#6b7280;font-size:13px">⭐ <span id="amazonRating"></span>&nbsp;(<span id="amazonReviewCount"></span>)</span>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:12px;color:#6b7280">ASIN:</span>
+          <code id="amazonAsin" style="font-size:14px;font-weight:bold;letter-spacing:1px;color:#1d4ed8"></code>
+          <button class="btn btn-secondary btn-sm" onclick="copyAsin()" title="ASINをコピー">📋 コピー</button>
+          <a id="amazonUrl" href="#" target="_blank" class="btn btn-secondary btn-sm">🔗 Amazonで開く</a>
+        </div>
+      </div>
+
+      <!-- 箇条書き -->
+      <div id="amazonBulletsSection" style="margin-bottom:14px">
+        <div style="font-weight:bold;font-size:13px;color:#374151;margin-bottom:6px">商品の特徴</div>
+        <ul id="amazonBullets" style="margin:0;padding-left:20px;font-size:13px;line-height:1.8;color:#374151"></ul>
+      </div>
+
+      <!-- 商品説明 -->
+      <div id="amazonDescSection" style="margin-bottom:14px">
+        <div style="font-weight:bold;font-size:13px;color:#374151;margin-bottom:6px">商品説明</div>
+        <div id="amazonDescription" style="font-size:13px;line-height:1.7;color:#374151;background:#fafafa;border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px;white-space:pre-wrap"></div>
+      </div>
+
+      <!-- 仕様表 -->
+      <div id="amazonSpecsSection" style="margin-bottom:14px">
+        <div style="font-weight:bold;font-size:13px;color:#374151;margin-bottom:6px">仕様・詳細</div>
+        <table id="amazonSpecsTable" style="width:100%;border-collapse:collapse;font-size:13px">
+        </table>
+      </div>
+
+      <!-- 全データをテキストでコピー -->
+      <div style="margin-top:16px">
+        <button class="btn btn-secondary" onclick="copyAllAmazonData()">📋 全データをテキストでコピー</button>
+      </div>
+
+    </div><!-- /amazonResult -->
+
+  </div><!-- /amazonPanel -->
 
 </section>
 

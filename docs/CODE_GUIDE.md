@@ -858,3 +858,32 @@ bash switch_role.sh standalone  # SITE_ROLE=scraper / GDRIVE_UPLOAD_ENABLED=fals
 standalone モードでは `OUTPUT_BASE_DIR` をローカルパス（`リサーチ結果`）に固定し、GDrive を完全に使わない構成にします。scraper / reader モードでは `OUTPUT_BASE_DIR` をコメントアウトして `config.py` の自動検出に任せます。
 
 **.env が存在しない場合**は `.env.example` から自動コピーします。実行後は `bash start.sh` でアプリを再起動してください。
+
+---
+
+### `amazon_scraper.py` — Amazon商品ページデータ取得
+
+Chrome のリモートデバッグポート（9222）に接続し、現在開いている `amazon.co.jp` の商品ページ（`/dp/XXXXXXXXXX`）から BeautifulSoup で商品情報を抽出します。
+
+**接続方法**：`scraper.py` と同じく `Options.add_experimental_option("debuggerAddress", ...)` を使って既存の Chrome プロセスに接続します。新しいブラウザは起動しません。
+
+**タブ探索ロジック**：`driver.window_handles` を順に確認し、URL が `amazon.co.jp` かつ `/dp/` または `/gp/product/` を含む最初のタブに切り替えます。
+
+**主な取得項目と CSS セレクター**：
+
+| 項目 | セレクター |
+|---|---|
+| タイトル | `#productTitle` |
+| 価格 | `.a-price .a-offscreen`、`#priceblock_ourprice`、`.apexPriceToPay .a-offscreen` 等 複数フォールバック |
+| メイン画像URL | `#landingImage`の`data-old-hires`属性 |
+| 箇条書き | `#feature-bullets ul li span.a-list-item` |
+| 商品説明 | `#productDescription p` |
+| 仕様表 | `#productDetails_techSpec_section_1 tr`（テーブル形式）、`#detailBullets_feature_div ul li`（dl形式） |
+| 評価 | `span[data-hook='rating-out-of-text']`、`#acrPopover .a-icon-alt` |
+| レビュー件数 | `#acrCustomerReviewText`、`span[data-hook='total-review-count']` |
+
+**戻り値**：`{"success": True, "asin": "...", "title": "...", ...}` の dict。失敗時は `{"success": False, "error": "..."}` を返す（例外は発生させない）。
+
+**呼び出し元**：`app.py` の `/api/amazon/fetch` エンドポイント（POST）から `fetch_amazon_product()` を直接呼び出します。フロントエンド（`app.js` の `fetchAmazonProduct()`）がボタンクリック時に fetch します。
+
+**ボット対策について**：ユーザーが手動でページを開いた後、アプリが既存タブの HTML を読むだけです。新規リクエストは発生しないため Amazon のボット検出には引っかかりません。

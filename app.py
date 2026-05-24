@@ -718,7 +718,7 @@ def api_export_excel_single(group_id):
     リサーチ結果フォルダ直下に保存する。
     ファイル名 = 商品タイトル_リサーチ.xlsx
     """
-    from excel_exporter import generate_excel_single
+    from excel_exporter import generate_excel_single_with_session
 
     dm = get_dm()
     if not dm:
@@ -727,7 +727,8 @@ def api_export_excel_single(group_id):
     if _session_output_dir is None:
         return jsonify({"error": "セッションが読み込まれていません"}), 400
 
-    result = generate_excel_single(dm, group_id, embed_images=True)
+    session_name = _session_output_dir.name
+    result = generate_excel_single_with_session(dm, group_id, session_name, embed_images=True)
     if not result:
         return jsonify({"error": "グループが見つかりません"}), 404
 
@@ -2514,6 +2515,38 @@ def api_gemini_status_reset():
     """Gemini API エラーフラグをリセットする"""
     reset_rate_limit_flag()
     return jsonify({"success": True})
+
+
+# ─────────────────────────────────────────────
+# Amazon確認 API
+# ─────────────────────────────────────────────
+
+@app.route("/api/amazon/fetch", methods=["POST"])
+def api_amazon_fetch():
+    """
+    現在Chromeで開いているAmazon商品ページからデータを取得する。
+
+    Response（成功時）:
+      {
+        "success": true,
+        "asin": "B0XXXXXXXX",
+        "title": "商品タイトル",
+        "price": "¥1,980",
+        "image_url": "https://...",
+        "bullets": ["特徴1", "特徴2", ...],
+        "description": "商品説明",
+        "specs": {"重量": "300g", ...},
+        "rating": "4.3",
+        "review_count": "1,234件の評価",
+        "url": "https://www.amazon.co.jp/dp/B0XXXXXXXX"
+      }
+    Response（失敗時）:
+      {"success": false, "error": "エラーメッセージ"}
+    """
+    from amazon_scraper import fetch_amazon_product
+    result = fetch_amazon_product()
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
 
 
 # ─────────────────────────────────────────────
