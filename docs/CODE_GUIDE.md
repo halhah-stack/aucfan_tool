@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-23（Excelリサーチシート出力機能追加：excel_exporter.py・build_template.py・per-card Excelボタン）
+> 最終更新：2026-05-24（STEP2/3 GDrive画像一括アップロード漏れ修正：seller_analyzer.run()に upload_images_to_gdrive() 追加）
 
 ---
 
@@ -169,6 +169,7 @@ AUTOMOTIVE_KEYWORDS    = set(_RULES.get("automotive_keywords", []))
 - STEP 2の `min_group_size=1` で `promote_candidates()` を呼ぶため、全商品が `candidate` になります（単品でも表示対象）
 - スクレイピング完了時には `=== STEP 2 スクレイピング完了 === 全N件処理` というログをターミナルに出力します。STEP 3（マスターリスト横断）の場合は `=== STEP 3 スクレイピング完了 === 全N件処理` が同様に出力されます
 - `login_check_event` 引数（省略可）を `super().__init__()` 経由で `AucFanScraper` に渡すことで、ログイン即時確認ボタンがSTEP2/3でも動作します
+- `run()` のオーバーライド末尾で `self.img.upload_images_to_gdrive()` を呼び出し、スクレイピング完了後に画像をGDriveへ一括アップロードします（`AucFanScraper.run()` と同様。STEP3も同じ `SellerAnalyzer.run()` 経由で実行されるため対応済み）
 
 **中古セラー自動スキップ**：
 
