@@ -1,11 +1,17 @@
 """
 excel_exporter.py — Aucfan リサーチシート Excel エクスポーター
 
-リサーチ_テンプレート.xlsx を読み込んでデータを流し込み、
-商品タイトル_リサーチ.xlsx として保存する。
+【役割】
+  AucFan の商品データを Sheet1（概要）に書き込み、
+  Sheet2〜5 を空で用意した 5 シート構成の Excel を生成する。
 
-書式変更は リサーチ_テンプレート.xlsx を直接編集するだけでOK。
-コードは「どのセルに何を書くか」だけ担当する。
+  Sheet1: ①概要      — AucFanデータ + 手入力2セル（販売価格・FBA手数料）+ 自動計算
+  Sheet2: ②Amazonライバル — Amazon競合データ追記用（空）
+  Sheet3: ③Amazonテキスト — スペック文オマージュ用（空）
+  Sheet4: ④1688仕入れ   — 利益計算メイン（空）
+  Sheet5: ⑤1688テキスト  — 仕入れ詳細（空）
+
+  Sheet2〜5 への追記は research_tool.py（スタンドアロン）で行う。
 """
 from __future__ import annotations
 
@@ -14,24 +20,38 @@ import logging
 import re
 import shutil
 import tempfile
-from copy import copy
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import openpyxl
-from openpyxl import load_workbook
-from openpyxl.styles import Font
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 logger = logging.getLogger(__name__)
 
 # ── 定数 ──────────────────────────────────────────────────────────────
-TEMPLATE_PATH = Path(__file__).parent / "リサーチ_テンプレート.xlsx"
-DATA_ROW      = 6       # テンプレートのデータ行番号
-THUMB_MAX_W   = 110     # 画像リサイズ上限（px）
-THUMB_MAX_H   = 90
+THUMB_MAX_W = 120
+THUMB_MAX_H = 100
 
-FONT_NAME = "BIZ UDGothic"
+# シート名
+SHEET_NAMES = [
+    "①概要",
+    "②Amazonライバル",
+    "③Amazonテキスト",
+    "④1688仕入れ",
+    "⑤1688テキスト",
+]
+
+# カラー定義
+COLOR_HEADER_BLUE   = "1F4E79"   # 濃い青（Sheet1ヘッダー）
+COLOR_HEADER_ORANGE = "C55A11"   # オレンジ（Amazon系）
+COLOR_HEADER_GREEN  = "375623"   # 緑（1688系）
+COLOR_SECTION_LIGHT = "D9E1F2"   # 薄青（セクション背景）
+COLOR_INPUT_YELLOW  = "FFFF99"   # 黄色（手入力セル）
+COLOR_WHITE         = "FFFFFF"
+COLOR_GRAY          = "F2F2F2"
 
 
 # ── ファイル名サニタイズ ────────────────────────────────────────────────
@@ -57,43 +77,262 @@ def _make_thumb(src_path: Path, tmp_dir: str) -> Optional[str]:
         return None
 
 
-# ── テンプレートにデータを流し込む ────────────────────────────────────
-def _fill_sheet(ws, group: dict, session_name: str, row: int = DATA_ROW):
-    """
-    ワークシートの指定行にグループデータを書き込む。
-    テンプレートの書式はそのまま維持し、値だけ設定する。
-    """
+# ── スタイルヘルパー ──────────────────────────────────────────────────
+def _header_font(color: str = COLOR_WHITE, bold: bool = True) -> Font:
+    return Font(name="BIZ UDGothic", bold=bold, color=color)
+
+def _fill(color: str) -> PatternFill:
+    return PatternFill("solid", fgColor=color)
+
+def _center() -> Alignment:
+    return Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+def _left() -> Alignment:
+    return Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+def _thin_border() -> Border:
+    thin = Side(style="thin", color="BFBFBF")
+    return Border(left=thin, right=thin, top=thin, bottom=thin)
+
+
+# ── Sheet1: ①概要 ───────────────────────────────────────────────────
+def _build_sheet1(ws, group: dict):
+    """Sheet1（①概要）を構築する。"""
     now = datetime.now()
 
-    # Row 1: タイトル（セッション名を付記）
-    ws["A1"].value = f"Aucfan リサーチシート  ―  {session_name}"
+    # 列幅設定
+    ws.column_dimensions["A"].width = 18
+    ws.column_dimensions["B"].width = 40
+    ws.column_dimensions["C"].width = 6
+    ws.column_dimensions["D"].width = 18
+    ws.column_dimensions["E"].width = 20
 
-    # Row 2: セッション名（F2セル）
-    ws.cell(2, 6).value = f"{session_name}  （{now.strftime('%Y/%m/%d')}）"
+    # ── タイトル行 ─────────────────────────────────────────────────
+    ws.row_dimensions[1].height = 30
+    ws.merge_cells("A1:E1")
+    title_cell = ws["A1"]
+    title_cell.value = f"リサーチシート　{group['title']}"
+    title_cell.font = Font(name="BIZ UDGothic", bold=True, size=13, color=COLOR_WHITE)
+    title_cell.fill = _fill(COLOR_HEADER_BLUE)
+    title_cell.alignment = _center()
 
-    # Row 2: サマリー数式を実際の行番号に合わせる
-    ws.cell(2, 2).value = f"=COUNTA(D{row}:D{row})"
-    ws.cell(2, 4).value = f'=COUNTIF(E{row}:E{row},">=4")'
+    # ── 作成日 ─────────────────────────────────────────────────────
+    ws.row_dimensions[2].height = 18
+    ws["D2"].value = "作成日"
+    ws["D2"].font = Font(name="BIZ UDGothic", bold=True)
+    ws["D2"].fill = _fill(COLOR_GRAY)
+    ws["E2"].value = now.strftime("%Y/%m/%d")
+    ws["E2"].font = Font(name="BIZ UDGothic")
 
-    # データ行
-    ws.cell(row, 1).value = 1                          # No
-    ws.cell(row, 3).value = now                        # 日付
-    ws.cell(row, 4).value = group["title"]             # 代表キーワード
-    ws.cell(row, 5).value = group["group_size"]        # 件数
-    ws.cell(row, 6).value = (                          # 4件以上（数式）
-        f'=IF(E{row}="","",IF(E{row}>=4,"✓","✗"))'
-    )
-    if group["min_total"]:
-        ws.cell(row, 7).value = group["min_total"]     # 最安値
+    # ── セクション: AucFan参考データ ──────────────────────────────
+    ws.row_dimensions[4].height = 20
+    ws.merge_cells("A4:E4")
+    sec = ws["A4"]
+    sec.value = "▼ AucFan 参考データ"
+    sec.font = _header_font(COLOR_WHITE)
+    sec.fill = _fill(COLOR_HEADER_BLUE)
+    sec.alignment = _left()
 
-    sellers = group.get("sellers", [])
-    for i, col in enumerate([8, 9, 10]):               # セラーID①②③
-        ws.cell(row, col).value = sellers[i] if i < len(sellers) else None
+    rows_aucfan = [
+        (5,  "商品キーワード",  group["title"],         False),
+        (6,  "AucFan最安値",   group["min_total"] or "", False),
+        (7,  "件数（4件以上）", group["group_size"],    False),
+    ]
+    for r, label, val, is_input in rows_aucfan:
+        ws.row_dimensions[r].height = 18
+        ws[f"A{r}"].value = label
+        ws[f"A{r}"].font = Font(name="BIZ UDGothic", bold=True)
+        ws[f"A{r}"].fill = _fill(COLOR_GRAY)
+        ws[f"A{r}"].border = _thin_border()
+        ws.merge_cells(f"B{r}:E{r}")
+        ws[f"B{r}"].value = val
+        ws[f"B{r}"].font = Font(name="BIZ UDGothic")
+        ws[f"B{r}"].border = _thin_border()
+        if is_input:
+            ws[f"B{r}"].fill = _fill(COLOR_INPUT_YELLOW)
 
-    ws.cell(row, 11).value = group.get("url", "")     # 検索URL
+    # ── AucFanサムネイル欄 ─────────────────────────────────────────
+    ws.row_dimensions[8].height = 90
+    ws["A8"].value = "AucFan画像"
+    ws["A8"].font = Font(name="BIZ UDGothic", bold=True)
+    ws["A8"].fill = _fill(COLOR_GRAY)
+    ws["A8"].border = _thin_border()
+    ws.merge_cells("B8:E8")
+    ws["B8"].value = "（画像は自動埋め込み）"
+    ws["B8"].font = Font(name="BIZ UDGothic", color="999999", italic=True)
+    ws["B8"].alignment = _center()
+
+    # ── セクション: 販売価格・FBA（手入力） ───────────────────────
+    ws.row_dimensions[10].height = 20
+    ws.merge_cells("A10:E10")
+    sec2 = ws["A10"]
+    sec2.value = "▼ 販売価格・FBA手数料（手入力）"
+    sec2.font = _header_font(COLOR_WHITE)
+    sec2.fill = _fill(COLOR_HEADER_ORANGE)
+    sec2.alignment = _left()
+
+    input_rows = [
+        (11, "販売予定価格（円）", ""),
+        (12, "FBA手数料（円）",   ""),
+    ]
+    for r, label, val in input_rows:
+        ws.row_dimensions[r].height = 22
+        ws[f"A{r}"].value = label
+        ws[f"A{r}"].font = Font(name="BIZ UDGothic", bold=True)
+        ws[f"A{r}"].fill = _fill(COLOR_GRAY)
+        ws[f"A{r}"].border = _thin_border()
+        ws.merge_cells(f"B{r}:E{r}")
+        ws[f"B{r}"].value = val
+        ws[f"B{r}"].fill = _fill(COLOR_INPUT_YELLOW)
+        ws[f"B{r}"].font = Font(name="BIZ UDGothic")
+        ws[f"B{r}"].border = _thin_border()
+
+    # ── セクション: 利益計算（自動） ──────────────────────────────
+    ws.row_dimensions[14].height = 20
+    ws.merge_cells("A14:E14")
+    sec3 = ws["A14"]
+    sec3.value = "▼ 利益計算（自動）"
+    sec3.font = _header_font(COLOR_WHITE)
+    sec3.fill = _fill(COLOR_HEADER_GREEN)
+    sec3.alignment = _left()
+
+    # B11=販売予定価格, B12=FBA手数料
+    # Sheet4の④1688仕入れ: 原価は後で追記されるため、暫定的に手入力欄を設ける
+    calc_rows = [
+        (15, "原価（円）",   "（④1688仕入れシートに入力後、自動参照）"),
+        (16, "利益（円）",   '=IF(B11="","",IF(B15="","",(B11-B12-B15)))'),
+        (17, "利益率",       '=IF(OR(B11="",B11=0),"",TEXT(B16/B11,"0.0%"))'),
+        (18, "判定",         '=IF(OR(B16="",B17=""),"",IF(AND(VALUE(SUBSTITUTE(B17,"%",""))/100>=0.25,B16>=450),"◎ GO","× 再検討"))'),
+    ]
+    for r, label, formula in calc_rows:
+        ws.row_dimensions[r].height = 22
+        ws[f"A{r}"].value = label
+        ws[f"A{r}"].font = Font(name="BIZ UDGothic", bold=True)
+        ws[f"A{r}"].fill = _fill(COLOR_GRAY)
+        ws[f"A{r}"].border = _thin_border()
+        ws.merge_cells(f"B{r}:E{r}")
+        ws[f"B{r}"].value = formula
+        ws[f"B{r}"].font = Font(name="BIZ UDGothic", bold=(r == 18))
+        ws[f"B{r}"].border = _thin_border()
+        if r == 18:
+            ws[f"B{r}"].alignment = _center()
+
+    # メモ欄
+    ws.row_dimensions[20].height = 20
+    ws.merge_cells("A20:E20")
+    ws["A20"].value = "▼ メモ"
+    ws["A20"].font = _header_font(COLOR_WHITE)
+    ws["A20"].fill = _fill(COLOR_HEADER_BLUE)
+    ws["A20"].alignment = _left()
+
+    ws.row_dimensions[21].height = 60
+    ws.merge_cells("A21:E21")
+    ws["A21"].font = Font(name="BIZ UDGothic")
+    ws["A21"].border = _thin_border()
+    ws["A21"].alignment = Alignment(vertical="top", wrap_text=True)
 
 
-# ── グループ情報を DataManager から取得 ────────────────────────────────
+# ── Sheet2: ②Amazonライバル ──────────────────────────────────────────
+def _build_sheet2(ws):
+    """Sheet2（②Amazonライバル）のヘッダーを作成する。データは research_tool.py で追記。"""
+    # 列幅
+    col_widths = [12, 45, 10, 8, 12, 8, 40, 25, 18]
+    headers    = ["ASIN", "タイトル", "価格", "評価", "レビュー数", "A+", "URL（実）", "入力URL", "画像"]
+    for i, (w, h) in enumerate(zip(col_widths, headers), 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    # タイトル行
+    ws.row_dimensions[1].height = 28
+    ws.merge_cells("A1:H1")
+    ws["A1"].value = "② Amazon ライバル"
+    ws["A1"].font = _header_font(COLOR_WHITE, bold=True)
+    ws["A1"].fill = _fill(COLOR_HEADER_ORANGE)
+    ws["A1"].alignment = _center()
+
+    # ヘッダー行
+    ws.row_dimensions[2].height = 22
+    for col, label in enumerate(headers, 1):
+        c = ws.cell(2, col)
+        c.value = label
+        c.font = Font(name="BIZ UDGothic", bold=True, color=COLOR_WHITE)
+        c.fill = _fill(COLOR_HEADER_ORANGE)
+        c.alignment = _center()
+        c.border = _thin_border()
+
+    # 補足メモ
+    ws.row_dimensions[3].height = 16
+    ws.merge_cells("A3:H3")
+    ws["A3"].value = "← research_tool.py の「Amazon取得」ボタンで追記されます"
+    ws["A3"].font = Font(name="BIZ UDGothic", italic=True, color="999999")
+
+
+# ── Sheet3: ③Amazonテキスト ─────────────────────────────────────────
+def _build_sheet3(ws):
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 80
+
+    ws.row_dimensions[1].height = 28
+    ws.merge_cells("A1:B1")
+    ws["A1"].value = "③ Amazon テキスト（スペック文オマージュ用）"
+    ws["A1"].font = _header_font(COLOR_WHITE, bold=True)
+    ws["A1"].fill = _fill(COLOR_HEADER_ORANGE)
+    ws["A1"].alignment = _center()
+
+    ws.row_dimensions[2].height = 16
+    ws.merge_cells("A2:B2")
+    ws["A2"].value = "← research_tool.py の「Amazon取得」ボタンで追記されます"
+    ws["A2"].font = Font(name="BIZ UDGothic", italic=True, color="999999")
+
+
+# ── Sheet4: ④1688仕入れ ─────────────────────────────────────────────
+def _build_sheet4(ws):
+    col_widths = [20, 40, 10, 24, 20, 12, 8, 12, 12, 10, 8]
+    headers    = ["ショップ名", "ショップURL", "信頼度", "商品名（親）", "バリアント",
+                  "単価(CNY)", "MOQ", "原価(円)\n=単価×35", "利益(円)", "利益率", "判定"]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    ws.row_dimensions[1].height = 28
+    ws.merge_cells(f"A1:{get_column_letter(len(headers))}1")
+    ws["A1"].value = "④ 1688 仕入れ（利益計算メイン）"
+    ws["A1"].font = _header_font(COLOR_WHITE, bold=True)
+    ws["A1"].fill = _fill(COLOR_HEADER_GREEN)
+    ws["A1"].alignment = _center()
+
+    ws.row_dimensions[2].height = 30
+    for col, label in enumerate(headers, 1):
+        c = ws.cell(2, col)
+        c.value = label
+        c.font = Font(name="BIZ UDGothic", bold=True, color=COLOR_WHITE)
+        c.fill = _fill(COLOR_HEADER_GREEN)
+        c.alignment = _center()
+        c.border = _thin_border()
+
+    ws.row_dimensions[3].height = 16
+    ws.merge_cells(f"A3:{get_column_letter(len(headers))}3")
+    ws["A3"].value = "← research_tool.py の「1688取得」ボタンで追記されます"
+    ws["A3"].font = Font(name="BIZ UDGothic", italic=True, color="999999")
+
+
+# ── Sheet5: ⑤1688テキスト ───────────────────────────────────────────
+def _build_sheet5(ws):
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 80
+
+    ws.row_dimensions[1].height = 28
+    ws.merge_cells("A1:B1")
+    ws["A1"].value = "⑤ 1688 テキスト（仕入れ詳細）"
+    ws["A1"].font = _header_font(COLOR_WHITE, bold=True)
+    ws["A1"].fill = _fill(COLOR_HEADER_GREEN)
+    ws["A1"].alignment = _center()
+
+    ws.row_dimensions[2].height = 16
+    ws.merge_cells("A2:B2")
+    ws["A2"].value = "← research_tool.py の「1688取得」ボタンで追記されます"
+    ws["A2"].font = Font(name="BIZ UDGothic", italic=True, color="999999")
+
+
+# ── グループ情報取得 ────────────────────────────────────────────────
 def _get_group(dm, group_id: str, session_name: str = "") -> Optional[dict]:
     all_items = dm.get_all_items()
     g_items = [i for i in all_items
@@ -102,7 +341,6 @@ def _get_group(dm, group_id: str, session_name: str = "") -> Optional[dict]:
         return None
 
     rep = next((i for i in g_items if i.get("item_id") == group_id), g_items[0])
-
     totals = [float(i.get("total") or 0) for i in g_items if float(i.get("total") or 0) > 0]
 
     sellers: list[str] = []
@@ -120,12 +358,8 @@ def _get_group(dm, group_id: str, session_name: str = "") -> Optional[dict]:
     if th:
         p = Path(th)
         if p.exists():
-            # ① 記録されたパスがそのまま存在する（十王Macまたは同一Mac）
             thumb_path = p
         elif session_name:
-            # ② パスが存在しない場合（守谷Macなど別環境）:
-            #    ファイル名だけ取り出して config.LOCAL_IMAGE_CACHE_DIR で探す
-            #    （GDriveミラーリング済みフォルダ: リサーチ結果/セッション名/images/）
             try:
                 import config
                 fallback = (
@@ -134,11 +368,8 @@ def _get_group(dm, group_id: str, session_name: str = "") -> Optional[dict]:
                 )
                 if fallback.exists():
                     thumb_path = fallback
-                    logger.debug(f"画像をGDriveミラーから使用: {fallback}")
-                else:
-                    logger.debug(f"画像が見つかりません（ローカル・GDriveミラーともに不在）: {Path(th).name}")
-            except Exception as e:
-                logger.debug(f"フォールバックパス解決エラー: {e}")
+            except Exception:
+                pass
 
     return {
         "title":      rep.get("title_short") or rep.get("title_full") or "",
@@ -153,96 +384,60 @@ def _get_group(dm, group_id: str, session_name: str = "") -> Optional[dict]:
 # ── 公開 API ───────────────────────────────────────────────────────────
 def generate_excel_single(dm, group_id: str,
                           embed_images: bool = True) -> Optional[tuple[bytes, str]]:
-    """
-    指定した group_id 1件分の Excel を生成し (bytes, filename) を返す。
-    失敗時は None を返す。
-    """
-    if not TEMPLATE_PATH.exists():
-        logger.error(f"テンプレートが見つかりません: {TEMPLATE_PATH}")
-        logger.error("build_template.py を実行してテンプレートを生成してください。")
-        return None
-
-    try:
-        group = _get_group(dm, group_id)
-        if not group:
-            logger.warning(f"グループが見つかりません: {group_id}")
-            return None
-
-        session_name = group_id  # フォールバック
-
-        # テンプレートを読み込む（書式はテンプレートのまま）
-        wb = load_workbook(str(TEMPLATE_PATH))
-        ws = wb.active
-
-        # データを流し込む
-        _fill_sheet(ws, group, session_name, row=DATA_ROW)
-
-        # 画像埋め込み
-        tmp_dir = tempfile.mkdtemp()
-        try:
-            img_cell = ws.cell(DATA_ROW, 2)
-            if group["thumb_path"] and embed_images:
-                thumb_file = _make_thumb(group["thumb_path"], tmp_dir)
-                if thumb_file:
-                    try:
-                        from openpyxl.drawing.image import Image as XLImage
-                        xl_img = XLImage(thumb_file)
-                        xl_img.anchor = f"B{DATA_ROW}"
-                        ws.add_image(xl_img)
-                        img_cell.value = None
-                    except Exception as e:
-                        logger.warning(f"画像埋め込みエラー: {e}")
-
-            # ★ wb.save() は tmpフォルダを削除する前に実行する
-            #   （openpyxlは save() 時に画像ファイルを再読みするため）
-            buf = io.BytesIO()
-            wb.save(buf)
-            buf.seek(0)
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-        filename = f"{sanitize_filename(group['title'])}_リサーチ.xlsx"
-        logger.info(f"Excel生成完了: {filename}")
-        return buf.read(), filename
-
-    except Exception as e:
-        logger.error(f"Excel生成エラー: {e}", exc_info=True)
-        return None
+    return generate_excel_single_with_session(dm, group_id, group_id, embed_images)
 
 
 def generate_excel_single_with_session(dm, group_id: str, session_name: str,
                                        embed_images: bool = True) -> Optional[tuple[bytes, str]]:
-    """session_name を明示的に渡すバージョン。"""
-    if not TEMPLATE_PATH.exists():
-        logger.error(f"テンプレートが見つかりません: {TEMPLATE_PATH}")
-        return None
-
+    """
+    5シート構成のExcelを生成し (bytes, filename) を返す。
+    Sheet1にAucFanデータを書き込み、Sheet2〜5はヘッダーのみ（空）で作成。
+    """
     try:
         group = _get_group(dm, group_id, session_name)
         if not group:
+            logger.warning(f"グループが見つかりません: {group_id}")
             return None
 
-        wb = load_workbook(str(TEMPLATE_PATH))
-        ws = wb.active
-        _fill_sheet(ws, group, session_name, row=DATA_ROW)
+        # ── ワークブック作成 ─────────────────────────────────────
+        wb = Workbook()
 
+        # デフォルトシートをSheet1として使用
+        ws1 = wb.active
+        ws1.title = SHEET_NAMES[0]
+        _build_sheet1(ws1, group)
+
+        # Sheet2〜5を追加
+        ws2 = wb.create_sheet(SHEET_NAMES[1])
+        _build_sheet2(ws2)
+
+        ws3 = wb.create_sheet(SHEET_NAMES[2])
+        _build_sheet3(ws3)
+
+        ws4 = wb.create_sheet(SHEET_NAMES[3])
+        _build_sheet4(ws4)
+
+        ws5 = wb.create_sheet(SHEET_NAMES[4])
+        _build_sheet5(ws5)
+
+        # Sheet1をアクティブに
+        wb.active = ws1
+
+        # ── AucFan画像埋め込み ───────────────────────────────────
         tmp_dir = tempfile.mkdtemp()
         try:
-            img_cell = ws.cell(DATA_ROW, 2)
             if group["thumb_path"] and embed_images:
                 thumb_file = _make_thumb(group["thumb_path"], tmp_dir)
                 if thumb_file:
                     try:
                         from openpyxl.drawing.image import Image as XLImage
                         xl_img = XLImage(thumb_file)
-                        xl_img.anchor = f"B{DATA_ROW}"
-                        ws.add_image(xl_img)
-                        img_cell.value = None
+                        xl_img.anchor = "B8"
+                        ws1.add_image(xl_img)
+                        ws1["B8"].value = None
                     except Exception as e:
                         logger.warning(f"画像埋め込みエラー: {e}")
 
-            # ★ wb.save() は tmpフォルダを削除する前に実行する
-            #   （openpyxlは save() 時に画像ファイルを再読みするため）
             buf = io.BytesIO()
             wb.save(buf)
             buf.seek(0)
@@ -250,7 +445,7 @@ def generate_excel_single_with_session(dm, group_id: str, session_name: str,
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
         filename = f"{sanitize_filename(group['title'])}_リサーチ.xlsx"
-        logger.info(f"Excel生成完了: {filename} (session={session_name})")
+        logger.info(f"Excel生成完了（5シート）: {filename}")
         return buf.read(), filename
 
     except Exception as e:

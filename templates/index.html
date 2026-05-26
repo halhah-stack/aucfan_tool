@@ -473,9 +473,13 @@
       ASIN・タイトル・価格・説明・仕様・評価件数・A+有無を自動取得します。
     </p>
 
-    <div style="margin-bottom:16px">
+    <div style="margin-bottom:16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <button class="btn btn-primary" id="amazonFetchBtn" onclick="fetchAmazonProduct()">
         🛒 今開いているAmazonページから取得
+      </button>
+      <button class="btn" onclick="window.open('/research','_blank','width=900,height=700,left=100,top=80')"
+              style="background:#375623;color:white;font-weight:bold;">
+        📊 リサーチ追記ツールを開く
       </button>
     </div>
 

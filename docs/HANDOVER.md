@@ -1,6 +1,6 @@
 # 引き継ぎメモ
 
-> 最終更新：2026-05-24  
+> 最終更新：2026-05-26  
 > 次のClaudeセッションはここから読んで作業を再開すること。
 
 ---
@@ -12,60 +12,63 @@
 | 機能 | ファイル | 状態 |
 |---|---|---|
 | AucFanスクレイピング | `scraper.py` | 完成・本番稼働中 |
-| Amazon商品ページ取得 | `amazon_scraper.py` | 完成（A+検出含む） |
-| Amazonデータ保存（group_id紐付け） | `data_manager.py` | 完成 |
-| Amazon取得API | `app.py` `/api/amazon/fetch` | 完成 |
-| Amazon調査UIタブ | `static/app.js`, `templates/index.html` | 完成 |
-| 商品カード「🔍 Amazon調査」ボタン | `static/app.js` | 完成 |
-| ExcelエクスポートAPI（AucFanデータのみ） | `excel_exporter.py` | 動作中（Amazon/1688未対応） |
+| Amazon商品ページ取得（現在タブ） | `amazon_scraper.py` `fetch_amazon_product()` | 完成 |
+| Amazon商品ページ取得（URL指定・短縮URL対応） | `amazon_scraper.py` `fetch_amazon_from_url()` | 完成 |
+| 商品情報テーブル取得（折りたたみ展開） | `amazon_scraper.py` `_expand_and_parse()` | 完成 |
+| 全商品画像URL取得 | `amazon_scraper.py` `image_urls` | 完成 |
+| 評価（星数）抽出 | `amazon_scraper.py` | 完成（「5つ星のうち4.1」→4.1を正しく取得） |
+| Excel 5シート生成 | `excel_exporter.py` | 完成 |
+| Excel保存先フォルダ自動作成 | `app.py` `/api/export/excel/<group_id>` | 完成 |
+| ExcelへのAmazonデータ追記 | `excel_append.py` `append_amazon()` | 完成 |
+| Amazon全画像ダウンロード | `excel_append.py` `download_all_images()` | 完成 |
+| /researchページ（Excelファイル一覧・選択） | `app.py` `_RESEARCH_HTML` | 完成 |
+| /researchページ（Amazon URL追記） | `app.py` `/api/research/amazon/fetch-url-append` | 完成 |
+| /researchページ（Excelダウンロード） | `app.py` `/api/research/excel/download` | 完成 |
+| FBA料金シミュレータ自動入力 | `app.py` `/api/research/amazon/open-calculator` | 完成 |
+| メインアプリからリサーチツールを開くボタン | `templates/index.html` | 完成 |
 
 ### ❌ 未実装のもの
 
-| 機能 | 担当タスク |
+| 機能 | 備考 |
 |---|---|
-| Excelの5シート構成への全面改修 | Task #33 |
-| 1688スクレイパー | Task #35 |
-| data_manager.py 複数ショップ対応 | Task #36 |
-| app.py 1688エンドポイント | Task #37 |
-| UI「1688調査」タブ | Task #38 |
-| ドキュメント更新・git | Task #39 |
+| 1688スクレイパー | `app.py` `/research` の③1688欄は現在グレーアウト（準備中） |
+| data_manager.py 複数ショップ対応 | 1688データ保存用 |
+| app.py 1688エンドポイント | |
+| UI「1688調査」タブ（メインアプリ） | |
+| Claude Excel アドイン連携 | 後回し |
 
 ---
 
-## 本日（2026-05-24）決定した仕様
-
-### ワークフロー（確定）
+## ワークフロー（確定）
 
 ```
 ① AucFanで商品リサーチ → 商品カード表示
-② 「🔍 Amazon調査」ボタン → Amazonタブ（group_id紐付け）
-   → Chromeでライバル商品ページを開く → 「取得」ボタン（複数ライバル追記）
-③ 「🔍 1688調査」ボタン → 1688タブ（group_id紐付け）
-   → Chromeで Aliprice 画像検索 → 1688商品ページへ移動 → 「取得」ボタン（複数ショップ追記）
-④ 「📗 Excel」ボタン → 3データ統合のExcel出力
+② 「📗 Excel」ボタン → 商品名フォルダ＋Excelを自動作成
+③ 「📊 リサーチ追記ツールを開く」ボタン → localhost:5001/research を別ウィンドウで開く
+   → Excelファイルをクリックして選択
+   → ChromeでAmazonライバルページを開く
+   → URLを貼り付けて「取得→追記」（複数ライバルを1件ずつ）
+   → 「💴 FBA料金シミュレータで開く」ボタンでASINを自動入力
+④ （未実装）1688調査 → Sheet4/5に追記
 ```
 
-### 各データの役割
+---
 
-| データ | 役割 | 件数 |
-|---|---|---|
-| AucFan | 「売れている証明」。価格参考程度。画像確認用。 | 1件 |
-| Amazon | ライバル価格 → 自分の**販売価格の根拠**。後でスペック文オマージュにも使う。 | 複数（ライバルごと） |
-| 1688 | **原価**。ショップ×バリアント全種を記録。仕入れ先選定に使う。 | 複数ショップ×複数バリアント |
+## フォルダ構成（保存先）
 
-### 原価計算の係数
+Excelボタン押下で以下のフォルダ構成が自動作成される：
 
 ```
-単価（元） × 35 = 原価（円）
-※ 35 = 送料・関税・代行手数料等を含む独自係数
+~/マイドライブ/AucFanToolData/リサーチ結果/
+  商品名/
+    商品名_リサーチ.xlsx          ← 5シート構成Excel
+    amazon/                        ← Amazonライバル画像
+      B0XXXXX/
+        01.jpg, 02.jpg, 03.jpg...  ← 全商品画像（カタログ参考用）
+    1688/                          ← 1688仕入れ画像（未実装、フォルダのみ作成）
 ```
 
-### 仕入れ判断基準
-
-```
-利益率 ≥ 25% かつ 利益 ≥ 450円 → ◎（仕入れGO）
-それ以外 → ×
-```
+旧形式（フラットに保存されたExcel）も `/research` のファイル一覧で引き続き表示される。
 
 ---
 
@@ -75,138 +78,160 @@
 
 ```
 [AucFan参考] 落札価格・商品名（1行のみ）
-
 [Amazon競合サマリー] 最安値・最高値（Sheet2から自動参照）
 [入力] 販売予定価格: [    ]  FBA手数料: [    ]  ← 手入力2セルのみ
-
 [集計] ◎候補数・最高利益率（Sheet4から自動参照）
 [判定] GO / 要検討
 ```
 
-### Sheet2 "②Amazon競合" — ライバル一覧（1ライバル1行）
+### Sheet2 "②Amazonライバル" — ライバル一覧（1ライバル1行）
 
 ```
-列: ASIN | タイトル | 価格 | 評価 | レビュー数 | A+あり | URL
+列: ASIN | タイトル | 価格 | 評価 | レビュー数 | A+ | URL（実） | 入力URL | 画像
 ```
+- 4行目以降に追記される
+- 画像はExcelに埋め込み（列I）＋ amazon/{ASIN}/ フォルダにも全枚数保存
 
 ### Sheet3 "③Amazonテキスト" — スペック文オマージュ用
 
 ```
-縦並び。ライバルごとに：
-  タイトル / 商品の特徴（箇条書き）/ 商品説明 / 仕様・詳細
+ASINごとにセパレーター行 ＋ 6行:
+  タイトル / 価格 / 商品の特徴（箇条書き）/ 商品説明 / 仕様・詳細
 ```
+- 「商品情報」「機能と仕様」テーブルの内容は「仕様・詳細」行に入る
 
-### Sheet4 "④1688仕入れ" — 利益計算メイン（1バリアント1行）
+### Sheet4 "④1688仕入れ" — 利益計算メイン（未追記）
 
 ```
 列: ショップ名 | ショップURL | 信頼度 | 商品名（親） | バリアント名 |
     単価（元） | MOQ | 単価×MOQ | 原価（円）=単価×35 |
     利益=販売価格-原価-FBA | 利益率 | 判定◎×
-※「販売予定価格」はSheet1の入力セルを参照する数式
 ```
 
-### Sheet5 "⑤1688テキスト" — 仕入れ詳細（縦並び）
+### Sheet5 "⑤1688テキスト" — 仕入れ詳細（未追記）
+
+---
+
+## 原価計算の係数
 
 ```
-ショップごとに：
-  ショップ名 / URL / 信頼度 / 商品名（親）/ 商品URL /
-  バリアント一覧（子商品名・単価・MOQ）
+単価（元） × 35 = 原価（円）
+※ 35 = 送料・関税・代行手数料等を含む独自係数
+```
+
+## 仕入れ判断基準
+
+```
+利益率 ≥ 25% かつ 利益 ≥ 450円 → ◎（仕入れGO）
+それ以外 → ×
 ```
 
 ---
 
-## 1688データ構造（data_manager.py に追加予定）
+## 主要ファイルまとめ
 
-```json
-{
-  "group_id_xxxx": [
-    {
-      "shop_name": "A社",
-      "shop_url": "https://...",
-      "shop_trust": "★★★★",
-      "product_name": "商品名（親）",
-      "product_url": "https://...",
-      "variants": [
-        {"name": "赤/S", "price_cny": 280, "moq": 10},
-        {"name": "赤/M", "price_cny": 280, "moq": 10}
-      ],
-      "saved_at": "2026-05-24T..."
-    },
-    {
-      "shop_name": "B社",
-      ...
-    }
-  ]
-}
+```
+aucfan_tool/
+├── app.py                    Flaskアプリ（ポート5001）・全APIエンドポイント
+│                             /research ページのHTMLもインライン文字列で含む
+├── config.py                 設定（CHROME_DEBUG_PORT, OUTPUT_BASE_DIR等）
+├── data_manager.py           データ管理（items.json / amazon_data.json）
+├── scraper.py                AucFanスクレイパー
+├── amazon_scraper.py         Amazon商品ページスクレイパー
+│   ├── _connect_chrome()     ポート9222の既存Chromeに接続
+│   ├── _extract_asin(url)    URLからASIN抽出
+│   ├── _extract_price(soup)  価格抽出
+│   ├── _expand_and_parse()   折りたたみ展開→スクレイプ（全画像URL含む）
+│   ├── fetch_amazon_product()  現在タブから取得
+│   ├── fetch_amazon_from_url() URL指定取得（短縮URL対応）
+│   └── resolve_short_url()   amzn.asia等の短縮URL解決
+├── excel_exporter.py         Excel 5シート生成（AucFanデータ→Sheet1）
+├── excel_append.py           Excel追記モジュール
+│   ├── download_image()      メイン画像1枚ダウンロード
+│   ├── download_all_images() 全画像を {ASIN}/ フォルダに保存
+│   ├── ensure_product_folders() amazon/ 1688/ フォルダ確認・作成
+│   ├── get_excel_info()      Excelの現在状態を返す
+│   └── append_amazon()       Sheet2/3にAmazonデータ追記
+├── static/app.js             フロントエンドJS（メインアプリUI）
+├── templates/index.html      メインHTML（Amazon調査タブにリサーチツールボタンあり）
+└── docs/
+    ├── HANDOVER.md           ← このファイル
+    ├── CODE_GUIDE.md
+    ├── USER_GUIDE.md
+    ├── SETUP.md
+    └── QUICKSTART.md
 ```
 
-**ポイント**: group_idに対してリスト（複数ショップ）。取得ボタンごとに追記。
-
 ---
 
-## 1688スクレイパー仕様（実装前メモ）
+## APIエンドポイント一覧
 
-- `amazon_scraper.py` と同じ方式（Chromeリモートデバッグポート9222接続）
-- タブ探索: URL に `1688.com` を含むタブを対象
-- Aliprice画像検索 → 1688商品ページ → アプリで「取得」
-- 取得ボタン押下ごとに **追記**（上書きではない）
-- UIにリセットボタン必要（ショップ単位 or 全件クリア）
+### メインアプリ
 
-### 取得項目
-
-| 項目 | 備考 |
-|---|---|
-| ショップ名 | セラー情報エリア |
-| ショップURL | セラーページURL |
-| ショップ信頼度 | 1688の評価スコア・バッジ |
-| 商品名（親） | h1タイトル |
-| 商品URL | 現在のURL |
-| バリアント一覧 | 色・サイズ等の選択肢ごとに名前・単価・MOQを取得 |
-
----
-
-## 現在のExcelファイル状況
-
-| ファイル | 状態 | 備考 |
+| エンドポイント | メソッド | 説明 |
 |---|---|---|
-| `リサーチ_テンプレート.xlsx` | **現役・使用中** | AucFanデータのみ。1シート。 |
-| `リサーチ_テンプレート_Amazon.xlsx` | **旧設計・使用しない** | 2シート設計だったが5シートに変更。削除または無視。 |
-| `build_template_amazon.py` | **全面書き直し必要** | 2シート設計→5シート設計へ。 |
-| `excel_exporter.py` | **AucFanのみ動作** | Amazon・1688データ出力は未実装。 |
+| `/api/export/excel/<group_id>` | POST | Excel生成・商品名フォルダに保存 |
+| `/api/amazon/fetch` | POST | 現在ChromeタブのAmazon情報取得 |
+
+### /researchページ
+
+| エンドポイント | メソッド | 説明 |
+|---|---|---|
+| `/research` | GET | リサーチ追記ツールページ |
+| `/api/research/excel/list` | POST | Excelファイル一覧（サブフォルダ対応） |
+| `/api/research/excel/load` | POST | Excel情報取得（シート名・件数等） |
+| `/api/research/excel/download` | GET | Excelダウンロード（`?path=...`） |
+| `/api/research/amazon/append` | POST | 現在タブ取得→Excel追記 |
+| `/api/research/amazon/fetch-url-append` | POST | URL指定取得→Excel追記 |
+| `/api/research/amazon/open-calculator` | POST | FBA料金シミュレータにASIN自動入力 |
+
+---
+
+## 起動方法
+
+```bash
+cd ~/Downloads/aucfan_tool
+./start.sh          # Chrome（ポート9222）＋ Flaskアプリ（ポート5001）を起動
+```
+
+ブラウザで `http://localhost:5001` を開く。  
+リサーチ追記ツールは `http://localhost:5001/research`（または Amazon調査タブのボタンから）。
+
+---
+
+## FBA料金シミュレータ連携
+
+URL: `https://sellercentral.amazon.co.jp/revcal?ref=RC2nonlogin`
+
+- SellerCentralへのログインが必要（2段階認証あり）
+- **手動でログイン後**、`/research` ページの「💴 FBA料金シミュレータで開く」ボタンが使える
+- Seleniumが既存のログイン済みChromeセッションを使うため、再ログイン不要
+- 既存の `revcal` タブがあれば再利用、なければ新規タブで開く
 
 ---
 
 ## 次回セッションの作業順序
 
 ```
-Task #35: 1688_scraper.py 作成
-Task #36: data_manager.py 複数ショップ対応
-Task #37: app.py 1688エンドポイント追加
-Task #38: UI 1688調査タブ追加
-Task #33: Excelを5シート構成に全面改修
-  └─ build_template_amazon.py 全面書き直し（5シート）
-  └─ excel_exporter.py 全面改修（Amazon複数+1688対応）
-Task #39: ドキュメント更新・git
+1. 1688スクレイパー実装
+   ├── 1688_scraper.py 新規作成（amazon_scraper.py と同方式）
+   ├── 取得項目: ショップ名/URL/信頼度/商品名/バリアント（名称・単価・MOQ）
+   └── app.py に /api/research/1688/fetch-url-append エンドポイント追加
+
+2. excel_append.py に append_1688() 関数追加
+   ├── Sheet4（④1688仕入れ）に追記
+   └── 1688/ フォルダに商品画像保存
+
+3. /research ページの③1688欄を有効化
+
+4. Claude Excel アドイン連携（ユーザー要望・詳細未定）
 ```
 
 ---
 
-## キーファイルまとめ
+## 注意事項
 
-```
-aucfan_tool/
-├── app.py                    Flaskアプリ・全APIエンドポイント
-├── data_manager.py           データ管理（items.json / amazon_data.json）
-├── amazon_scraper.py         Amazon商品ページスクレイパー
-├── excel_exporter.py         Excel生成（現状AucFanのみ）
-├── build_template_amazon.py  Excelテンプレート生成スクリプト（5シート化要）
-├── static/app.js             フロントエンドJS（UI・API呼び出し）
-├── templates/index.html      メインHTML
-├── リサーチ_テンプレート.xlsx  現役テンプレート（1シート・AucFanのみ）
-└── docs/
-    ├── CODE_GUIDE.md         コード解説（エンジニア向け）
-    ├── USER_GUIDE.md         操作説明（ユーザー向け）
-    ├── HANDOVER.md           ← このファイル（引き継ぎメモ）
-    ├── SETUP.md              環境構築手順
-    └── QUICKSTART.md         クイックスタート
-```
+- Chromeは必ず `start.sh` 経由で起動すること（ポート9222のデバッグオプションが必要）
+- `driver.quit()` は呼ばない（Chromeを閉じてしまうため）。`fetch_amazon_from_url()` は新規タブを閉じるだけ
+- Excel保存先: `config.OUTPUT_BASE_DIR` = `~/マイドライブ/AucFanToolData/リサーチ結果/`
+- 旧形式（フラット保存）のExcelも `/research` のファイル一覧で表示・選択可能

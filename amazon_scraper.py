@@ -95,6 +95,275 @@ def _extract_price(soup: BeautifulSoup) -> Optional[str]:
     return None
 
 
+# ── ページ解析共通ロジック ────────────────────────────────────────────
+def _expand_and_parse(driver, current_url: str) -> dict:
+    """
+    Selenium driver が対象ページを開いた状態で呼び出す。
+    折りたたまれた「商品情報」「詳細を表示」をクリックで展開してから
+    ページをパースし、商品データを dict で返す。
+    """
+    import time
+    from selenium.webdriver.common.by import By
+
+    # ── 折りたたみセクションを展開 ────────────────────────────────
+    expand_selectors = [
+        # 「詳細を表示」「すべて表示」系ボタン
+        "#productDetails_expanderSectionShowAll",
+        "#productDetails_db_sections .a-expander-prompt",
+        "#productDetails_detailBullets_sections1 .a-expander-prompt",
+        ".a-expander-prompt",
+        # 商品情報テーブルの「さらに表示」
+        "[data-action='a-expander-toggle']",
+    ]
+    for sel in expand_selectors:
+        try:
+            btns = driver.find_elements(By.CSS_SELECTOR, sel)
+            for btn in btns:
+                if btn.is_displayed():
+                    driver.execute_script("arguments[0].click();", btn)
+                    time.sleep(0.3)
+        except Exception:
+            pass
+
+    html = driver.page_source
+    soup = BeautifulSoup(html, "html.parser")
+
+    asin = _extract_asin(current_url)
+
+    # ── タイトル ──
+    title = ""
+    el = soup.select_one("#productTitle")
+    if el:
+        title = el.get_text(strip=True)
+
+    # ── 価格 ──
+    price = _extract_price(soup)
+
+    # ── 画像URL（メイン） ──
+    image_url = ""
+    img_el = soup.select_one("#landingImage, #imgTagWrapperId img, #main-image")
+    if img_el:
+        image_url = img_el.get("data-old-hires") or img_el.get("src", "")
+        if not image_url and img_el.get("data-a-dynamic-image"):
+            parts = img_el.get("data-a-dynamic-image", "{}").split('"')
+            if len(parts) > 1:
+                image_url = parts[1]
+
+    # ── 全画像URL（サブ画像含む） ──
+    image_urls = []
+
+    # メイン画像: data-a-dynamic-image に複数URLが入っている
+    # 形式: {"url1": [w, h], "url2": [w, h], ...}  → 最大解像度のURLを取る
+    def _best_from_dynamic(el) -> Optional[str]:
+        raw = el.get("data-a-dynamic-image", "")
+        if not raw:
+            return None
+        try:
+            import json
+            mapping = json.loads(raw)  # {"url": [w, h], ...}
+            if not mapping:
+                return None
+            # 解像度（w*h）が最大のURLを返す
+            best = max(mapping.items(), key=lambda kv: kv[1][0] * kv[1][1])
+            return best[0]
+        except Exception:
+            return None
+
+    # メイン画像
+    main_hires = None
+    if img_el:
+        main_hires = (
+            img_el.get("data-old-hires")
+            or _best_from_dynamic(img_el)
+            or img_el.get("src", "")
+        )
+        if main_hires:
+            image_urls.append(main_hires)
+        if not image_url:
+            image_url = main_hires or ""
+
+    # サブ画像（サムネイルリスト）
+    # セレクターを複数試す
+    thumb_selectors = [
+        "#altImages li.item img",
+        "#imageBlock_thumbnails li img",
+        "#thumbs-image img",
+        "#altImages ul li img",
+        ".imageThumbnail img",
+    ]
+    seen_urls = set(image_urls)
+    for sel in thumb_selectors:
+        for thumb_img in soup.select(sel):
+            # サムネイルURLを高解像度に変換
+            # 例: ...._SS40_.jpg → ...._SL1000_.jpg
+            raw_url = (
+                thumb_img.get("data-old-hires")
+                or _best_from_dynamic(thumb_img)
+                or thumb_img.get("src", "")
+            )
+            if not raw_url or raw_url in seen_urls:
+                continue
+            # サムネイル解像度 (_SS40_, _AC_US40_ 等) を高解像度に変換
+            hi_url = re.sub(r"\._[A-Z]{1,3}\d+_\.", "._SL1000_.", raw_url)
+            hi_url = re.sub(r"\._[A-Z]{2}\d+,[A-Z]{2}\d+_\.", "._SL1000_.", hi_url)
+            if hi_url not in seen_urls:
+                image_urls.append(hi_url)
+                seen_urls.add(hi_url)
+
+    # Selenium の JavaScript で altImages の data-a-dynamic-image を取る
+    # （BS4 では script タグに入っていることもある）
+    try:
+        js_data = driver.execute_script("""
+            var imgs = [];
+            var items = document.querySelectorAll('#altImages li.item');
+            items.forEach(function(li) {
+                var img = li.querySelector('img');
+                if (img) {
+                    var dyn = img.getAttribute('data-a-dynamic-image');
+                    if (dyn) { imgs.push(dyn); }
+                }
+            });
+            return imgs;
+        """)
+        if js_data:
+            import json
+            for raw in js_data:
+                try:
+                    mapping = json.loads(raw)
+                    if mapping:
+                        best = max(mapping.items(), key=lambda kv: kv[1][0] * kv[1][1])
+                        url = best[0]
+                        if url not in seen_urls:
+                            image_urls.append(url)
+                            seen_urls.add(url)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # ── 箇条書き ──
+    bullets = []
+    for bel in soup.select("#feature-bullets ul li span.a-list-item"):
+        text = bel.get_text(strip=True)
+        if text and len(text) > 3:
+            bullets.append(text)
+
+    # ── 商品説明 ──
+    description = ""
+    desc_el = soup.select_one(
+        "#productDescription p, "
+        "#productDescription_feature_div p, "
+        "#bookDescription_feature_div"
+    )
+    if desc_el:
+        description = desc_el.get_text(separator="\n", strip=True)
+
+    # ── 商品情報テーブル（仕様・スペック） ────────────────────────
+    # 複数のパターンを順番に試し、全部マージする
+    specs = {}
+
+    # パターン1: 商品概要テーブル（ページ上部・折りたたみなし）
+    # 例: 取り付けタイプ / フィットタイプ / 自動部品位置 など
+    for row in soup.select(
+        "#productOverview_feature_div tr, "
+        "#glProductDescription_feature_div tr"
+    ):
+        tds = row.select("td, th")
+        if len(tds) >= 2:
+            k = tds[0].get_text(strip=True)
+            v = tds[1].get_text(strip=True)
+            if k and v:
+                specs[k] = v
+
+    # パターン2: 技術仕様テーブル（折りたたみ展開後）
+    for row in soup.select(
+        "#productDetails_techSpec_section_1 tr, "
+        "#productDetails_techSpec_section_2 tr, "
+        "#productDetails_db_sections tr, "
+        "#prodDetails .prodDetTable tr, "
+        "#detailBulletsWrapper_feature_div tr"
+    ):
+        th = row.select_one("th")
+        td = row.select_one("td")
+        if th and td:
+            k = th.get_text(strip=True)
+            v = td.get_text(strip=True)
+            if k and v and k not in specs:
+                specs[k] = v
+
+    # パターン3: dl/dt/dd 形式（新デザイン）
+    for li in soup.select("#detailBullets_feature_div ul li"):
+        parts = [p.strip() for p in li.get_text(separator="\n", strip=True).split("\n")
+                 if p.strip() and p.strip() != ":"]
+        if len(parts) >= 2 and parts[0] not in specs:
+            specs[parts[0]] = parts[1]
+
+    # パターン4: key-value ペア形式（一部カテゴリ）
+    for row in soup.select(
+        "#technicalSpecifications_section_1 tr, "
+        ".a-section .a-spacing-small table tr"
+    ):
+        tds = row.select("td")
+        if len(tds) >= 2:
+            k = tds[0].get_text(strip=True)
+            v = tds[1].get_text(strip=True)
+            if k and v and k not in specs:
+                specs[k] = v
+
+    # ── 評価・レビュー ──
+    # 「5つ星のうち4.1」のように表示されるので「のうち」の後の数字を取る
+    rating = ""
+    rating_selectors = [
+        "span[data-hook='rating-out-of-text']",
+        "#acrPopover .a-icon-alt",
+        ".a-icon-star .a-icon-alt",
+        "[data-hook='average-star-rating'] .a-icon-alt",
+        "#averageCustomerReviews .a-icon-alt",
+    ]
+    for sel in rating_selectors:
+        rel = soup.select_one(sel)
+        if rel:
+            text = rel.get_text(strip=True)
+            # 「5つ星のうち4.1」→ "のうち" の後を優先
+            m = re.search(r"のうち\s*(\d+\.?\d*)", text)
+            if not m:
+                # "4.1 out of 5" 形式（英語ページ対応）
+                m = re.search(r"(\d+\.?\d*)\s*out of", text)
+            if not m:
+                # フォールバック: 小数点付きの数字
+                m = re.search(r"(\d+\.\d+)", text)
+            if m:
+                rating = m.group(1)
+                break
+
+    review_count = ""
+    rcel = soup.select_one(
+        "#acrCustomerReviewText, "
+        "span[data-hook='total-review-count']"
+    )
+    if rcel:
+        review_count = rcel.get_text(strip=True)
+
+    # ── A+コンテンツ検出 ──
+    has_aplus = bool(soup.select_one("#aplus, #aplus3PModule, .aplus-v2"))
+
+    return {
+        "success":      True,
+        "url":          current_url,
+        "asin":         asin or "",
+        "title":        title,
+        "price":        price or "",
+        "image_url":    image_url,
+        "image_urls":   image_urls,   # 全画像URL（メイン含む）
+        "bullets":      bullets,
+        "description":  description,
+        "specs":        specs,
+        "rating":       rating,
+        "review_count": review_count,
+        "has_aplus":    has_aplus,
+    }
+
+
 # ── メイン取得関数 ────────────────────────────────────────────────────
 def fetch_amazon_product() -> dict:
     """
@@ -146,123 +415,8 @@ def fetch_amazon_product() -> dict:
                 "error": "商品ページ（/dp/...）を開いてください。カテゴリページや検索結果ページは対象外です。"
             }
 
-        # ASIN
-        asin = _extract_asin(current_url)
-
-        # ページHTML取得
-        html = driver.page_source
-        soup = BeautifulSoup(html, "html.parser")
-
-        # ── タイトル ──────────────────────────────────────────────────
-        title = ""
-        title_el = soup.select_one("#productTitle")
-        if title_el:
-            title = title_el.get_text(strip=True)
-
-        # ── 価格 ──────────────────────────────────────────────────────
-        price = _extract_price(soup)
-
-        # ── メイン画像URL ─────────────────────────────────────────────
-        image_url = ""
-        img_el = soup.select_one("#landingImage, #imgTagWrapperId img, #main-image")
-        if img_el:
-            image_url = (
-                img_el.get("data-old-hires")
-                or img_el.get("data-a-dynamic-image", "{}").split('"')[1] if img_el.get("data-a-dynamic-image") else ""
-                or img_el.get("src", "")
-            )
-
-        # ── 箇条書き（商品の特徴） ────────────────────────────────────
-        bullets = []
-        bullet_els = soup.select("#feature-bullets ul li span.a-list-item")
-        for el in bullet_els:
-            text = el.get_text(strip=True)
-            if text and len(text) > 3:
-                bullets.append(text)
-
-        # ── 商品説明 ──────────────────────────────────────────────────
-        description = ""
-        desc_el = soup.select_one(
-            "#productDescription p, "
-            "#productDescription_feature_div p, "
-            "#bookDescription_feature_div"
-        )
-        if desc_el:
-            description = desc_el.get_text(separator="\n", strip=True)
-
-        # ── 仕様表（技術的な詳細） ────────────────────────────────────
-        specs = {}
-        # パターン1: テーブル形式
-        for row in soup.select(
-            "#productDetails_techSpec_section_1 tr, "
-            "#productDetails_techSpec_section_2 tr, "
-            "#prodDetails .prodDetTable tr"
-        ):
-            th = row.select_one("th")
-            td = row.select_one("td")
-            if th and td:
-                key = th.get_text(strip=True)
-                val = td.get_text(strip=True)
-                if key and val:
-                    specs[key] = val
-
-        # パターン2: dl/dt/dd 形式（新デザイン）
-        if not specs:
-            for dl in soup.select("#detailBullets_feature_div ul li"):
-                parts = dl.get_text(separator="\n", strip=True).split("\n")
-                parts = [p.strip() for p in parts if p.strip() and p.strip() != ":"]
-                if len(parts) >= 2:
-                    specs[parts[0]] = parts[1]
-
-        # ── 評価・レビュー件数 ────────────────────────────────────────
-        rating = ""
-        rating_el = soup.select_one(
-            "span[data-hook='rating-out-of-text'], "
-            "#acrPopover .a-icon-alt, "
-            ".a-icon-star .a-icon-alt"
-        )
-        if rating_el:
-            text = rating_el.get_text(strip=True)
-            m = re.search(r"(\d+\.?\d*)", text)
-            if m:
-                rating = m.group(1)
-
-        review_count = ""
-        review_el = soup.select_one(
-            "#acrCustomerReviewText, "
-            "span[data-hook='total-review-count']"
-        )
-        if review_el:
-            review_count = review_el.get_text(strip=True)
-
-        # ── ライバル件数（検索結果ページとは別・同カテゴリの出品数） ──
-        # 「この商品を含む X 件の結果」= 同カテゴリ競合数の参考値
-        rival_count = ""
-        rival_el = soup.select_one(
-            "span[cel_widget_id='MAIN-TOP_RESULTS_COUNT-0'] span, "
-            ".a-section .a-spacing-small span"
-        )
-        # ライバル件数はAmazon検索結果ページで取るのが正確なので、ここでは取得しない
-
-        # ── A+コンテンツ検出 ──────────────────────────────────────────────
-        has_aplus = bool(soup.select_one("#aplus, #aplus3PModule, .aplus-v2"))
-
-        result = {
-            "success":      True,
-            "url":          current_url,
-            "asin":         asin or "",
-            "title":        title,
-            "price":        price or "",
-            "image_url":    image_url,
-            "bullets":      bullets,
-            "description":  description,
-            "specs":        specs,
-            "rating":       rating,
-            "review_count": review_count,
-            "has_aplus":    has_aplus,
-        }
-
-        logger.info(f"Amazon取得完了: {asin} / {title[:40]}")
+        result = _expand_and_parse(driver, current_url)
+        logger.info(f"Amazon取得完了: {result.get('asin')} / {result.get('title','')[:40]}")
         return result
 
     except Exception as e:
@@ -274,3 +428,106 @@ def fetch_amazon_product() -> dict:
             driver.quit()
         except Exception:
             pass
+
+
+# ── URL指定取得 ───────────────────────────────────────────────────────
+def resolve_short_url(url: str) -> str:
+    """
+    短縮URL（amzn.asia など）をリダイレクト先の実URLに解決する。
+    解決できない場合は元のURLをそのまま返す。
+    """
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            final = resp.url
+            logger.info(f"短縮URL解決: {url} → {final}")
+            return final
+    except Exception as e:
+        logger.warning(f"短縮URL解決失敗（元URLを使用）: {e}")
+        return url
+
+
+def fetch_amazon_from_url(url: str) -> dict:
+    """
+    URLを指定してAmazon商品ページのデータを取得する。
+    短縮URL（amzn.asia/d/... など）にも対応。
+    Chromeの新規タブで開いてスクレイピングし、タブを閉じて戻る。
+
+    Args:
+        url: Amazon商品ページURL（短縮URL可）
+
+    Returns:
+        fetch_amazon_product() と同形式の dict
+    """
+    import time
+
+    # 短縮URL解決
+    resolved_url = resolve_short_url(url)
+
+    driver = _connect_chrome()
+    if not driver:
+        return {"success": False, "error": "Chromeに接続できません（port 9222）"}
+
+    original_handle = None
+    new_handle = None
+
+    try:
+        original_handle = driver.current_window_handle
+
+        # 新規タブを開いてURLへ移動
+        driver.execute_script("window.open('');")
+        new_handle = driver.window_handles[-1]
+        driver.switch_to.window(new_handle)
+        driver.get(resolved_url)
+
+        # ページ読み込み待機（最大10秒）
+        for _ in range(20):
+            time.sleep(0.5)
+            cur = driver.current_url
+            if "amazon.co.jp" in cur and ("/dp/" in cur or "/gp/product/" in cur):
+                break
+            if "amazon.co.jp" in cur and "/dp/" not in cur and "/gp/product/" not in cur:
+                # Amazonには到達したが商品ページではない（トップや検索ページ等）
+                break
+
+        current_url = driver.current_url
+
+        # Amazon商品ページか確認
+        if "amazon.co.jp" not in current_url:
+            return {
+                "success": False,
+                "error": f"Amazon.co.jp のページではありません（リダイレクト先: {current_url[:80]}）"
+            }
+        if "/dp/" not in current_url and "/gp/product/" not in current_url:
+            return {
+                "success": False,
+                "error": "商品ページ（/dp/...）に到達できませんでした。URLを確認してください。"
+            }
+
+        result = _expand_and_parse(driver, current_url)
+        result["input_url"] = url   # 元の入力URL（短縮URLそのまま）を付加
+        logger.info(f"Amazon URL取得完了: {result.get('asin')} / {result.get('title','')[:40]}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Amazon URL取得エラー: {e}", exc_info=True)
+        return {"success": False, "error": f"取得中にエラー: {e}"}
+
+    finally:
+        # 開いたタブだけ閉じて元のタブに戻る
+        try:
+            if new_handle and new_handle in driver.window_handles:
+                driver.switch_to.window(new_handle)
+                driver.close()
+        except Exception:
+            pass
+        try:
+            if original_handle and original_handle in driver.window_handles:
+                driver.switch_to.window(original_handle)
+        except Exception:
+            pass
+        # quit()は呼ばない（Chromeを閉じないため）

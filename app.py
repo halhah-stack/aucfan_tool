@@ -734,17 +734,25 @@ def api_export_excel_single(group_id):
 
     excel_bytes, filename = result
 
-    # リサーチ結果フォルダ直下に保存
-    save_path = Path(config.OUTPUT_BASE_DIR) / filename
+    # ── 商品名フォルダを作成してその中にExcelを保存 ──────────────────
+    # 例: リサーチ結果/商品名/商品名_リサーチ.xlsx
+    # フォルダ名 = xlsx ファイル名から "_リサーチ.xlsx" を除いた部分
+    from excel_exporter import sanitize_filename
+    folder_name = filename.replace("_リサーチ.xlsx", "")
+    product_dir = Path(config.OUTPUT_BASE_DIR) / folder_name
+    save_path = product_dir / filename
     try:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
+        product_dir.mkdir(parents=True, exist_ok=True)
+        # amazon/ と 1688/ サブフォルダも先に作っておく
+        (product_dir / "amazon").mkdir(exist_ok=True)
+        (product_dir / "1688").mkdir(exist_ok=True)
         save_path.write_bytes(excel_bytes)
         logger.info(f"Excel(単品)保存: {save_path}")
     except Exception as e:
         logger.error(f"Excel(単品)保存エラー: {e}")
         return jsonify({"error": f"保存に失敗しました: {e}"}), 500
 
-    return jsonify({"success": True, "filename": filename})
+    return jsonify({"success": True, "filename": filename, "folder": str(product_dir)})
 
 
 def _build_export_html(groups_data, keyword, exported_at, total_items, total_groups):
@@ -2575,6 +2583,630 @@ def api_amazon_get(group_id: str):
     if data is None:
         return jsonify({"success": False, "error": "Amazonデータ未取得"}), 404
     return jsonify({"success": True, **data})
+
+
+
+# ─────────────────────────────────────────────
+# /research — Excel 追記ツール
+# ─────────────────────────────────────────────
+
+_RESEARCH_HTML = """<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>リサーチ追記ツール</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "BIZ UDGothic", "Hiragino Sans", sans-serif;
+         background: #f0f2f5; color: #333; min-height: 100vh; }
+
+  .header { background: #1F4E79; color: white; padding: 14px 20px;
+            display: flex; align-items: center; justify-content: space-between; }
+  .header-title { font-size: 16px; font-weight: bold; }
+  .header-sub   { font-size: 11px; opacity: 0.75; margin-top: 2px; }
+  .back-link { color: rgba(255,255,255,0.8); font-size: 12px; text-decoration: none;
+               border: 1px solid rgba(255,255,255,0.4); padding: 4px 10px; border-radius: 4px; }
+  .back-link:hover { background: rgba(255,255,255,0.15); }
+
+  .main { max-width: 820px; margin: 20px auto; padding: 0 14px; }
+
+  .card { background: white; border-radius: 10px; padding: 18px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 14px; }
+  .card-title { font-size: 13px; font-weight: bold; color: #555;
+                border-left: 4px solid #1F4E79; padding-left: 9px;
+                margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+
+  /* ファイル一覧 */
+  .folder-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .folder-input { flex: 1; padding: 8px 10px; border: 2px solid #ddd;
+                  border-radius: 6px; font-size: 12px; font-family: monospace; }
+  .folder-input:focus { outline: none; border-color: #1F4E79; }
+
+  .file-list { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+  .file-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+               border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.15s; }
+  .file-item:last-child { border-bottom: none; }
+  .file-item:hover { background: #EBF3FB; }
+  .file-item.selected { background: #D6E8F7; border-left: 3px solid #1F4E79; }
+  .file-icon { font-size: 20px; flex-shrink: 0; }
+  .file-info { flex: 1; min-width: 0; }
+  .file-name { font-size: 13px; font-weight: bold; color: #1F4E79;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-meta { font-size: 11px; color: #888; margin-top: 2px; }
+  .file-badge { font-size: 10px; background: #C55A11; color: white;
+                padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+  .file-empty { padding: 20px; text-align: center; color: #aaa; font-size: 13px; }
+
+  /* 読み込み済みExcel表示 */
+  .excel-loaded { background: #EBF3FB; border-radius: 8px; padding: 12px 14px; }
+  .excel-loaded-name { font-size: 14px; font-weight: bold; color: #1F4E79; }
+  .excel-loaded-meta { font-size: 12px; color: #666; margin-top: 3px; }
+  .sheet-tags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 7px; }
+  .sheet-tag  { background: #1F4E79; color: white; font-size: 10px;
+                padding: 2px 7px; border-radius: 10px; }
+
+  .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px;
+         font-weight: bold; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+  .btn:hover:not(:disabled) { filter: brightness(0.9); }
+  .btn:active:not(:disabled) { transform: scale(0.97); }
+  .btn-blue   { background: #1F4E79; color: white; }
+  .btn-orange { background: #C55A11; color: white; }
+  .btn-calc   { background: #6B4C9A; color: white; font-size: 12px; padding: 6px 12px; }
+  .btn-sm     { padding: 5px 10px; font-size: 11px; }
+  .btn-gray   { background: #ccc; color: #777; cursor: not-allowed; }
+
+  .result { margin-top: 10px; padding: 11px 13px; border-radius: 7px;
+            font-size: 12px; line-height: 1.6; }
+  .result.success { background: #E9F7EF; border: 1px solid #27AE60; color: #1a6b3a; }
+  .result.error   { background: #FDE8E8; border: 1px solid #E74C3C; color: #a11a1a; }
+  .result.info    { background: #EBF5FB; border: 1px solid #2980B9; color: #1a4a6b; }
+
+  .badge { display: inline-block; background: #C55A11; color: white;
+           font-size: 10px; padding: 1px 7px; border-radius: 9px; margin-left: 6px; }
+
+  .spinner { display: inline-block; width: 14px; height: 14px;
+             border: 2px solid rgba(255,255,255,0.4); border-top-color: white;
+             border-radius: 50%; animation: spin 0.7s linear infinite;
+             margin-right: 5px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .hint { font-size: 11px; color: #999; margin-top: 8px; line-height: 1.6; }
+  .dim { opacity: 0.45; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="header-title">📊 リサーチ追記ツール</div>
+    <div class="header-sub">Excel に Amazon / 1688 データを追記する</div>
+  </div>
+  <a href="/" class="back-link">← AucFanアプリ</a>
+</div>
+
+<div class="main">
+
+  <!-- ① Excel選択 -->
+  <div class="card">
+    <div class="card-title">
+      ① Excel ファイルを選択
+      <button class="btn btn-blue btn-sm" onclick="refreshList()" style="margin-left:auto;">🔄 更新</button>
+    </div>
+
+    <!-- フォルダ変更（詳細） -->
+    <details style="margin-bottom:10px;">
+      <summary style="font-size:11px; color:#888; cursor:pointer;">📁 フォルダを変更する</summary>
+      <div style="margin-top:8px; display:flex; gap:8px;">
+        <input id="folderPath" class="folder-input" type="text" placeholder="フォルダパス">
+        <button class="btn btn-blue btn-sm" onclick="refreshList()">スキャン</button>
+      </div>
+      <p class="hint">空白のままにすると保存先（Google Drive/AucFanToolData/リサーチ結果）を自動で探します。</p>
+    </details>
+
+    <!-- ファイル一覧 -->
+    <div id="fileList">
+      <div class="file-empty">読み込み中...</div>
+    </div>
+
+    <!-- 読み込み済み表示 -->
+    <div id="excelLoaded" class="hidden" style="margin-top:12px;"></div>
+  </div>
+
+  <!-- ② Amazon取得 -->
+  <div class="card">
+    <div class="card-title">
+      ② Amazon ライバルデータ取得
+      <span id="amazonBadge" class="badge hidden">0件</span>
+    </div>
+
+    <!-- URL入力エリア -->
+    <div style="display:flex; gap:8px; align-items:flex-start; margin-bottom:10px;">
+      <div style="flex:1;">
+        <input id="amazonUrl" class="folder-input" type="text"
+               placeholder="Amazon URL を貼り付け　例: https://amzn.asia/d/07AQHZFg　または https://www.amazon.co.jp/dp/B0XXXX"
+               style="width:100%; padding:9px 11px; font-size:13px;">
+        <p class="hint" style="margin-top:5px;">
+          短縮URL（amzn.asia/d/...）・通常URL どちらでも対応。複数ライバルは1件ずつ貼り付けて「取得→追記」を繰り返してください。
+        </p>
+      </div>
+      <button id="btnAmazonUrl" class="btn btn-orange" onclick="fetchAmazonUrl()" style="margin-top:1px;">
+        🔍 取得 → 追記
+      </button>
+    </div>
+
+    <div id="amazonResult" class="hidden result"></div>
+  </div>
+
+  <!-- ③ 1688（準備中） -->
+  <div class="card dim">
+    <div class="card-title">③ 1688 仕入れデータ取得
+      <span style="font-size:10px; color:#999; font-weight:normal;">（準備中）</span>
+    </div>
+    <p class="hint" style="margin-bottom:10px;">Chrome で 1688 商品ページを開いた状態で「取得」を押してください。</p>
+    <button class="btn btn-gray" disabled>🔍 1688データ取得 → Sheet4/5 に追記</button>
+  </div>
+
+</div>
+
+<script>
+let loadedPath  = "";
+let amazonCount = 0;
+
+// ── ファイル一覧 ────────────────────────────────────────────
+async function refreshList() {
+  const folder = document.getElementById("folderPath").value.trim();
+  const div    = document.getElementById("fileList");
+  div.innerHTML = '<div class="file-empty">スキャン中...</div>';
+
+  const res  = await fetch("/api/research/excel/list", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({folder: folder})
+  });
+  const data = await res.json();
+
+  if (!data.success || !data.files.length) {
+    const msg = data.error || "Excelファイルが見つかりません";
+    div.innerHTML = `<div class="file-empty">📭 ${msg}</div>`;
+    return;
+  }
+
+  // フォルダパスを表示
+  document.getElementById("folderPath").placeholder = data.folder;
+
+  div.innerHTML = '<div class="file-list">' +
+    data.files.map(f => `
+      <div class="file-item" onclick="selectFile('${f.path.replace(/'/g,"\\'")}', this)"
+           title="${f.path}">
+        <div class="file-icon">📄</div>
+        <div class="file-info">
+          <div class="file-name">${f.name}</div>
+          <div class="file-meta">${f.modified} &nbsp;·&nbsp; ${f.size}</div>
+        </div>
+        ${f.amazon_count > 0
+          ? `<div class="file-badge">Amazon ${f.amazon_count}件</div>`
+          : ''}
+      </div>`).join("") +
+    '</div>';
+}
+
+async function selectFile(path, el) {
+  // 選択ハイライト
+  document.querySelectorAll(".file-item").forEach(e => e.classList.remove("selected"));
+  el.classList.add("selected");
+
+  // Excel情報取得
+  const res  = await fetch("/api/research/excel/load", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({path: path})
+  });
+  const data = await res.json();
+  const div  = document.getElementById("excelLoaded");
+
+  if (data.success) {
+    loadedPath  = path;
+    amazonCount = data.amazon_count || 0;
+    updateBadge();
+    const warn = data.is_research ? "" :
+      '<p style="color:#C55A11;font-size:11px;margin-top:4px;">⚠ 5シート構成ではない可能性があります</p>';
+    div.innerHTML = `
+      <div class="excel-loaded">
+        <div class="excel-loaded-name">✅ ${data.filename}</div>
+        <div class="excel-loaded-meta">
+          ${data.title || "（タイトル未取得）"}
+          &nbsp;·&nbsp; Amazon <strong>${amazonCount}件</strong>取得済み
+        </div>
+        <div class="sheet-tags">
+          ${(data.sheets||[]).map(s=>`<span class="sheet-tag">${s}</span>`).join("")}
+        </div>
+        ${warn}
+        <div style="margin-top:8px;">
+          <a class="btn btn-blue btn-sm" href="/api/research/excel/download?path=${encodeURIComponent(path)}"
+             download style="text-decoration:none;">
+            ⬇ Excelをダウンロード
+          </a>
+        </div>
+      </div>`;
+    div.classList.remove("hidden");
+  } else {
+    div.innerHTML = `<div class="result error">❌ ${data.error}</div>`;
+    div.classList.remove("hidden");
+  }
+}
+
+function updateBadge() {
+  const b = document.getElementById("amazonBadge");
+  b.textContent = amazonCount + "件";
+  b.classList.remove("hidden");
+}
+
+// ── Amazon URL取得 ──────────────────────────────────────────
+async function fetchAmazonUrl() {
+  if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
+
+  const url = document.getElementById("amazonUrl").value.trim();
+  if (!url) { alert("Amazon の URL を入力してください"); return; }
+
+  const btn = document.getElementById("btnAmazonUrl");
+  const div = document.getElementById("amazonResult");
+  btn.innerHTML = '<span class="spinner"></span>取得中...';
+  btn.disabled  = true;
+  div.className = "result info";
+  div.textContent = "短縮URLを解決してページを取得中...";
+  div.classList.remove("hidden");
+
+  try {
+    const res  = await fetch("/api/research/amazon/fetch-url-append", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: loadedPath, url: url})
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      amazonCount++;
+      updateBadge();
+      document.querySelectorAll(".file-item.selected .file-badge").forEach(b => {
+        b.textContent = "Amazon " + amazonCount + "件";
+      });
+      // URLをクリア
+      document.getElementById("amazonUrl").value = "";
+      div.className = "result success";
+      const imgInfo = data.image_count > 0
+        ? `🖼 画像 ${data.image_count}枚保存 (amazon/${data.asin}/)`
+        : (data.has_image ? "🖼 画像あり" : "");
+      div.innerHTML =
+        `✅ Sheet2 の ${data.row} 行目に追記 ${imgInfo}<br>` +
+        `<strong>ASIN:</strong> ${data.asin} &nbsp; <strong>価格:</strong> ${data.price}<br>` +
+        `<span style="color:#555;">${data.title}</span><br>` +
+        `<button class="btn btn-calc" onclick="openCalculator('${data.asin}')" style="margin-top:8px;">` +
+        `💴 FBA料金シミュレータで開く</button>`;
+    } else {
+      div.className = "result error";
+      div.textContent = "❌ " + data.error;
+    }
+  } catch(e) {
+    div.className = "result error";
+    div.textContent = "❌ 通信エラー: " + e.message;
+  } finally {
+    btn.innerHTML = "🔍 取得 → 追記";
+    btn.disabled  = false;
+  }
+}
+
+// ── FBA料金シミュレータ ────────────────────────────────────────
+async function openCalculator(asin) {
+  const btn = event.target;
+  btn.textContent = "⏳ 起動中...";
+  btn.disabled = true;
+  try {
+    const res  = await fetch("/api/research/amazon/open-calculator", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({asin: asin})
+    });
+    const data = await res.json();
+    if (data.success) {
+      btn.textContent = "✅ Chromeで開きました";
+    } else {
+      btn.textContent = "❌ " + data.error;
+      btn.disabled = false;
+    }
+  } catch(e) {
+    btn.textContent = "❌ 通信エラー";
+    btn.disabled = false;
+  }
+}
+
+// Enterキーで送信
+document.addEventListener("DOMContentLoaded", () => {
+  const inp = document.getElementById("amazonUrl");
+  if (inp) inp.addEventListener("keydown", e => { if (e.key === "Enter") fetchAmazonUrl(); });
+});
+
+// 起動時にファイル一覧を読み込む
+refreshList();
+</script>
+</body>
+</html>
+"""
+
+
+@app.route("/research")
+def research_page():
+    """Excel 追記ツール（AucFan アプリ内ページ）"""
+    return _RESEARCH_HTML
+
+
+@app.route("/api/research/excel/list", methods=["POST"])
+def api_research_excel_list():
+    """指定フォルダ（省略時は OUTPUT_BASE_DIR）の xlsx ファイル一覧を返す。"""
+    import time
+    body   = request.get_json(silent=True) or {}
+    folder = (body.get("folder") or "").strip() or config.OUTPUT_BASE_DIR
+    folder_path = Path(folder)
+
+    if not folder_path.exists():
+        return jsonify({"success": False, "error": f"フォルダが見つかりません: {folder}", "files": []})
+
+    try:
+        import datetime as dt
+        files = []
+        # フラット（旧形式）+ サブフォルダ（新形式）の両方を拾う
+        xlsx_paths = list(folder_path.glob("*.xlsx")) + list(folder_path.glob("*/*.xlsx"))
+        xlsx_paths = sorted(xlsx_paths, key=lambda x: x.stat().st_mtime, reverse=True)
+
+        for p in xlsx_paths:
+            stat = p.stat()
+            # Amazon取得済み件数を簡易チェック
+            amazon_count = 0
+            try:
+                from openpyxl import load_workbook
+                wb = load_workbook(str(p), read_only=True, data_only=True)
+                if "②Amazonライバル" in wb.sheetnames:
+                    ws = wb["②Amazonライバル"]
+                    for r in range(4, (ws.max_row or 3) + 1):
+                        if ws.cell(r, 1).value:
+                            amazon_count += 1
+                wb.close()
+            except Exception:
+                pass
+
+            modified = dt.datetime.fromtimestamp(stat.st_mtime).strftime("%Y/%m/%d %H:%M")
+            size_kb  = stat.st_size // 1024
+            size_str = f"{size_kb}KB" if size_kb < 1024 else f"{size_kb//1024}MB"
+
+            # サブフォルダ内のファイルは「フォルダ名/ファイル名」で表示
+            rel = p.relative_to(folder_path)
+            display_name = str(rel) if len(rel.parts) > 1 else p.name
+
+            files.append({
+                "name":          display_name,
+                "path":          str(p),
+                "modified":      modified,
+                "size":          size_str,
+                "amazon_count":  amazon_count,
+            })
+
+        return jsonify({"success": True, "folder": str(folder_path), "files": files})
+
+    except Exception as e:
+        logger.error(f"ファイル一覧取得エラー: {e}")
+        return jsonify({"success": False, "error": str(e), "files": []})
+
+
+@app.route("/api/research/excel/download", methods=["GET"])
+def api_research_excel_download():
+    """Excelファイルをブラウザにダウンロードさせる。"""
+    from urllib.parse import unquote
+    from flask import send_file
+    path = unquote(request.args.get("path", "").strip())
+    if not path:
+        return "パスが指定されていません", 400
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        return "ファイルが見つかりません", 404
+    # パストラバーサル防止: OUTPUT_BASE_DIR 配下のみ許可
+    try:
+        p.resolve().relative_to(Path(config.OUTPUT_BASE_DIR).resolve())
+    except ValueError:
+        return "アクセスできないパスです", 403
+    return send_file(
+        str(p),
+        as_attachment=True,
+        download_name=p.name,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+@app.route("/api/research/excel/load", methods=["POST"])
+def api_research_excel_load():
+    """Excel ファイルの情報を返す。"""
+    from excel_append import get_excel_info
+    body = request.get_json(silent=True) or {}
+    path = body.get("path", "").strip()
+    if not path:
+        return jsonify({"success": False, "error": "パスが指定されていません"})
+    return jsonify(get_excel_info(path))
+
+
+@app.route("/api/research/amazon/append", methods=["POST"])
+def api_research_amazon_append():
+    """Chrome の現在開いている Amazon ページを取得して Excel に追記する。"""
+    from amazon_scraper import fetch_amazon_product
+    from excel_append import append_amazon
+
+    body = request.get_json(silent=True) or {}
+    excel_path = body.get("path", "").strip()
+    if not excel_path:
+        return jsonify({"success": False, "error": "Excelパスが指定されていません"})
+
+    amazon_data = fetch_amazon_product()
+    if not amazon_data.get("success"):
+        return jsonify(amazon_data), 400
+
+    result = append_amazon(excel_path, amazon_data)
+    status = 200 if result.get("success") else 500
+    return jsonify(result), status
+
+
+@app.route("/api/research/amazon/fetch-url-append", methods=["POST"])
+def api_research_amazon_fetch_url_append():
+    """URLを指定してAmazonデータを取得し、Excelに追記する。短縮URL対応。"""
+    from amazon_scraper import fetch_amazon_from_url
+    from excel_append import append_amazon
+
+    body = request.get_json(silent=True) or {}
+    excel_path = body.get("path", "").strip()
+    url        = body.get("url", "").strip()
+
+    if not excel_path:
+        return jsonify({"success": False, "error": "Excelパスが指定されていません"})
+    if not url:
+        return jsonify({"success": False, "error": "URLが指定されていません"})
+
+    amazon_data = fetch_amazon_from_url(url)
+    if not amazon_data.get("success"):
+        return jsonify(amazon_data), 400
+
+    result = append_amazon(excel_path, amazon_data)
+    status = 200 if result.get("success") else 500
+    return jsonify(result), status
+
+
+@app.route("/api/research/amazon/open-calculator", methods=["POST"])
+def api_open_fba_calculator():
+    """
+    FBA料金シミュレータ（非ログイン版）をChromeで開き、ASINを自動入力する。
+    既存のSelenium接続（port 9222）を使用。
+    """
+    body = request.get_json(silent=True) or {}
+    asin = body.get("asin", "").strip()
+    if not asin:
+        return jsonify({"success": False, "error": "ASINが指定されていません"})
+
+    try:
+        from amazon_scraper import _connect_chrome
+        import time
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+
+        CALC_URL = "https://sellercentral.amazon.co.jp/revcal?ref=RC2nonlogin"
+
+        driver = _connect_chrome()
+        if not driver:
+            return jsonify({"success": False, "error": "Chromeに接続できません（port 9222）"})
+
+        # 既存のシミュレータタブを探す（revcal URLのみ再利用。ログインページは除外）
+        calc_handle = None
+        for handle in driver.window_handles:
+            driver.switch_to.window(handle)
+            if "revcal" in driver.current_url:
+                calc_handle = handle
+                break
+
+        if calc_handle:
+            # 既存タブに移動してURLをリロード
+            driver.switch_to.window(calc_handle)
+            driver.get(CALC_URL)
+        else:
+            # 新規タブを開く
+            driver.execute_script("window.open('');")
+            calc_handle = driver.window_handles[-1]
+            driver.switch_to.window(calc_handle)
+            driver.get(CALC_URL)
+
+        # ページ読み込み待機（最大15秒）
+        time.sleep(2)
+
+        # ASIN入力フィールドを探す（複数セレクターを試す）
+        input_selectors = [
+            "input[id*='asin']",
+            "input[name*='asin']",
+            "input[placeholder*='ASIN']",
+            "input[placeholder*='asin']",
+            "#asin-search-input",
+            "input[type='text']",
+        ]
+
+        input_el = None
+        for sel in input_selectors:
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    if el.is_displayed() and el.is_enabled():
+                        input_el = el
+                        break
+                if input_el:
+                    break
+            except Exception:
+                pass
+
+        if not input_el:
+            # JavaScriptでも試す
+            try:
+                input_el = driver.execute_script("""
+                    var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+                    for (var i = 0; i < inputs.length; i++) {
+                        if (inputs[i].offsetParent !== null) return inputs[i];
+                    }
+                    return null;
+                """)
+            except Exception:
+                pass
+
+        if not input_el:
+            return jsonify({
+                "success": False,
+                "error": "ASIN入力欄が見つかりませんでした。シミュレータページが表示されているか確認してください。"
+            })
+
+        # 入力フィールドをクリアして ASIN を入力
+        driver.execute_script("arguments[0].value = '';", input_el)
+        driver.execute_script("arguments[0].click();", input_el)
+        time.sleep(0.3)
+        input_el.clear()
+        input_el.send_keys(asin)
+        time.sleep(0.3)
+
+        # 送信ボタンを探してクリック
+        submit_selectors = [
+            "button[type='submit']",
+            "input[type='submit']",
+            "button[id*='search']",
+            "button[id*='submit']",
+            ".kat-button--primary",
+            "button.a-button-primary",
+        ]
+        submitted = False
+        for sel in submit_selectors:
+            try:
+                btns = driver.find_elements(By.CSS_SELECTOR, sel)
+                for btn in btns:
+                    if btn.is_displayed() and btn.is_enabled():
+                        driver.execute_script("arguments[0].click();", btn)
+                        submitted = True
+                        break
+                if submitted:
+                    break
+            except Exception:
+                pass
+
+        if not submitted:
+            # Enterキーで送信
+            from selenium.webdriver.common.keys import Keys
+            input_el.send_keys(Keys.RETURN)
+
+        logger.info(f"FBA料金シミュレータ: ASIN={asin} 入力完了")
+        return jsonify({"success": True, "asin": asin, "url": CALC_URL})
+
+    except Exception as e:
+        logger.error(f"FBA料金シミュレータ起動エラー: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)})
 
 
 # ─────────────────────────────────────────────
