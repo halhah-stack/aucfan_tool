@@ -2884,6 +2884,14 @@ async function fetchAmazonUrl() {
         `<span style="color:#555;">${data.title}</span><br>` +
         `<button class="btn btn-calc" onclick="openCalculator('${data.asin}')" style="margin-top:8px;">` +
         `💴 FBA料金シミュレータで開く</button>`;
+    } else if (data.duplicate) {
+      // 重複ASIN
+      div.className = "result info";
+      div.innerHTML =
+        `⚠️ <strong>ASIN ${data.asin}</strong> は既に ${data.row} 行目に追記済みです。<br>` +
+        `<small style="color:#555;">別のライバルのURLを入力してください。</small><br>` +
+        `<button class="btn btn-calc" onclick="openCalculator('${data.asin}')" style="margin-top:8px;">` +
+        `💴 FBA料金シミュレータで開く</button>`;
     } else {
       div.className = "result error";
       div.textContent = "❌ " + data.error;

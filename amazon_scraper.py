@@ -518,7 +518,7 @@ def fetch_amazon_from_url(url: str) -> dict:
         return {"success": False, "error": f"取得中にエラー: {e}"}
 
     finally:
-        # 開いたタブだけ閉じて元のタブに戻る
+        # 開いたタブだけ閉じて /research タブに戻る
         try:
             if new_handle and new_handle in driver.window_handles:
                 driver.switch_to.window(new_handle)
@@ -526,8 +526,20 @@ def fetch_amazon_from_url(url: str) -> dict:
         except Exception:
             pass
         try:
-            if original_handle and original_handle in driver.window_handles:
-                driver.switch_to.window(original_handle)
+            # localhost（/researchページ）のタブを優先して前面に戻す
+            research_handle = None
+            for h in driver.window_handles:
+                try:
+                    driver.switch_to.window(h)
+                    if "localhost" in driver.current_url:
+                        research_handle = h
+                        break
+                except Exception:
+                    pass
+            # localhostタブが見つからなければoriginal_handleに戻す
+            if not research_handle:
+                if original_handle and original_handle in driver.window_handles:
+                    driver.switch_to.window(original_handle)
         except Exception:
             pass
         # quit()は呼ばない（Chromeを閉じないため）

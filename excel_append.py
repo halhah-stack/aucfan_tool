@@ -163,6 +163,20 @@ def append_amazon(excel_path: str, data: dict) -> dict:
         # ── Sheet2: ②Amazonライバル ──────────────────────────────
         ws2 = wb[SHEET_AMAZON_LIST]
 
+        # 重複チェック: 同じASINが既に存在する場合はスキップ
+        asin_to_add = data.get("asin", "")
+        if asin_to_add:
+            for r in range(4, (ws2.max_row or 3) + 1):
+                if ws2.cell(r, 1).value == asin_to_add:
+                    logger.warning(f"重複ASIN スキップ: {asin_to_add} (行{r})")
+                    return {
+                        "success": False,
+                        "duplicate": True,
+                        "asin": asin_to_add,
+                        "row": r,
+                        "error": f"ASIN {asin_to_add} は既に{r}行目に追記済みです。",
+                    }
+
         # 4行目以降で最初の空行を探す
         next_row = 4
         for r in range(4, (ws2.max_row or 3) + 2):
