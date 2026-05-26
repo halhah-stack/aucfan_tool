@@ -134,9 +134,10 @@ def _build_sheet1(ws, group: dict):
     sec.alignment = _left()
 
     rows_aucfan = [
-        (5,  "商品キーワード",  group["title"],         False),
+        (5,  "商品キーワード",  group["title"],          False),
         (6,  "AucFan最安値",   group["min_total"] or "", False),
-        (7,  "件数（4件以上）", group["group_size"],    False),
+        (7,  "件数（4件以上）", group["group_size"],     False),
+        (8,  "AucFan URL",     group.get("url", ""),     False),
     ]
     for r, label, val, is_input in rows_aucfan:
         ws.row_dimensions[r].height = 18
@@ -150,30 +151,34 @@ def _build_sheet1(ws, group: dict):
         ws[f"B{r}"].border = _thin_border()
         if is_input:
             ws[f"B{r}"].fill = _fill(COLOR_INPUT_YELLOW)
+        # URL行はハイパーリンク設定
+        if label == "AucFan URL" and val:
+            ws[f"B{r}"].hyperlink = str(val)
+            ws[f"B{r}"].font = Font(name="BIZ UDGothic", color="0563C1", underline="single")
 
     # ── AucFanサムネイル欄 ─────────────────────────────────────────
-    ws.row_dimensions[8].height = 90
-    ws["A8"].value = "AucFan画像"
-    ws["A8"].font = Font(name="BIZ UDGothic", bold=True)
-    ws["A8"].fill = _fill(COLOR_GRAY)
-    ws["A8"].border = _thin_border()
-    ws.merge_cells("B8:E8")
-    ws["B8"].value = "（画像は自動埋め込み）"
-    ws["B8"].font = Font(name="BIZ UDGothic", color="999999", italic=True)
-    ws["B8"].alignment = _center()
+    ws.row_dimensions[9].height = 90
+    ws["A9"].value = "AucFan画像"
+    ws["A9"].font = Font(name="BIZ UDGothic", bold=True)
+    ws["A9"].fill = _fill(COLOR_GRAY)
+    ws["A9"].border = _thin_border()
+    ws.merge_cells("B9:E9")
+    ws["B9"].value = "（画像は自動埋め込み）"
+    ws["B9"].font = Font(name="BIZ UDGothic", color="999999", italic=True)
+    ws["B9"].alignment = _center()
 
     # ── セクション: 販売価格・FBA（手入力） ───────────────────────
-    ws.row_dimensions[10].height = 20
-    ws.merge_cells("A10:E10")
-    sec2 = ws["A10"]
+    ws.row_dimensions[11].height = 20
+    ws.merge_cells("A11:E11")
+    sec2 = ws["A11"]
     sec2.value = "▼ 販売価格・FBA手数料（手入力）"
     sec2.font = _header_font(COLOR_WHITE)
     sec2.fill = _fill(COLOR_HEADER_ORANGE)
     sec2.alignment = _left()
 
     input_rows = [
-        (11, "販売予定価格（円）", ""),
-        (12, "FBA手数料（円）",   ""),
+        (12, "販売予定価格（円）", ""),
+        (13, "FBA手数料（円）",   ""),
     ]
     for r, label, val in input_rows:
         ws.row_dimensions[r].height = 22
@@ -188,21 +193,20 @@ def _build_sheet1(ws, group: dict):
         ws[f"B{r}"].border = _thin_border()
 
     # ── セクション: 利益計算（自動） ──────────────────────────────
-    ws.row_dimensions[14].height = 20
-    ws.merge_cells("A14:E14")
-    sec3 = ws["A14"]
+    ws.row_dimensions[15].height = 20
+    ws.merge_cells("A15:E15")
+    sec3 = ws["A15"]
     sec3.value = "▼ 利益計算（自動）"
     sec3.font = _header_font(COLOR_WHITE)
     sec3.fill = _fill(COLOR_HEADER_GREEN)
     sec3.alignment = _left()
 
-    # B11=販売予定価格, B12=FBA手数料
-    # Sheet4の④1688仕入れ: 原価は後で追記されるため、暫定的に手入力欄を設ける
+    # B12=販売予定価格, B13=FBA手数料
     calc_rows = [
-        (15, "原価（円）",   "（④1688仕入れシートに入力後、自動参照）"),
-        (16, "利益（円）",   '=IF(B11="","",IF(B15="","",(B11-B12-B15)))'),
-        (17, "利益率",       '=IF(OR(B11="",B11=0),"",TEXT(B16/B11,"0.0%"))'),
-        (18, "判定",         '=IF(OR(B16="",B17=""),"",IF(AND(VALUE(SUBSTITUTE(B17,"%",""))/100>=0.25,B16>=450),"◎ GO","× 再検討"))'),
+        (16, "原価（円）",   "（④1688仕入れシートに入力後、自動参照）"),
+        (17, "利益（円）",   '=IF(B12="","",IF(B16="","",(B12-B13-B16)))'),
+        (18, "利益率",       '=IF(OR(B12="",B12=0),"",TEXT(B17/B12,"0.0%"))'),
+        (19, "判定",         '=IF(OR(B17="",B18=""),"",IF(AND(VALUE(SUBSTITUTE(B18,"%",""))/100>=0.25,B17>=450),"◎ GO","× 再検討"))'),
     ]
     for r, label, formula in calc_rows:
         ws.row_dimensions[r].height = 22
@@ -432,9 +436,9 @@ def generate_excel_single_with_session(dm, group_id: str, session_name: str,
                     try:
                         from openpyxl.drawing.image import Image as XLImage
                         xl_img = XLImage(thumb_file)
-                        xl_img.anchor = "B8"
+                        xl_img.anchor = "B9"
                         ws1.add_image(xl_img)
-                        ws1["B8"].value = None
+                        ws1["B9"].value = None
                     except Exception as e:
                         logger.warning(f"画像埋め込みエラー: {e}")
 
