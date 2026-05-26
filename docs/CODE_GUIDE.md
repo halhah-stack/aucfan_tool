@@ -216,6 +216,25 @@ AUTOMOTIVE_KEYWORDS    = set(_RULES.get("automotive_keywords", []))
 - `imagehash.phash()` でPerceptual Hash（pHash）を64ビット文字列として計算
 - `group_by_phash(items)` がハミング距離 ≤ `PHASH_THRESHOLD` の商品を同一グループとみなしてクラスタリング
 
+**GDriveアップロードとの関係（`gdrive_uploader.py`）**：
+
+`gdrive_uploader.py` はメインアプリ（Flask / `app.py`）からは直接呼ばれません。
+`image_processor.py` 内の2つのメソッドから自動で呼び出されます。
+
+| メソッド | 呼び出しタイミング | 動作 |
+|---|---|---|
+| `_copy_to_gdrive(local_path, filename)` | 画像1枚ダウンロード直後 | 1枚ずつリアルタイムアップロード |
+| `upload_images_to_gdrive()` | スクレイピング完了時（`scraper.py` の `run()` 終了後） | セッション内の全画像をまとめてアップロード |
+
+どちらも `GDRIVE_UPLOAD_ENABLED=true` かつ `SITE_ROLE=scraper` の場合のみ実行されます。
+それ以外の場合（reader機・standalone）は何もせず即リターンするため、`gdrive_uploader.py` を意識する必要はありません。
+
+アップロード先のフォルダ構成：
+```
+GDrive: AucFanToolData/リサーチ結果/{セッション名}/images/{ファイル名}
+```
+セッション名はS1/S2/S3いずれも対象です（S2専用ではありません）。
+
 **グループ代表マージ向け高速比較メソッド**：
 
 | メソッド | 説明 |
@@ -938,7 +957,8 @@ Chrome のリモートデバッグポート（9222）に接続し、`amazon.co.j
 | `/api/amazon/data/<group_id>` | GET | 指定group_idの保存済みAmazonデータを返す |
 | `/api/research/amazon/append` | POST | 現在タブ取得→Excel追記（/researchページ用） |
 | `/api/research/amazon/fetch-url-append` | POST | URL指定取得→Excel追記（短縮URL対応） |
-| `/api/research/amazon/open-calculator` | POST | FBA料金シミュレータにASIN自動入力 |
+| `/api/research/amazon/status` | GET | Amazon取得中ステータスのポーリング（`_research_fetch_status` を返す） |
+| `/api/research/amazon/open-calculator` | POST | FBA料金シミュレータにASIN自動入力（Shadow DOM対応） |
 
 ---
 
@@ -1007,7 +1027,25 @@ OUTPUT_BASE_DIR/
 2. **② Amazon URL取得・追記** — URL貼り付け → `fetch-url-append` → 成功後に「💴 FBA料金シミュレータで開く」ボタン表示
 3. **③ 1688** — 現在グレーアウト（準備中）
 
+**Amazon取得中の進捗表示**：
+
+グローバル変数 `_research_fetch_status` が処理の各ステップを管理する。
+
+```python
+# app.py グローバル
+_research_fetch_status = {"running": False, "step": ""}
+
+# fetch-url-append エンドポイント内で更新
+_research_fetch_status = {"running": True, "step": "① URLを解析中..."}
+# → "② ChromeでAmazonページを開いています..."
+# → "③ Excelに書き込み中..."
+# → finally: {"running": False, "step": ""}
+```
+
+フロントエンドは `fetchAmazonUrl()` 実行中に `/api/research/amazon/status` を1秒ごとにポーリングし、現在のステップと経過秒数を表示する。ボタンは処理完了まで無効化されるため2重送信も防止できる。
+
 **FBA料金シミュレータ連携** (`/api/research/amazon/open-calculator`)：
 - 既存の `revcal` タブを再利用（ログインページは再利用しない）
-- 複数の CSS セレクターでASIN入力欄を探してASINを自動入力・送信
+- Seller Central の revcal ページは **KAT UI** フレームワーク製で `<kat-input>` 等のカスタム要素が Shadow DOM 内に `<input>` を持つため、通常の CSS セレクターでは入力欄が見つからない
+- JS で Shadow Root を再帰的に辿る `findInput()` / `findButton()` 関数で対応（入力欄・送信ボタン両方）
 - Selenium が既存のログイン済み Chrome セッションを使うため、手動ログイン後はそのまま使用可能

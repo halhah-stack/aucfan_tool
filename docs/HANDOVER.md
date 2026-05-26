@@ -1,6 +1,6 @@
 # 引き継ぎメモ
 
-> 最終更新：2026-05-26  
+> 最終更新：2026-05-27  
 > 次のClaudeセッションはここから読んで作業を再開すること。
 
 ---
@@ -24,7 +24,8 @@
 | /researchページ（Excelファイル一覧・選択） | `app.py` `_RESEARCH_HTML` | 完成 |
 | /researchページ（Amazon URL追記） | `app.py` `/api/research/amazon/fetch-url-append` | 完成 |
 | /researchページ（Excelダウンロード） | `app.py` `/api/research/excel/download` | 完成 |
-| FBA料金シミュレータ自動入力 | `app.py` `/api/research/amazon/open-calculator` | 完成 |
+| FBA料金シミュレータ自動入力 | `app.py` `/api/research/amazon/open-calculator` | 完成（Shadow DOM対応済） |
+| Amazon取得中の進捗表示 | `app.py` `_research_fetch_status` + `/api/research/amazon/status` | 完成 |
 | メインアプリからリサーチツールを開くボタン | `templates/index.html` | 完成 |
 
 ### ❌ 未実装のもの
@@ -183,6 +184,7 @@ aucfan_tool/
 | `/api/research/excel/download` | GET | Excelダウンロード（`?path=...`） |
 | `/api/research/amazon/append` | POST | 現在タブ取得→Excel追記 |
 | `/api/research/amazon/fetch-url-append` | POST | URL指定取得→Excel追記 |
+| `/api/research/amazon/status` | GET | Amazon取得中ステータスのポーリング用 |
 | `/api/research/amazon/open-calculator` | POST | FBA料金シミュレータにASIN自動入力 |
 
 ---
@@ -208,6 +210,27 @@ URL: `https://sellercentral.amazon.co.jp/revcal?ref=RC2nonlogin`
 - Seleniumが既存のログイン済みChromeセッションを使うため、再ログイン不要
 - 既存の `revcal` タブがあれば再利用、なければ新規タブで開く
 
+**Shadow DOM 対応（2026-05-27）**：
+revcal ページは KAT UI フレームワーク製で `<kat-input>` 等のカスタム要素が Shadow DOM 内に `<input>` を持つ。
+通常の CSS セレクターでは見つからないため、JS で Shadow Root を再帰的に辿って検索する実装にしている。
+入力欄・送信ボタンの両方に同様の対応をしている（`api_open_fba_calculator()` 内）。
+
+---
+
+## Amazon取得中の進捗表示
+
+`app.py` にグローバル変数 `_research_fetch_status` を追加。
+`fetch-url-append` エンドポイントが処理の各ステップで更新し、フロントが1秒ごとにポーリングして表示する。
+
+```
+① URLを解析中...
+② ChromeでAmazonページを開いています...（← 実際にSeleniumが動いている）
+③ Excelに書き込み中...
+  経過 X 秒 ／ Amazonページを閉じないでください
+```
+
+処理中はボタンが無効化されるため2重送信も防止できる。
+
 ---
 
 ## 次回セッションの作業順序
@@ -226,6 +249,29 @@ URL: `https://sellercentral.amazon.co.jp/revcal?ref=RC2nonlogin`
 
 4. Claude Excel アドイン連携（ユーザー要望・詳細未定）
 ```
+
+---
+
+## GDriveアップロード（`gdrive_uploader.py`）
+
+`gdrive_uploader.py` はメインアプリ（Flask / `app.py`）からは**直接呼ばれない**。
+`image_processor.py` の2メソッドから自動呼び出しされる：
+
+| 呼び出し元 | タイミング |
+|---|---|
+| `_copy_to_gdrive()` | 画像1枚ダウンロード直後 |
+| `upload_images_to_gdrive()` | スクレイピング完了時（`scraper.py` の `run()` 終了後） |
+
+条件：`GDRIVE_UPLOAD_ENABLED=true` かつ `SITE_ROLE=scraper` の場合のみ動作。
+アップロード先：`GDrive: AucFanToolData/リサーチ結果/{セッション名}/images/`（S1/S2/S3すべて対象）。
+
+**十王Mac 初回セットアップ（GDriveアップロードを使う場合）：**
+```bash
+cd ~/Downloads/aucfan_tool
+source .venv/bin/activate
+python setup_gdrive_auth.py
+```
+ブラウザでGoogleログイン → 許可 → `token.json` が生成されれば完了。以降は自動更新。
 
 ---
 

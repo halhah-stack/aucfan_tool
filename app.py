@@ -2590,6 +2590,13 @@ def api_amazon_get(group_id: str):
 # /research — Excel 追記ツール
 # ─────────────────────────────────────────────
 
+# Amazon取得中ステータス（フロントエンドがポーリングして進捗表示に使う）
+_research_fetch_status = {
+    "running": False,
+    "step":    "",      # 現在の処理ステップ説明
+    "elapsed": 0,       # 開始からの経過秒（フロント側で計算）
+}
+
 _RESEARCH_HTML = """<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -2844,6 +2851,29 @@ function updateBadge() {
 }
 
 // ── Amazon URL取得 ──────────────────────────────────────────
+let _fetchStartTime = null;
+let _fetchPollTimer = null;
+
+function _startProgressPolling(div) {
+  _fetchStartTime = Date.now();
+  _fetchPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch("/api/research/amazon/status");
+      const s = await r.json();
+      if (!s.running) return;
+      const sec = Math.floor((Date.now() - _fetchStartTime) / 1000);
+      div.innerHTML =
+        `<span class="spinner"></span>` +
+        `<strong>${s.step}</strong><br>` +
+        `<small style="color:#555;">経過 ${sec} 秒 ／ Amazonページを閉じないでください</small>`;
+    } catch(e) {}
+  }, 1000);
+}
+
+function _stopProgressPolling() {
+  if (_fetchPollTimer) { clearInterval(_fetchPollTimer); _fetchPollTimer = null; }
+}
+
 async function fetchAmazonUrl() {
   if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
 
@@ -2855,8 +2885,11 @@ async function fetchAmazonUrl() {
   btn.innerHTML = '<span class="spinner"></span>取得中...';
   btn.disabled  = true;
   div.className = "result info";
-  div.textContent = "短縮URLを解決してページを取得中...";
+  div.innerHTML =
+    `<span class="spinner"></span><strong>① URLを解析中...</strong><br>` +
+    `<small style="color:#555;">しばらくお待ちください（10〜30秒）</small>`;
   div.classList.remove("hidden");
+  _startProgressPolling(div);
 
   try {
     const res  = await fetch("/api/research/amazon/fetch-url-append", {
@@ -2865,6 +2898,7 @@ async function fetchAmazonUrl() {
       body: JSON.stringify({path: loadedPath, url: url})
     });
     const data = await res.json();
+    _stopProgressPolling();
 
     if (data.success) {
       amazonCount++;
@@ -2897,9 +2931,11 @@ async function fetchAmazonUrl() {
       div.textContent = "❌ " + data.error;
     }
   } catch(e) {
+    _stopProgressPolling();
     div.className = "result error";
     div.textContent = "❌ 通信エラー: " + e.message;
   } finally {
+    _stopProgressPolling();
     btn.innerHTML = "🔍 取得 → 追記";
     btn.disabled  = false;
   }
@@ -3061,9 +3097,16 @@ def api_research_amazon_append():
     return jsonify(result), status
 
 
+@app.route("/api/research/amazon/status")
+def api_research_amazon_status():
+    """Amazon取得中ステータスをポーリングで返す"""
+    return jsonify(_research_fetch_status)
+
+
 @app.route("/api/research/amazon/fetch-url-append", methods=["POST"])
 def api_research_amazon_fetch_url_append():
     """URLを指定してAmazonデータを取得し、Excelに追記する。短縮URL対応。"""
+    global _research_fetch_status
     from amazon_scraper import fetch_amazon_from_url
     from excel_append import append_amazon
 
@@ -3076,13 +3119,19 @@ def api_research_amazon_fetch_url_append():
     if not url:
         return jsonify({"success": False, "error": "URLが指定されていません"})
 
-    amazon_data = fetch_amazon_from_url(url)
-    if not amazon_data.get("success"):
-        return jsonify(amazon_data), 400
+    _research_fetch_status = {"running": True, "step": "① URLを解析中..."}
+    try:
+        _research_fetch_status["step"] = "② ChromeでAmazonページを開いています..."
+        amazon_data = fetch_amazon_from_url(url)
+        if not amazon_data.get("success"):
+            return jsonify(amazon_data), 400
 
-    result = append_amazon(excel_path, amazon_data)
-    status = 200 if result.get("success") else 500
-    return jsonify(result), status
+        _research_fetch_status["step"] = "③ Excelに書き込み中..."
+        result = append_amazon(excel_path, amazon_data)
+        status = 200 if result.get("success") else 500
+        return jsonify(result), status
+    finally:
+        _research_fetch_status = {"running": False, "step": ""}
 
 
 @app.route("/api/research/amazon/open-calculator", methods=["POST"])
@@ -3131,18 +3180,24 @@ def api_open_fba_calculator():
         # ページ読み込み待機（最大15秒）
         time.sleep(2)
 
-        # ASIN入力フィールドを探す（複数セレクターを試す）
-        input_selectors = [
+        # ASIN入力フィールドを探す
+        # Seller Central の revcal は KAT UI フレームワーク製で、
+        # <kat-input> などのカスタム要素が Shadow DOM 内に <input> を持つ。
+        # 通常の CSS セレクターは Shadow DOM を貫通できないため、
+        # JS で再帰的に Shadow Root を辿って検索する。
+
+        input_el = None
+
+        # まず通常セレクターで試す（Shadow DOM 外にある場合）
+        normal_selectors = [
             "input[id*='asin']",
             "input[name*='asin']",
+            "input[data-testid*='asin']",
             "input[placeholder*='ASIN']",
             "input[placeholder*='asin']",
             "#asin-search-input",
-            "input[type='text']",
         ]
-
-        input_el = None
-        for sel in input_selectors:
+        for sel in normal_selectors:
             try:
                 els = driver.find_elements(By.CSS_SELECTOR, sel)
                 for el in els:
@@ -3155,14 +3210,46 @@ def api_open_fba_calculator():
                 pass
 
         if not input_el:
-            # JavaScriptでも試す
+            # Shadow DOM を再帰的に検索する JS
+            # nav/header 内の入力欄はスキップ
             try:
                 input_el = driver.execute_script("""
-                    var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
-                    for (var i = 0; i < inputs.length; i++) {
-                        if (inputs[i].offsetParent !== null) return inputs[i];
+                    var NAV_SELECTOR =
+                        '#navbar, #navbar-main, nav, header,' +
+                        '[id*="nav-search"], [id*="topnav"],' +
+                        '[class*="navbar"], [class*="nav-bar"], [class*="nav-search"]';
+
+                    function isInNav(el) {
+                        try { return !!el.closest(NAV_SELECTOR); } catch(e) { return false; }
                     }
-                    return null;
+
+                    function findInput(root) {
+                        // 1. ASIN関連の属性を持つ input を優先検索
+                        var priority = root.querySelectorAll(
+                            'input[id*="asin"], input[name*="asin"],' +
+                            'input[placeholder*="ASIN"], input[data-testid*="asin"]'
+                        );
+                        for (var i = 0; i < priority.length; i++) {
+                            var el = priority[i];
+                            if (el.offsetParent !== null && !isInNav(el)) return el;
+                        }
+                        // 2. 表示中の text input（nav除外）
+                        var inputs = root.querySelectorAll('input[type="text"], input:not([type])');
+                        for (var j = 0; j < inputs.length; j++) {
+                            var el = inputs[j];
+                            if (el.offsetParent !== null && !isInNav(el)) return el;
+                        }
+                        // 3. Shadow DOM 内を再帰検索
+                        var all = root.querySelectorAll('*');
+                        for (var k = 0; k < all.length; k++) {
+                            if (all[k].shadowRoot) {
+                                var found = findInput(all[k].shadowRoot);
+                                if (found) return found;
+                            }
+                        }
+                        return null;
+                    }
+                    return findInput(document);
                 """)
             except Exception:
                 pass
@@ -3181,31 +3268,40 @@ def api_open_fba_calculator():
         input_el.send_keys(asin)
         time.sleep(0.3)
 
-        # 送信ボタンを探してクリック
-        submit_selectors = [
-            "button[type='submit']",
-            "input[type='submit']",
-            "button[id*='search']",
-            "button[id*='submit']",
-            ".kat-button--primary",
-            "button.a-button-primary",
-        ]
+        # 送信ボタンを探してクリック（Shadow DOM 内も検索）
         submitted = False
-        for sel in submit_selectors:
-            try:
-                btns = driver.find_elements(By.CSS_SELECTOR, sel)
-                for btn in btns:
-                    if btn.is_displayed() and btn.is_enabled():
-                        driver.execute_script("arguments[0].click();", btn)
-                        submitted = True
-                        break
-                if submitted:
-                    break
-            except Exception:
-                pass
+        try:
+            submitted = driver.execute_script("""
+                function findButton(root) {
+                    // type=submit または search/submit を含む id/class のボタン
+                    var btns = root.querySelectorAll(
+                        'button[type="submit"], input[type="submit"],' +
+                        'button[id*="search"], button[id*="submit"],' +
+                        '.kat-button--primary, button.a-button-primary,' +
+                        'kat-button[variant="primary"]'
+                    );
+                    for (var i = 0; i < btns.length; i++) {
+                        if (btns[i].offsetParent !== null) {
+                            btns[i].click();
+                            return true;
+                        }
+                    }
+                    // Shadow DOM 内を再帰検索
+                    var all = root.querySelectorAll('*');
+                    for (var k = 0; k < all.length; k++) {
+                        if (all[k].shadowRoot) {
+                            if (findButton(all[k].shadowRoot)) return true;
+                        }
+                    }
+                    return false;
+                }
+                return findButton(document);
+            """)
+        except Exception:
+            pass
 
         if not submitted:
-            # Enterキーで送信
+            # ボタンが見つからない場合は Enter キーで送信
             from selenium.webdriver.common.keys import Keys
             input_el.send_keys(Keys.RETURN)
 
