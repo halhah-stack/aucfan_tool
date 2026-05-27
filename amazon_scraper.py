@@ -476,11 +476,23 @@ def fetch_amazon_from_url(url: str) -> dict:
     new_handle = None
 
     try:
+        # ── localhostタブを起点にする ───────────────────────────────
+        # 複数のAmazonタブが開いている状態でSeleniumが接続すると、
+        # AmazonタブがアクティブなままAmazonを新たに開こうとして
+        # セッション制限等でページが開かないことがある。
+        # 新タブ開設前に必ずlocalhostタブ（research）に切り替える。
         original_handle = driver.current_window_handle
+        for h in driver.window_handles:
+            try:
+                driver.switch_to.window(h)
+                if "localhost" in driver.current_url:
+                    original_handle = h
+                    break
+            except Exception:
+                pass
 
         # 新規タブを開いてURLへ移動
-        # ※ 複数タブが既に開いている場合に window_handles[-1] が新タブを指さないケースがある。
-        #   開く前後のハンドル差分で確実に新タブを特定する。
+        # 開く前後のハンドル差分で確実に新タブを特定する。
         handles_before = set(driver.window_handles)
         try:
             driver.switch_to.new_window('tab')

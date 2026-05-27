@@ -233,7 +233,18 @@ def fetch_1688_from_url(url: str) -> dict:
     try:
         from selenium.webdriver.common.by import By
 
+        # ── localhostタブを起点にする ───────────────────────────────
+        # 複数タブが開いている場合、localhostタブを起点に新タブを開くことで
+        # 余計な親子関係を避ける。
         original_handle = driver.current_window_handle
+        for h in driver.window_handles:
+            try:
+                driver.switch_to.window(h)
+                if "localhost" in driver.current_url:
+                    original_handle = h
+                    break
+            except Exception:
+                pass
 
         # ── 新規タブを開く（差分方式で確実に新タブを特定）──────────
         handles_before = set(driver.window_handles)
