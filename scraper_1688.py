@@ -90,7 +90,9 @@ def _parse_variants_from_body(body_text: str) -> list[dict]:
     """
     ページ本文のバリアントセクションから SKU 一覧を抽出する。
 
-    セクションヘッダーとして 规格 / 尺寸 / 颜色 / 型号 / 款式 / 套餐 等に対応。
+    セクションヘッダーとして 规格 / 尺寸 / 颜色 / 型号 / 款式 等に対応。
+    ※ 套餐（セット販売）は別商品の組み合わせであり、実バリアントではないため
+      エントリポイントから除外し、途中で出現したらパースを終了する。
 
     フォーマット A（価格・在庫が別行）:
       小方镜
@@ -103,14 +105,19 @@ def _parse_variants_from_body(body_text: str) -> list[dict]:
 
     バリアントなし（単品）の場合は空リストを返す。
     """
-    SECTION_HEADERS = {'规格', '尺寸', '颜色', '型号', '款式', '套餐', '规格型号'}
+    # 実バリアントのセクションヘッダー（套餐は除外）
+    ENTRY_HEADERS  = {'规格', '尺寸', '颜色', '型号', '款式', '规格型号', '包装规格'}
+    # これらに出会ったらバリアントセクション終了とみなす
+    STOP_HEADERS   = {'套餐', '数量', '颜色分类'}
+    ALL_HEADERS    = ENTRY_HEADERS | STOP_HEADERS
+
     variants = []
     lines = [l.strip() for l in body_text.split('\n') if l.strip()]
 
-    # バリアントセクション開始を探す
+    # バリアントセクション開始を探す（ENTRY_HEADERS のみ）
     start = -1
     for i, line in enumerate(lines):
-        if line in SECTION_HEADERS:
+        if line in ENTRY_HEADERS:
             start = i + 1
             break
     if start == -1:
@@ -120,6 +127,10 @@ def _parse_variants_from_body(body_text: str) -> list[dict]:
     while i < len(lines):
         name    = lines[i]
         next_ln = lines[i + 1] if i + 1 < len(lines) else ""
+
+        # 別のセクションヘッダーに到達したらパース終了
+        if name in ALL_HEADERS:
+            break
 
         # ゴミデータ除外（短すぎる・記号のみ・価格行自体を名前と誤認しない）
         if (len(name) < 2
