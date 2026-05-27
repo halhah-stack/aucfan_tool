@@ -493,23 +493,27 @@ def fetch_amazon_from_url(url: str) -> dict:
         # 見つからなければ先頭を退避先として使う
         original_handle = app_handle or driver.window_handles[0]
 
-        # ── 既存のAmazonタブをすべて閉じる ──────────────────────────
-        # アプリのAmazonボタンで開いたタブが残っていると新規タブの
-        # ページ読み込みが18秒以上ハングする。事前に閉じて解消する。
+        # ── AucFanが開いたAmazon検索タブを閉じる ────────────────────
+        # AucFanのAmazonボタンで開いた検索・一覧ページ（/dp/ を含まない）が
+        # 残っていると、新規タブでAmazonを開く際にハングする。
+        # /dp/ を含む商品ページ（ユーザーが選択したTab3）はそのまま残す。
         closed_amazon = 0
         for h in list(driver.window_handles):
             if h == app_handle:
                 continue          # アプリタブは絶対に閉じない
             try:
                 driver.switch_to.window(h)
-                if "amazon.co.jp" in driver.current_url:
-                    if len(driver.window_handles) > 1:   # 最後のタブは閉じない
+                url = driver.current_url
+                is_amazon        = "amazon.co.jp" in url
+                is_product_page  = "/dp/" in url or "/gp/product/" in url
+                if is_amazon and not is_product_page:
+                    if len(driver.window_handles) > 1:
                         driver.close()
                         closed_amazon += 1
             except Exception:
                 pass
         if closed_amazon:
-            logger.info(f"既存Amazonタブを {closed_amazon} 個閉じました")
+            logger.info(f"Amazon検索タブを {closed_amazon} 個閉じました")
 
         # アプリタブに戻る
         try:
