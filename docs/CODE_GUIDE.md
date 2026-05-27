@@ -32,6 +32,7 @@ aucfan_tool/
 │                           #   Excelで開いて書式を変更後に上書き保存するだけで次回エクスポートに反映
 ├── リサーチ_テンプレート_Amazon.xlsx  # 【旧設計・使用しない】2シート設計の残骸。削除または無視。
 ├── amazon_scraper.py       # Amazon商品ページデータ取得（Chromeリモートデバッグ接続）
+├── scraper_1688.py         # 1688商品ページデータ取得（同接続方式）
 │                           #   A+コンテンツ検出・group_id紐付け保存に対応
 ├── gdrive_uploader.py      # Google Drive API 直接アップロードモジュール（scraper Macのみ使用）
 ├── setup_gdrive_auth.py    # GDrive初回OAuth認証スクリプト（scraper Macで1回だけ実行）
@@ -962,6 +963,56 @@ Chrome のリモートデバッグポート（9222）に接続し、`amazon.co.j
 
 ---
 
+### `scraper_1688.py` — 1688商品ページデータ取得
+
+`amazon_scraper.py` と同じ Chrome port 9222 接続方式で 1688.com の商品ページをスクレイピングする。
+（旧ファイル名 `1688_scraper.py` は Python がインポートできないため `scraper_1688.py` にリネーム済み）
+
+**主な関数**：
+
+| 関数 | 説明 |
+|---|---|
+| `_connect_chrome()` | ポート9222に接続して driver を返す（amazon_scraper と同じ） |
+| `_parse_price_from_text(text)` | "预估到手单価" を優先取得。なければ ¥数値の最小値を返す |
+| `_parse_moq_from_text(text)` | "20套起批" → `(20, "套")` にパース |
+| `_parse_variants_from_body(body_text)` | body テキストの `规格` セクションから SKU 一覧を抽出（名称/¥価格/库存N の3行1組） |
+| `_parse_shop_info(driver)` | ショップ名・URL・評価（店铺服务分）・回頭率（店铺回头率）を取得 |
+| `fetch_1688_from_url(url)` | メイン関数。新規タブで URL を開いてスクレイピングし、タブを閉じて戻る |
+
+**戻り値** (`fetch_1688_from_url()`)：
+
+```python
+{
+    "success": True,
+    "title": "商品名",
+    "shop_name": "ショップ名",
+    "shop_url": "https://shop.1688.com/...",
+    "shop_rating": "4.0分",
+    "shop_repeat_rate": "47%",
+    "min_price": 17.0,          # 最低単価（元）
+    "moq": 20,                  # 最小発注数
+    "moq_unit": "套",           # 単位
+    "variants": [               # SKU一覧
+        {"name": "小方镜", "price": 13.5, "stock": 199},
+        {"name": "大方镜", "price": 30.0, "stock": 37},
+    ],
+    "image_urls": ["https://cbu01.alicdn.com/..."],
+    "attributes": {"材质": "不锈钢", ...},
+    "url": "https://detail.1688.com/offer/...",
+}
+```
+
+バリアントなし商品は `variants=[{"name":"デフォルト","price":X,"stock":Y}]` として返す。
+
+**APIエンドポイント（app.py）**：
+
+| エンドポイント | メソッド | 説明 |
+|---|---|---|
+| `/api/research/1688/fetch-url-append` | POST | URL指定取得→Excel追記（Sheet4/5 + 画像保存） |
+| `/api/research/1688/status` | GET | 1688取得中ステータスのポーリング（`_research_1688_fetch_status` を返す） |
+
+---
+
 ### `excel_append.py` — Excelへの追記モジュール（/researchページ用）
 
 `app.py` の `/research` エンドポイントから呼び出される追記専用モジュール。
@@ -971,16 +1022,23 @@ Chrome のリモートデバッグポート（9222）に接続し、`amazon.co.j
 | 関数 | 説明 |
 |---|---|
 | `download_image(url, save_dir, name)` | メイン画像1枚をローカル保存 |
-| `download_all_images(image_urls, save_dir, asin)` | 全画像を `save_dir/{asin}/01.jpg...` に保存 |
+| `download_all_images(image_urls, save_dir, key)` | 全画像を `save_dir/{key}/01.jpg...` に保存 |
 | `ensure_product_folders(excel_path)` | Excelと同フォルダに `amazon/` `1688/` を作成 |
 | `get_excel_info(excel_path)` | シート名・Amazon件数・タイトル等を返す |
 | `append_amazon(excel_path, data)` | Sheet2（②Amazonライバル）とSheet3（③Amazonテキスト）に追記 |
+| `append_1688(excel_path, data)` | Sheet4（④1688仕入れ）とSheet5（⑤1688テキスト）に追記 |
 
 **Sheet2 追記ロジック**：4行目以降で最初の空行を探して追記。画像は PIL でリサイズ後に `openpyxl.drawing.image.Image` で列I（9列目）に埋め込み。失敗時はURLをセルに書き込む。
 
 **Sheet3 追記ロジック**：セパレーター行（緑背景・ASIN+タイトル）の後に6行（タイトル・価格・商品の特徴・商品説明・仕様・詳細）を追記。`cur_max + 2` 行目から開始することで複数ライバルが縦に並ぶ。
 
-**画像保存先**：`Excelと同フォルダ/amazon/{ASIN}/01.jpg, 02.jpg...`（`IMAGE_FOLDER_NAME = "amazon"`）
+**Sheet4 追記ロジック（`append_1688`）**：バリアントを1行ずつ追記。
+- A=ショップ名, B=ショップURL（ハイパーリンク）, C=信頼度（空欄・手入力）, D=商品名, E=バリアント名, F=単価(CNY), G=MOQ
+- H=原価（`=F*35`）, I=利益（`=Sheet1!D12-H{r}`）, J=利益率（`=I/Sheet1!D12`）, K=判定（`=IF(AND(I>=450,J>=0.25),"◎","×")`）
+
+**Sheet5 追記ロジック（`append_1688`）**：セパレーター行（黒緑背景）＋8行（商品名/ショップ名/ショップURL/最低単価/MOQ/バリアント一覧/商品属性）を追記。
+
+**画像保存先**：Amazon: `Excelと同フォルダ/amazon/{ASIN}/01.jpg...`、1688: `Excelと同フォルダ/1688/{shop_key}/01.jpg...`
 
 ---
 
@@ -1007,8 +1065,8 @@ OUTPUT_BASE_DIR/
 | Sheet1 | ①概要 | AucFanデータ・手入力2セル（販売価格・FBA手数料）・自動計算 |
 | Sheet2 | ②Amazonライバル | `excel_append.append_amazon()` が追記。列: ASIN/タイトル/価格/評価/レビュー数/A+/URL（実）/入力URL/画像 |
 | Sheet3 | ③Amazonテキスト | 同上。縦並びスペック文 |
-| Sheet4 | ④1688仕入れ | ヘッダーのみ（1688スクレイパー実装待ち） |
-| Sheet5 | ⑤1688テキスト | ヘッダーのみ（同上） |
+| Sheet4 | ④1688仕入れ | `append_1688()` でバリアント1行ずつ追記 |
+| Sheet5 | ⑤1688テキスト | `append_1688()` でセパレーター＋8行追記 |
 
 **計算ロジック（Sheet4予定）**：
 - 原価（円）= 単価（元）× 35（送料・関税・代行手数料込み）
@@ -1025,7 +1083,7 @@ OUTPUT_BASE_DIR/
 **3セクション構成**：
 1. **① Excelファイル選択** — `OUTPUT_BASE_DIR` を再帰スキャン（旧フラット形式・新サブフォルダ形式両対応）。クリックで選択、Amazon件数バッジを表示、ダウンロードボタンあり
 2. **② Amazon URL取得・追記** — URL貼り付け → `fetch-url-append` → 成功後に「💴 FBA料金シミュレータで開く」ボタン表示
-3. **③ 1688** — 現在グレーアウト（準備中）
+3. **③ 1688** — 1688商品URLを貼り付けて「取得→追記」。`scraper_1688.py` → `append_1688()` を経由してSheet4/5に書き込む
 
 **Amazon取得中の進捗表示**：
 

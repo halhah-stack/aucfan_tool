@@ -312,3 +312,193 @@ def append_amazon(excel_path: str, data: dict) -> dict:
     except Exception as e:
         logger.error(f"Excel追記エラー: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
+
+
+# ── 1688追記 ────────────────────────────────────────────────────────────
+def append_1688(excel_path: str, data: dict) -> dict:
+    """
+    Sheet4（④1688仕入れ）と Sheet5（⑤1688テキスト）に
+    1688データを追記して上書き保存する。
+
+    data キー:
+      title, shop_name, shop_url, shop_rating, shop_repeat_rate,
+      min_price, moq, moq_unit, variants[{name, price, stock}],
+      image_urls, attributes, url
+
+    バリアントが複数ある場合は1バリアント1行で追記する。
+    """
+    SHEET_1688_LIST = "④1688仕入れ"
+    SHEET_1688_TEXT = "⑤1688テキスト"
+
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        path = Path(excel_path)
+        if not path.exists():
+            return {"success": False, "error": f"ファイルが見つかりません: {excel_path}"}
+
+        wb = load_workbook(str(path))
+        if SHEET_1688_LIST not in wb.sheetnames:
+            return {"success": False,
+                    "error": f"シート「{SHEET_1688_LIST}」がありません。"}
+
+        thin   = Side(style="thin", color="BFBFBF")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        # ── Sheet4: ④1688仕入れ ─────────────────────────────────────
+        ws4 = wb[SHEET_1688_LIST]
+
+        # 4行目以降の最初の空行を探す
+        next_row = 4
+        for r in range(4, (ws4.max_row or 3) + 2):
+            if ws4.cell(r, 1).value is None:
+                next_row = r
+                break
+
+        variants = data.get("variants") or [
+            {"name": "デフォルト", "price": data.get("min_price", 0), "stock": 0}
+        ]
+        shop_url  = data.get("shop_url", "")
+        shop_name = data.get("shop_name", "")
+        title     = data.get("title", "")
+        rating    = data.get("shop_rating", "")
+
+        # 信頼度テキスト（評価 + 回頭率）
+        trust = "/".join(filter(None, [
+            data.get("shop_rating", ""),
+            data.get("shop_repeat_rate", "")
+        ]))
+
+        written_rows = []
+        for v in variants:
+            price = float(v.get("price") or 0)
+            moq   = int(data.get("moq") or 1)
+
+            # 列: A=ショップ名, B=URL, C=信頼度, D=商品名,
+            #      E=バリアント, F=単価, G=MOQ, H=原価, I=利益, J=利益率, K=判定
+            ws4.cell(next_row, 1).value = shop_name
+            ws4.cell(next_row, 2).value = shop_url
+            ws4.cell(next_row, 3).value = trust
+            ws4.cell(next_row, 4).value = title
+            ws4.cell(next_row, 5).value = v.get("name", "")
+            ws4.cell(next_row, 6).value = price
+            ws4.cell(next_row, 7).value = moq
+
+            # 原価(円) = 単価×35
+            ws4.cell(next_row, 8).value = (
+                f"=F{next_row}*35" if price > 0 else ""
+            )
+            # 利益(円) = Sheet1のB12 - FBA(B13) - 原価
+            ws4.cell(next_row, 9).value = (
+                f"=IFERROR(Sheet1!B12-Sheet1!B13-H{next_row},\"\")"
+                if price > 0 else ""
+            )
+            # 利益率
+            ws4.cell(next_row, 10).value = (
+                f'=IFERROR(TEXT(I{next_row}/Sheet1!B12,"0.0%"),"")'
+                if price > 0 else ""
+            )
+            # 判定
+            ws4.cell(next_row, 11).value = (
+                f'=IFERROR(IF(AND(VALUE(SUBSTITUTE(J{next_row},"%",""))/100>=0.25,'
+                f'I{next_row}>=450),"◎ GO","× 再検討"),"")'
+                if price > 0 else ""
+            )
+
+            # 書式設定
+            for col in range(1, 12):
+                c = ws4.cell(next_row, col)
+                c.font = Font(name="BIZ UDGothic",
+                              color="0563C1" if col == 2 else "000000",
+                              underline="single" if col == 2 else "none")
+                c.border = border
+                c.alignment = Alignment(
+                    vertical="center",
+                    horizontal="left" if col in (1, 2, 3, 4, 5) else "center",
+                    wrap_text=(col in (4, 5))
+                )
+
+            # URLにハイパーリンク
+            if shop_url:
+                ws4.cell(next_row, 2).hyperlink = shop_url
+
+            written_rows.append(next_row)
+            ws4.row_dimensions[next_row].height = 32
+            next_row += 1
+
+        # ── Sheet5: ⑤1688テキスト ──────────────────────────────────
+        if SHEET_1688_TEXT in wb.sheetnames:
+            ws5 = wb[SHEET_1688_TEXT]
+            cur_max = ws5.max_row or 2
+            start5  = cur_max + 2 if cur_max > 2 else 4
+
+            def _write5(r, label, value):
+                height = max(18, min(120, len(str(value)) // 4 + 18))
+                ws5.row_dimensions[r].height = height
+                c_l = ws5.cell(r, 1)
+                c_l.value = label
+                c_l.font  = Font(name="BIZ UDGothic", bold=True)
+                c_l.fill  = PatternFill("solid", fgColor="E2EFDA")
+                c_l.border = border
+                c_v = ws5.cell(r, 2)
+                c_v.value = value
+                c_v.font  = Font(name="BIZ UDGothic")
+                c_v.alignment = Alignment(vertical="top", wrap_text=True)
+                c_v.border = border
+
+            # セパレーター
+            ws5.merge_cells(f"A{start5}:B{start5}")
+            sep = ws5.cell(start5, 1)
+            sep.value = f"── {title[:60]} ──"
+            sep.font  = Font(name="BIZ UDGothic", bold=True, color="FFFFFF")
+            sep.fill  = PatternFill("solid", fgColor="375623")
+            sep.alignment = Alignment(horizontal="left", vertical="center")
+            ws5.row_dimensions[start5].height = 22
+
+            _write5(start5 + 1, "商品名",    title)
+            _write5(start5 + 2, "ショップ名", shop_name)
+            _write5(start5 + 3, "ショップURL", shop_url)
+            _write5(start5 + 4, "最低単価",   f"¥{data.get('min_price', 0)} 元")
+            _write5(start5 + 5, "MOQ",
+                    f"{data.get('moq', 1)}{data.get('moq_unit', '个')} 起批")
+
+            # バリアント一覧
+            variants_text = "\n".join(
+                f"{v['name']}  ¥{v['price']}  在庫{v['stock']}"
+                for v in variants
+            )
+            _write5(start5 + 6, "バリアント", variants_text)
+
+            # 商品属性
+            attrs = data.get("attributes") or {}
+            attrs_text = "\n".join(f"{k}: {v}" for k, v in attrs.items())
+            _write5(start5 + 7, "商品属性",   attrs_text)
+
+        # ── 画像ダウンロード & 保存 ──────────────────────────────────
+        ensure_product_folders(str(path))
+        img_dir = path.parent / "1688"
+        image_urls = data.get("image_urls") or []
+        saved_count = 0
+        if image_urls:
+            shop_key = re.sub(r'[^\w]', '_', shop_name[:20]) if shop_name else "shop"
+            saved = download_all_images(image_urls, img_dir, shop_key)
+            saved_count = len(saved)
+
+        wb.save(str(path))
+
+        return {
+            "success":       True,
+            "rows":          written_rows,
+            "row":           written_rows[0] if written_rows else 0,
+            "title":         title,
+            "shop_name":     shop_name,
+            "min_price":     data.get("min_price", 0),
+            "variant_count": len(variants),
+            "image_count":   saved_count,
+        }
+
+    except Exception as e:
+        logger.error(f"1688 Excel追記エラー: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}

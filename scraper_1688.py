@@ -1,0 +1,364 @@
+"""
+1688_scraper.py — 1688商品ページ スクレイパー
+
+【使い方】
+  from 1688_scraper import fetch_1688_from_url
+  data = fetch_1688_from_url("https://detail.1688.com/offer/XXXXXXXX.html")
+
+【戻り値 dict】
+  success (bool)
+  title (str)             商品名
+  shop_name (str)         ショップ名
+  shop_url (str)          ショップURL（クエリパラメータ除去済み）
+  shop_rating (str)       店舗評価（例: "4.0分"）
+  shop_repeat_rate (str)  回頭率（例: "47%"）
+  min_price (float)       最低価格（元）
+  moq (int)               最小発注数
+  moq_unit (str)          単位（套/个/件等）
+  variants (list)         [{name, price, stock}] — バリアント一覧
+  image_urls (list)       商品画像URLリスト（cbu01.alicdn.com）
+  attributes (dict)       商品属性テーブル
+  url (str)               スクレイピングした実URL
+
+【前提条件】
+  - start.sh で Chrome をポート 9222 デバッグモードで起動済み
+  - amazon_scraper.py と同じ Selenium 接続方式
+"""
+from __future__ import annotations
+
+import logging
+import re
+import time
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+# ── Chrome接続 ──────────────────────────────────────────────────────────
+def _connect_chrome():
+    """既存Chromeのデバッグポートに接続。"""
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        import config
+        opts = Options()
+        opts.debugger_address = f"{config.CHROME_DEBUG_HOST}:{config.CHROME_DEBUG_PORT}"
+        driver = webdriver.Chrome(options=opts)
+        return driver
+    except Exception as e:
+        logger.warning(f"Chrome接続失敗: {e}")
+        return None
+
+
+# ── テキストパーサー ────────────────────────────────────────────────────
+def _parse_price_from_text(text: str) -> Optional[float]:
+    """
+    価格コンテナのテキストから主価格（元）を抽出する。
+
+    例:
+      "新人价 ¥ 16 .50 20件预估到手单价 ¥ 17 .00 20套起批"  → 17.0
+      "新人价 ¥ 12 .50 首件预估到手价 ¥ 13 .50 1个起批"      → 13.5
+    """
+    # 「预估到手单价」または「预估到手价」の後の価格を優先取得
+    # 改行や空白で分割されていることがあるため柔軟にパース
+    m = re.search(r'预估到手[单]?价\s*¥\s*(\d+)\s*[.\s]\s*(\d{1,2})\b', text)
+    if m:
+        return float(f"{m.group(1)}.{m.group(2)}")
+
+    # フォールバック: テキスト中の ¥数字 を全て取得して最小値を返す
+    prices = re.findall(r'¥\s*(\d+(?:\.\d+)?)', text)
+    if prices:
+        vals = [float(p) for p in prices if float(p) > 0]
+        return min(vals) if vals else None
+    return None
+
+
+def _parse_moq_from_text(text: str) -> tuple[int, str]:
+    """
+    テキストから MOQ（起批数）と単位を抽出する。
+    例: "20套起批" → (20, "套")
+        "1个起批"  → (1, "个")
+    デフォルト: (1, "个")
+    """
+    m = re.search(r'(\d+)\s*([套件个片组只盒条双])\s*起批', text)
+    if m:
+        return int(m.group(1)), m.group(2)
+    return 1, "个"
+
+
+def _parse_variants_from_body(body_text: str) -> list[dict]:
+    """
+    ページ本文の「规格」セクションから SKU バリアント一覧を抽出する。
+
+    期待するフォーマット（1バリアントにつき3行）:
+      规格
+      小方镜
+      ¥13.5
+      库存199个
+      大方镜【新款】2个螺丝固定
+      ¥30
+      库存37个
+
+    バリアントなし（単品）の場合は空リストを返す。
+    """
+    variants = []
+    lines = [l.strip() for l in body_text.split('\n') if l.strip()]
+
+    # 「规格」セクション開始を探す
+    start = -1
+    for i, line in enumerate(lines):
+        if line == '规格':
+            start = i + 1
+            break
+    if start == -1:
+        return []
+
+    i = start
+    while i < len(lines) - 1:
+        name      = lines[i]
+        price_ln  = lines[i + 1] if i + 1 < len(lines) else ""
+        stock_ln  = lines[i + 2] if i + 2 < len(lines) else ""
+
+        # 価格行チェック（¥XX 形式）
+        price_m = re.match(r'¥\s*(\d+(?:\.\d+)?)', price_ln)
+        if not price_m:
+            i += 1
+            continue
+
+        stock_m = re.search(r'库存(\d+)', stock_ln)
+        stock = int(stock_m.group(1)) if stock_m else 0
+
+        # ゴミデータ除外（短すぎる・記号のみ）
+        if len(name) < 2 or not re.search(r'[\w一-鿿]', name):
+            i += 3
+            continue
+
+        variants.append({
+            "name":  name,
+            "price": float(price_m.group(1)),
+            "stock": stock,
+        })
+        i += 3
+
+    return variants
+
+
+def _parse_shop_info(driver) -> dict:
+    """ショップ名・URL・評価情報を取得する。"""
+    from selenium.webdriver.common.by import By
+
+    info = {"name": "", "url": "", "rating": "", "repeat_rate": ""}
+
+    try:
+        # ショップURL: href に .1688.com かつ "shop" を含むリンク
+        els = driver.find_elements(By.CSS_SELECTOR, "a[href*='1688.com']")
+        for el in els:
+            href = el.get_attribute("href") or ""
+            text = el.text.strip().split('\n')[0]
+            if "shop" in href and text and len(text) > 4:
+                # クエリパラメータを除去
+                clean_url = re.sub(r'\?.*$', '', href)
+                info["url"]  = clean_url
+                info["name"] = text
+                break
+
+        # body テキストから評価情報を取得
+        body = driver.find_element(By.TAG_NAME, "body").text
+
+        m = re.search(r'店铺回头率\s*(\d+%)', body)
+        if m:
+            info["repeat_rate"] = m.group(1)
+
+        m = re.search(r'店铺服务分\s*([\d.]+分)', body)
+        if m:
+            info["rating"] = m.group(1)
+
+    except Exception as e:
+        logger.warning(f"ショップ情報取得エラー: {e}")
+
+    return info
+
+
+# ── メイン取得関数 ──────────────────────────────────────────────────────
+def fetch_1688_from_url(url: str) -> dict:
+    """
+    1688 商品ページ URL を指定してデータを取得する。
+    既存の Chrome（port 9222）に接続し、新規タブでページを開いてスクレイピングする。
+    """
+    driver = _connect_chrome()
+    if not driver:
+        return {"success": False, "error": "Chromeに接続できません（port 9222）"}
+
+    original_handle = None
+    new_handle      = None
+
+    try:
+        from selenium.webdriver.common.by import By
+
+        original_handle = driver.current_window_handle
+
+        # ── 新規タブを開く ──────────────────────────────────────────
+        try:
+            driver.switch_to.new_window('tab')
+        except Exception:
+            driver.execute_script("window.open('');")
+        new_handle = driver.window_handles[-1]
+        driver.switch_to.window(new_handle)
+        driver.get(url)
+
+        # ── ページ読み込み待機（最大15秒）──────────────────────────
+        for _ in range(30):
+            time.sleep(0.5)
+            try:
+                title_el = driver.find_elements(By.CSS_SELECTOR, ".offer-title")
+                if title_el and title_el[0].text.strip():
+                    break
+            except Exception:
+                pass
+
+        # ── 商品タイトル ────────────────────────────────────────────
+        title = ""
+        for sel in [".offer-title", "[class*='offer-title']", "[class*='title-text']"]:
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    t = el.text.strip()
+                    # 中国語文字を含む場合だけ採用
+                    if t and any('一' <= c <= '鿿' for c in t):
+                        title = t
+                        break
+            except Exception:
+                pass
+            if title:
+                break
+
+        # ── ショップ情報 ─────────────────────────────────────────────
+        shop = _parse_shop_info(driver)
+
+        # ── 価格 & MOQ ──────────────────────────────────────────────
+        min_price: Optional[float] = None
+        moq      = 1
+        moq_unit = "个"
+        try:
+            price_els = driver.find_elements(
+                By.CSS_SELECTOR, "[class*='od-price-container']"
+            )
+            if price_els:
+                price_text = price_els[0].text
+                min_price  = _parse_price_from_text(price_text)
+                moq, moq_unit = _parse_moq_from_text(price_text)
+        except Exception as e:
+            logger.warning(f"価格取得エラー: {e}")
+
+        # ── ページ本文テキスト ────────────────────────────────────────
+        body_text = driver.find_element(By.TAG_NAME, "body").text
+
+        # MOQ が取れなかった場合はボディ全体から再検索
+        if moq == 1 and moq_unit == "个":
+            moq, moq_unit = _parse_moq_from_text(body_text)
+
+        # ── SKU バリアント ───────────────────────────────────────────
+        variants = _parse_variants_from_body(body_text)
+
+        if not variants:
+            # バリアントなし → 単一バリアントとして返す
+            stock = 0
+            m_stock = re.search(r'库存(\d+)[套个件片组]', body_text)
+            if m_stock:
+                stock = int(m_stock.group(1))
+            variants = [{
+                "name":  "デフォルト",
+                "price": min_price or 0.0,
+                "stock": stock,
+            }]
+        else:
+            # バリアントがある場合、最低価格を再計算
+            prices = [v["price"] for v in variants if v["price"] > 0]
+            if prices:
+                min_price = min(prices)
+
+        # ── 商品属性 ─────────────────────────────────────────────────
+        attributes: dict[str, str] = {}
+        try:
+            attr_els = driver.find_elements(
+                By.CSS_SELECTOR, "[class*='module-od-product-attributes']"
+            )
+            if attr_els:
+                attr_text = attr_els[0].text
+                attr_lines = [l.strip() for l in attr_text.split('\n') if l.strip()]
+                # ヘッダー行「商品属性」をスキップ
+                if attr_lines and attr_lines[0] == '商品属性':
+                    attr_lines = attr_lines[1:]
+                for idx in range(0, len(attr_lines) - 1, 2):
+                    key = attr_lines[idx]
+                    val = attr_lines[idx + 1]
+                    if key and val and key != val:
+                        attributes[key] = val
+        except Exception as e:
+            logger.warning(f"属性取得エラー: {e}")
+
+        # ── 画像URL ──────────────────────────────────────────────────
+        image_urls: list[str] = []
+        seen: set[str] = set()
+        for sel in ["img[src*='cbu01']", "img[src*='ibank']"]:
+            try:
+                imgs = driver.find_elements(By.CSS_SELECTOR, sel)
+                for img in imgs:
+                    src = (img.get_attribute("src")
+                           or img.get_attribute("data-src") or "")
+                    if (src and src not in seen
+                            and not src.endswith('.svg')
+                            and ('cbu01' in src or 'ibank' in src)):
+                        seen.add(src)
+                        image_urls.append(src)
+            except Exception:
+                pass
+
+        actual_url = driver.current_url
+
+        logger.info(
+            f"1688スクレイピング完了: {title[:40]} "
+            f"/ {len(variants)}バリアント / 画像{len(image_urls)}枚"
+        )
+
+        return {
+            "success":          True,
+            "title":            title,
+            "shop_name":        shop["name"],
+            "shop_url":         shop["url"],
+            "shop_rating":      shop["rating"],
+            "shop_repeat_rate": shop["repeat_rate"],
+            "min_price":        min_price or 0.0,
+            "moq":              moq,
+            "moq_unit":         moq_unit,
+            "variants":         variants,
+            "image_urls":       image_urls,
+            "attributes":       attributes,
+            "url":              actual_url,
+        }
+
+    except Exception as e:
+        logger.error(f"1688スクレイピングエラー: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+    finally:
+        # タブを閉じて localhost タブに戻る（amazon_scraper.py と同じ方式）
+        try:
+            if new_handle and new_handle in driver.window_handles:
+                driver.switch_to.window(new_handle)
+                if len(driver.window_handles) > 1:
+                    driver.close()
+                else:
+                    driver.get("http://localhost:5001/research")
+        except Exception:
+            pass
+        try:
+            for h in driver.window_handles:
+                try:
+                    driver.switch_to.window(h)
+                    if "localhost" in driver.current_url:
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass

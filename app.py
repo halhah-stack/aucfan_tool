@@ -2599,6 +2599,14 @@ _research_fetch_status = {
 # 2重実行防止ロック（同時リクエストが来ても1件しか処理しない）
 _research_fetch_lock = threading.Lock()
 
+# 1688取得中ステータス（フロントエンドがポーリングして進捗表示に使う）
+_research_1688_fetch_status = {
+    "running": False,
+    "step":    "",
+}
+# 1688 2重実行防止ロック
+_research_1688_fetch_lock = threading.Lock()
+
 _RESEARCH_HTML = """<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -2748,13 +2756,29 @@ _RESEARCH_HTML = """<!DOCTYPE html>
     <div id="amazonResult" class="hidden result"></div>
   </div>
 
-  <!-- ③ 1688（準備中） -->
-  <div class="card dim">
-    <div class="card-title">③ 1688 仕入れデータ取得
-      <span style="font-size:10px; color:#999; font-weight:normal;">（準備中）</span>
+  <!-- ③ 1688仕入れデータ取得 -->
+  <div class="card">
+    <div class="card-title">
+      ③ 1688 仕入れデータ取得
+      <span id="1688Badge" class="badge hidden">0件</span>
     </div>
-    <p class="hint" style="margin-bottom:10px;">Chrome で 1688 商品ページを開いた状態で「取得」を押してください。</p>
-    <button class="btn btn-gray" disabled>🔍 1688データ取得 → Sheet4/5 に追記</button>
+
+    <!-- URL入力エリア -->
+    <div style="display:flex; gap:8px; align-items:flex-start; margin-bottom:10px;">
+      <div style="flex:1;">
+        <input id="url1688" class="folder-input" type="text"
+               placeholder="1688 商品URL を貼り付け　例: https://detail.1688.com/offer/XXXXXXXXXX.html"
+               style="width:100%; padding:9px 11px; font-size:13px;">
+        <p class="hint" style="margin-top:5px;">
+          1688の商品ページURLを貼り付けて「取得→追記」を押してください。Sheet4/5 に追記されます。
+        </p>
+      </div>
+      <button id="btn1688Url" class="btn btn-orange" onclick="fetch1688Url()" style="margin-top:1px;">
+        🔍 取得 → 追記
+      </button>
+    </div>
+
+    <div id="result1688" class="hidden result"></div>
   </div>
 
 </div>
@@ -2967,10 +2991,92 @@ async function openCalculator(asin) {
   }
 }
 
+// ── 1688 URL取得 ──────────────────────────────────────────────
+let _1688FetchStartTime = null;
+let _1688FetchPollTimer = null;
+let fetch1688Count = 0;
+
+function _start1688ProgressPolling(div) {
+  _1688FetchStartTime = Date.now();
+  _1688FetchPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch("/api/research/1688/status");
+      const s = await r.json();
+      if (!s.running) return;
+      const sec = Math.floor((Date.now() - _1688FetchStartTime) / 1000);
+      div.innerHTML =
+        `<span class="spinner"></span>` +
+        `<strong>${s.step}</strong><br>` +
+        `<small style="color:#555;">経過 ${sec} 秒 ／ 1688ページを閉じないでください</small>`;
+    } catch(e) {}
+  }, 1000);
+}
+
+function _stop1688ProgressPolling() {
+  if (_1688FetchPollTimer) { clearInterval(_1688FetchPollTimer); _1688FetchPollTimer = null; }
+}
+
+async function fetch1688Url() {
+  if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
+
+  const url = document.getElementById("url1688").value.trim();
+  if (!url) { alert("1688 の URL を入力してください"); return; }
+
+  const btn = document.getElementById("btn1688Url");
+  const div = document.getElementById("result1688");
+  btn.innerHTML = '<span class="spinner"></span>取得中...';
+  btn.disabled  = true;
+  div.className = "result info";
+  div.innerHTML =
+    `<span class="spinner"></span><strong>① URLを解析中...</strong><br>` +
+    `<small style="color:#555;">しばらくお待ちください（10〜30秒）</small>`;
+  div.classList.remove("hidden");
+  _start1688ProgressPolling(div);
+
+  try {
+    const res  = await fetch("/api/research/1688/fetch-url-append", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: loadedPath, url: url})
+    });
+    const data = await res.json();
+    _stop1688ProgressPolling();
+
+    if (data.success) {
+      fetch1688Count++;
+      document.getElementById("url1688").value = "";
+      const badge = document.getElementById("1688Badge");
+      badge.textContent = fetch1688Count + "件";
+      badge.classList.remove("hidden");
+      div.className = "result success";
+      const imgInfo = data.image_count > 0
+        ? `🖼 画像 ${data.image_count}枚保存 (1688/)` : "";
+      div.innerHTML =
+        `✅ Sheet4 の ${data.row} 行目から追記（${data.variant_count}バリアント）${imgInfo}<br>` +
+        `<strong>ショップ:</strong> ${data.shop_name || "不明"} &nbsp;` +
+        `<strong>最低単価:</strong> ${data.min_price} 元<br>` +
+        `<span style="color:#555;">${data.title}</span>`;
+    } else {
+      div.className = "result error";
+      div.textContent = "❌ " + data.error;
+    }
+  } catch(e) {
+    _stop1688ProgressPolling();
+    div.className = "result error";
+    div.textContent = "❌ 通信エラー: " + e.message;
+  } finally {
+    _stop1688ProgressPolling();
+    btn.innerHTML = "🔍 取得 → 追記";
+    btn.disabled  = false;
+  }
+}
+
 // Enterキーで送信
 document.addEventListener("DOMContentLoaded", () => {
   const inp = document.getElementById("amazonUrl");
   if (inp) inp.addEventListener("keydown", e => { if (e.key === "Enter") fetchAmazonUrl(); });
+  const inp2 = document.getElementById("url1688");
+  if (inp2) inp2.addEventListener("keydown", e => { if (e.key === "Enter") fetch1688Url(); });
 });
 
 // 起動時にファイル一覧を読み込む
@@ -3321,6 +3427,51 @@ def api_open_fba_calculator():
     except Exception as e:
         logger.error(f"FBA料金シミュレータ起動エラー: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/research/1688/status")
+def api_research_1688_status():
+    """1688取得中ステータスをポーリングで返す"""
+    return jsonify(_research_1688_fetch_status)
+
+
+@app.route("/api/research/1688/fetch-url-append", methods=["POST"])
+def api_research_1688_fetch_url_append():
+    """URLを指定して1688データを取得し、Excelに追記する。"""
+    global _research_1688_fetch_status
+    from excel_append import append_1688
+
+    body = request.get_json(silent=True) or {}
+    excel_path = body.get("path", "").strip()
+    url        = body.get("url", "").strip()
+
+    if not excel_path:
+        return jsonify({"success": False, "error": "Excelパスが指定されていません"})
+    if not url:
+        return jsonify({"success": False, "error": "URLが指定されていません"})
+
+    # 2重実行防止：前の取得がまだ実行中なら即座に拒否
+    if not _research_1688_fetch_lock.acquire(blocking=False):
+        return jsonify({
+            "success": False,
+            "error": "取得処理が実行中です。完了をお待ちください。"
+        }), 429
+
+    _research_1688_fetch_status = {"running": True, "step": "① URLを解析中..."}
+    try:
+        from scraper_1688 import fetch_1688_from_url
+        _research_1688_fetch_status["step"] = "② Chromeで1688ページを開いています..."
+        data_1688 = fetch_1688_from_url(url)
+        if not data_1688.get("success"):
+            return jsonify(data_1688), 400
+
+        _research_1688_fetch_status["step"] = "③ Excelに書き込み中..."
+        result = append_1688(excel_path, data_1688)
+        status = 200 if result.get("success") else 500
+        return jsonify(result), status
+    finally:
+        _research_1688_fetch_status = {"running": False, "step": ""}
+        _research_1688_fetch_lock.release()
 
 
 # ─────────────────────────────────────────────
