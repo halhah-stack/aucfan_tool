@@ -359,13 +359,12 @@ def append_1688(excel_path: str, data: dict) -> dict:
         _ws4_check = wb[SHEET_1688_LIST]
         _header_row = [_ws4_check.cell(2, c).value for c in range(1, 20)]
         _col_count = sum(1 for v in _header_row if v is not None)
-        if _col_count < 16:
+        if _col_count < 18:
             return {
                 "success": False,
                 "error": (
                     f"このExcelファイルは旧フォーマット（{_col_count}列）です。\n"
-                    "aucfanアプリの「Excelを作成」ボタンで新しいファイルを作成し、"
-                    "そちらをご利用ください（MOQ・仕入総額・係数列が追加されます）。"
+                    "aucfanアプリの「Excelを作成」ボタンで新しいファイルを作成してください。"
                 )
             }
 
@@ -426,32 +425,34 @@ def append_1688(excel_path: str, data: dict) -> dict:
             ws4.cell(next_row, 10).value = stock if stock > 0 else ""
             # K=単価(CNY)
             ws4.cell(next_row, 11).value = price
-            # L=MOQ
-            ws4.cell(next_row, 12).value = moq
+            # L=係数(CNY→JPY) ← 常に書き込み・編集可
+            ws4.cell(next_row, 12).value = rate
+            # M=MOQ ← 常に書き込み（デフォルト1）
+            ws4.cell(next_row, 13).value = moq
 
             if price > 0:
                 r = next_row
-                # M=仕入総額(CNY) = 単価×MOQ
-                ws4.cell(r, 13).value = f"=K{r}*L{r}"
-                # N=仕入総額(JPY) = 単価×MOQ×rate
-                ws4.cell(r, 14).value = f"=K{r}*L{r}*{rate}"
-                # O=原価/個(JPY) = 単価×rate
-                ws4.cell(r, 15).value = f"=K{r}*{rate}"
-                # P=利益(JPY) = 販売価格 - FBA手数料 - 原価/個
-                ws4.cell(r, 16).value = (
-                    f'=IFERROR(Sheet1!B12-Sheet1!B13-O{r},"")'
-                )
-                # Q=利益率
+                # N=仕入総額(CNY) = 単価×MOQ
+                ws4.cell(r, 14).value = f"=K{r}*M{r}"
+                # O=仕入総額(JPY) = 単価×MOQ×係数
+                ws4.cell(r, 15).value = f"=K{r}*M{r}*L{r}"
+                # P=原価/個(JPY) = 単価×係数
+                ws4.cell(r, 16).value = f"=K{r}*L{r}"
+                # Q=利益(JPY) = 販売価格 - FBA手数料 - 原価/個
                 ws4.cell(r, 17).value = (
-                    f'=IFERROR(TEXT(P{r}/Sheet1!B12,"0.0%"),"")'
+                    f'=IFERROR(Sheet1!B12-Sheet1!B13-P{r},"")'
                 )
-                # R=判定
+                # R=利益率
                 ws4.cell(r, 18).value = (
-                    f'=IFERROR(IF(AND(VALUE(SUBSTITUTE(Q{r},"%",""))/100>=0.25,'
-                    f'P{r}>=450),"◎ GO","× 再検討"),"")'
+                    f'=IFERROR(TEXT(Q{r}/Sheet1!B12,"0.0%"),"")'
+                )
+                # S=判定
+                ws4.cell(r, 19).value = (
+                    f'=IFERROR(IF(AND(VALUE(SUBSTITUTE(R{r},"%",""))/100>=0.25,'
+                    f'Q{r}>=450),"◎ GO","× 再検討"),"")'
                 )
             else:
-                for col in range(13, 19):
+                for col in range(14, 20):
                     ws4.cell(next_row, col).value = ""
 
             # ── 書式設定 ──
@@ -464,7 +465,7 @@ def append_1688(excel_path: str, data: dict) -> dict:
             # 入力促進（薄い黄色背景）: A,G,I
             INPUT_COLS = {1, 7, 9}
 
-            for col in range(1, 19):
+            for col in range(1, 20):
                 c = ws4.cell(next_row, col)
                 is_url = (col == URL_COL)
                 c.font = Font(

@@ -310,7 +310,9 @@ def fetch_1688_from_url(url: str) -> dict:
 
         # ── アプリタブ（リサーチツール）を特定する ───────────────────
         def _is_app_tab(url: str) -> bool:
-            return any(x in url for x in ("localhost", "127.0.0.1", ":5001"))
+            return "/research" in url and any(
+                x in url for x in ("localhost", "127.0.0.1", ":5001")
+            )
 
         app_handle = None
         for h in driver.window_handles:

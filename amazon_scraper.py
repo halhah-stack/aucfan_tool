@@ -479,7 +479,10 @@ def fetch_amazon_from_url(url: str) -> dict:
         # ── アプリタブ（リサーチツール）を特定する ───────────────────
         # localhost / 127.0.0.1 / :5001 のいずれかにマッチするタブを探す
         def _is_app_tab(url: str) -> bool:
-            return any(x in url for x in ("localhost", "127.0.0.1", ":5001"))
+            # /research を優先（同一ウィンドウ運用でも確実に追記ツールに戻れる）
+            return "/research" in url and any(
+                x in url for x in ("localhost", "127.0.0.1", ":5001")
+            )
 
         app_handle = None
         for h in driver.window_handles:
