@@ -353,16 +353,31 @@ def append_1688(excel_path: str, data: dict) -> dict:
             return {"success": False,
                     "error": f"シート「{SHEET_1688_LIST}」がありません。"}
 
+        # ── 列数チェック: 旧形式（18列未満）は拒否してユーザーに知らせる ──
+        _ws4_check = wb[SHEET_1688_LIST]
+        _header_row = [_ws4_check.cell(3, c).value for c in range(1, 20)]
+        _col_count = sum(1 for v in _header_row if v is not None)
+        if _col_count < 16:
+            return {
+                "success": False,
+                "error": (
+                    f"このExcelファイルは旧フォーマット（{_col_count}列）です。\n"
+                    "aucfanアプリの「Excelを作成」ボタンで新しいファイルを作成し、"
+                    "そちらをご利用ください（MOQ・仕入総額・係数列が追加されます）。"
+                )
+            }
+
         thin   = Side(style="thin", color="BFBFBF")
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
         # ── Sheet4: ④1688仕入れ ─────────────────────────────────────
         ws4 = wb[SHEET_1688_LIST]
 
-        # 4行目以降の最初の空行を探す（A列で判定）
+        # 4行目以降の最初の空行を探す
+        # ショップ名(B)ではなく単価(K列=11)で判定（ショップ名が取れない場合でも正しく動く）
         next_row = 4
         for r in range(4, (ws4.max_row or 3) + 2):
-            if ws4.cell(r, 2).value is None:   # B列(ショップ名)で判定
+            if ws4.cell(r, 11).value is None:   # K列(単価CNY)で判定
                 next_row = r
                 break
 
@@ -373,6 +388,7 @@ def append_1688(excel_path: str, data: dict) -> dict:
         shop_name  = data.get("shop_name", "")
         shop_years = data.get("shop_years", "")
         title      = data.get("title", "")
+        title_ja   = data.get("title_ja", "")
 
         # 信頼度テキスト（評価/回頭率）
         trust = "/".join(filter(None, [
@@ -398,12 +414,12 @@ def append_1688(excel_path: str, data: dict) -> dict:
             ws4.cell(next_row,  5).value = shop_years
             # F=商品名（中）
             ws4.cell(next_row,  6).value = title
-            # G=商品名（日）手入力空欄
-            ws4.cell(next_row,  7).value = ""
+            # G=商品名（日）翻訳済み（編集可）
+            ws4.cell(next_row,  7).value = title_ja
             # H=バリアント（中）
             ws4.cell(next_row,  8).value = v.get("name", "")
-            # I=バリアント（日）手入力空欄
-            ws4.cell(next_row,  9).value = ""
+            # I=バリアント（日）翻訳済み（編集可）
+            ws4.cell(next_row,  9).value = v.get("name_ja", "")
             # J=在庫数
             ws4.cell(next_row, 10).value = stock if stock > 0 else ""
             # K=単価(CNY)

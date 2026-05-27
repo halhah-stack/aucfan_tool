@@ -34,6 +34,27 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+# ── 翻訳ヘルパー ────────────────────────────────────────────────────────
+def _translate_zh_to_ja(text: str) -> str:
+    """
+    中国語テキストを日本語に翻訳する。
+    deep_translator (GoogleTranslator) を使用。
+    未インストール・通信失敗時は空文字を返す。
+    """
+    if not text or text == "デフォルト":
+        return ""
+    try:
+        from deep_translator import GoogleTranslator
+        result = GoogleTranslator(source="zh-CN", target="ja").translate(text)
+        return result or ""
+    except ImportError:
+        logger.debug("deep_translator 未インストール。pip install deep-translator で追加可能。")
+        return ""
+    except Exception as e:
+        logger.warning(f"翻訳失敗 ({text[:30]}): {e}")
+        return ""
+
+
 # ── Chrome接続 ──────────────────────────────────────────────────────────
 def _connect_chrome():
     """既存Chromeのデバッグポートに接続。"""
@@ -169,25 +190,25 @@ def _parse_variants_from_body(body_text: str) -> list[dict]:
 
 
 def _parse_shop_info(driver) -> dict:
-    """ショップ名・URL・評価情報を取得する。"""
+    """
+    ショップ名・URL・評価情報を取得する。
+    複数の検出戦略を順番に試し、最初に見つかった結果を返す。
+    """
     from selenium.webdriver.common.by import By
 
     info = {"name": "", "url": "", "rating": "", "repeat_rate": "", "years": ""}
 
     try:
-        # ショップURL: 1688ショップリンクを複数パターンで探す
-        # パターン1: shop*.1688.com（最も一般的）
-        # パターン2: member.1688.com/...（古い形式）
-        shop_els = (
-            driver.find_elements(By.CSS_SELECTOR, "a[href*='.1688.com']")
-        )
+        # body テキストを先に取得（評価情報・年数はここから）
+        body = driver.find_element(By.TAG_NAME, "body").text
+
+        # ── ① CSSセレクタでショップリンクを探す ─────────────────────
+        # 1688ショップURLパターン:
+        #   shop*.1688.com / member.1688.com/shop / supplier.1688.com
+        shop_els = driver.find_elements(By.CSS_SELECTOR, "a[href*='.1688.com']")
         for el in shop_els:
             href = el.get_attribute("href") or ""
-            text = el.text.strip().split('\n')[0]
-            # ショップリンクの条件:
-            #   - shop/member/supplier を含む
-            #   - detail/offer/search 等の商品URLは除外
-            #   - テキストが4文字以上の中国語名
+            text = (el.text or "").strip().split('\n')[0].strip()
             is_shop_url = bool(re.search(
                 r'(shop[^/]*\.1688\.com|member\.1688\.com/shop|supplier\.1688\.com)',
                 href
@@ -196,15 +217,58 @@ def _parse_shop_info(driver) -> dict:
                 r'(detail\.|/offer/|/search|/page/offerlist)',
                 href
             ))
-            if is_shop_url and not is_product_url and text and len(text) > 3:
-                clean_url = re.sub(r'\?.*$', '', href)
-                info["url"]  = clean_url
+            if is_shop_url and not is_product_url and text and len(text) >= 2:
+                info["url"]  = re.sub(r'\?.*$', '', href)
                 info["name"] = text
                 break
 
-        # body テキストから評価情報を取得（ショップ名も body から補完）
-        body = driver.find_element(By.TAG_NAME, "body").text
+        # ── ② クラス名ベースのフォールバック ────────────────────────
+        if not info["name"]:
+            for sel in [
+                "[class*='company-name']",
+                "[class*='companyName']",
+                "[class*='shop-name']",
+                "[class*='seller-name']",
+                "[class*='supplierName']",
+                "[class*='sellerName']",
+            ]:
+                try:
+                    els = driver.find_elements(By.CSS_SELECTOR, sel)
+                    for el in els:
+                        text = (el.text or "").strip().split('\n')[0].strip()
+                        if text and len(text) >= 2 and any('一' <= c <= '鿿' for c in text):
+                            info["name"] = text
+                            # 親要素からhrefを探す
+                            try:
+                                parent = el.find_element(By.XPATH, "..")
+                                href = parent.get_attribute("href") or ""
+                                if ".1688.com" in href:
+                                    info["url"] = re.sub(r'\?.*$', '', href)
+                            except Exception:
+                                pass
+                            break
+                    if info["name"]:
+                        break
+                except Exception:
+                    pass
 
+        # ── ③ ボディテキストからショップ名を補完 ────────────────────
+        # ショップ名が取れなかった場合、「入驻X年」の直前行を試みる
+        if not info["name"]:
+            lines = [l.strip() for l in body.split('\n') if l.strip()]
+            for idx, line in enumerate(lines):
+                if re.search(r'入驻\d+年|入驻\d+个月', line):
+                    # 直前の行がショップ名候補（中国語2文字以上）
+                    for back in range(1, 4):
+                        candidate = lines[idx - back] if idx - back >= 0 else ""
+                        if (candidate and len(candidate) >= 2
+                                and any('一' <= c <= '鿿' for c in candidate)
+                                and not re.search(r'[¥$€\d.]+', candidate)):
+                            info["name"] = candidate
+                            break
+                    break
+
+        # ── 評価情報（ボディテキストから） ──────────────────────────
         m = re.search(r'店铺回头率\s*(\d+%)', body)
         if m:
             info["repeat_rate"] = m.group(1)
@@ -213,7 +277,7 @@ def _parse_shop_info(driver) -> dict:
         if m:
             info["rating"] = m.group(1)
 
-        # 入驻年数: "入驻X年" または "入驻X个月"
+        # 入驻年数
         m = re.search(r'入驻(\d+)年', body)
         if m:
             info["years"] = f"{m.group(1)}年"
@@ -328,19 +392,26 @@ def fetch_1688_from_url(url: str) -> dict:
         if not variants:
             # バリアントなし → 単一バリアントとして返す
             stock = 0
-            m_stock = re.search(r'库存(\d+)[套个件片组]', body_text)
+            m_stock = re.search(r'库存(\d+)[套个件片组只]', body_text)
             if m_stock:
                 stock = int(m_stock.group(1))
             variants = [{
-                "name":  "デフォルト",
-                "price": min_price or 0.0,
-                "stock": stock,
+                "name":    "デフォルト",
+                "name_ja": "",
+                "price":   min_price or 0.0,
+                "stock":   stock,
             }]
         else:
             # バリアントがある場合、最低価格を再計算
             prices = [v["price"] for v in variants if v["price"] > 0]
             if prices:
                 min_price = min(prices)
+            # 各バリアント名を日本語に翻訳
+            for v in variants:
+                v["name_ja"] = _translate_zh_to_ja(v.get("name", ""))
+
+        # ── タイトルを日本語に翻訳 ────────────────────────────────────
+        title_ja = _translate_zh_to_ja(title)
 
         # ── 商品属性 ─────────────────────────────────────────────────
         attributes: dict[str, str] = {}
@@ -389,6 +460,7 @@ def fetch_1688_from_url(url: str) -> dict:
         return {
             "success":          True,
             "title":            title,
+            "title_ja":         title_ja,
             "shop_name":        shop["name"],
             "shop_url":         shop["url"],
             "shop_rating":      shop["rating"],
