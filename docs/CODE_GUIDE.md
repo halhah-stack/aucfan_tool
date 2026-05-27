@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-24（Amazon調査機能追加・group_id紐付け・5シートExcel仕様確定）
+> 最終更新：2026-05-28（Sheet4 19列化・日本語自動翻訳・CDP Amazonタブクローズ・1688ショップURL検出改善）
 
 ---
 
@@ -972,29 +972,58 @@ Chrome のリモートデバッグポート（9222）に接続し、`amazon.co.j
 
 | 関数 | 説明 |
 |---|---|
+| `_translate_zh_to_ja(text)` | 中国語→日本語翻訳。`deep_translator.GoogleTranslator` を使用。失敗時は空文字を返す（スクレイピング継続） |
 | `_connect_chrome()` | ポート9222に接続して driver を返す（amazon_scraper と同じ） |
 | `_parse_price_from_text(text)` | "预估到手单価" を優先取得。なければ ¥数値の最小値を返す |
 | `_parse_moq_from_text(text)` | "20套起批" → `(20, "套")` にパース |
-| `_parse_variants_from_body(body_text)` | body テキストの `规格` セクションから SKU 一覧を抽出（名称/¥価格/库存N の3行1組） |
-| `_parse_shop_info(driver)` | ショップ名・URL・評価（店铺服务分）・回頭率（店铺回头率）を取得 |
+| `_parse_variants_from_body(body_text)` | body テキストのバリアントセクションから SKU 一覧を抽出。`ENTRY_HEADERS`/`STOP_HEADERS` で区分し套餐等の誤取込を防ぐ |
+| `_parse_shop_info(driver)` | ショップ名・URL・評価（店铺服务分）・回頭率（店铺回头率）を取得。**サブドメイン方式** |
 | `fetch_1688_from_url(url)` | メイン関数。新規タブで URL を開いてスクレイピングし、タブを閉じて戻る |
+
+**バリアントセクション判定（ENTRY_HEADERS / STOP_HEADERS）**：
+
+```python
+ENTRY_HEADERS = {'规格', '尺寸', '颜色', '型号', '款式', '规格型号', '包装规格'}
+STOP_HEADERS  = {'套餐', '数量', '颜色分类'}
+# ENTRY_HEADERS が来たらバリアント行収集開始
+# ループ中に他のヘッダー（ALL_HEADERS = ENTRY | STOP）が現れたら収集終了
+# → 套餐（セット商品）がバリアントに混入しない
+```
+
+**ショップURL検出（`_is_shop_subdomain_url()`）**：
+
+```python
+def _is_shop_subdomain_url(u: str) -> bool:
+    m = re.match(r'https?://([^./]+)\.1688\.com', u)
+    if not m: return False
+    sub = m.group(1).lower()
+    NON_SHOP = {'www', 's', 'detail', 'login', 'account', 'message',
+                'trade', 'm', 'wap', 'crm', 'buyer', ...}
+    return sub not in NON_SHOP
+```
+
+- JS で全 `<a>` タグのhrefを収集し、サブドメインが非システム系（ショップ名）であれば採用
+- ポジティブ検出方式のため `/page/offerlist.htm` 等を含むショップURLも正しく取得できる
+- 旧実装は `/page/offerlist` をブロックしていたため、ショップURLが取れないバグがあった
 
 **戻り値** (`fetch_1688_from_url()`)：
 
 ```python
 {
     "success": True,
-    "title": "商品名",
+    "title": "商品名（中国語）",
+    "title_ja": "商品名（日本語）",     # deep_translator で自動翻訳
     "shop_name": "ショップ名",
-    "shop_url": "https://shop.1688.com/...",
+    "shop_url": "https://winport.1688.com",  # サブドメイン形式
     "shop_rating": "4.0分",
     "shop_repeat_rate": "47%",
+    "shop_years": "9年",
     "min_price": 17.0,          # 最低単価（元）
     "moq": 20,                  # 最小発注数
     "moq_unit": "套",           # 単位
     "variants": [               # SKU一覧
-        {"name": "小方镜", "price": 13.5, "stock": 199},
-        {"name": "大方镜", "price": 30.0, "stock": 37},
+        {"name": "小方镜", "price": 13.5, "stock": 199, "name_ja": "小型角ミラー"},
+        {"name": "大方镜", "price": 30.0, "stock": 37,  "name_ja": "大型角ミラー"},
     ],
     "image_urls": ["https://cbu01.alicdn.com/..."],
     "attributes": {"材质": "不锈钢", ...},
@@ -1002,7 +1031,7 @@ Chrome のリモートデバッグポート（9222）に接続し、`amazon.co.j
 }
 ```
 
-バリアントなし商品は `variants=[{"name":"デフォルト","price":X,"stock":Y}]` として返す。
+バリアントなし商品は `variants=[{"name":"デフォルト","price":X,"stock":Y,"name_ja":""}]` として返す。
 
 **APIエンドポイント（app.py）**：
 
@@ -1032,9 +1061,32 @@ Chrome のリモートデバッグポート（9222）に接続し、`amazon.co.j
 
 **Sheet3 追記ロジック**：セパレーター行（緑背景・ASIN+タイトル）の後に6行（タイトル・価格・商品の特徴・商品説明・仕様・詳細）を追記。`cur_max + 2` 行目から開始することで複数ライバルが縦に並ぶ。
 
-**Sheet4 追記ロジック（`append_1688`）**：バリアントを1行ずつ追記。
-- A=ショップ名, B=ショップURL（ハイパーリンク）, C=信頼度（空欄・手入力）, D=商品名, E=バリアント名, F=単価(CNY), G=MOQ
-- H=原価（`=F*35`）, I=利益（`=Sheet1!D12-H{r}`）, J=利益率（`=I/Sheet1!D12`）, K=判定（`=IF(AND(I>=450,J>=0.25),"◎","×")`）
+**Sheet4 追記ロジック（`append_1688`）**：バリアントを1行ずつ追記（19列構成）。
+
+| 列 | 内容 | 書き込み値 |
+|---|---|---|
+| A(1) | 仕入れ選択 | 空（手入力用・薄黄背景） |
+| B(2) | ショップ名 | `shop_name` |
+| C(3) | ショップURL | `shop_url`（ハイパーリンクも設定） |
+| D(4) | 信頼度 | 評価/回頭率 |
+| E(5) | 入驻年数 | `shop_years` |
+| F(6) | 商品名（中国語） | `title` |
+| G(7) | 商品名（日本語） | `title_ja`（自動翻訳済み） |
+| H(8) | バリアント（中国語） | `v["name"]` |
+| I(9) | バリアント（日本語） | `v["name_ja"]`（自動翻訳済み） |
+| J(10) | 在庫数 | `v["stock"]` |
+| K(11) | 単価(CNY) | `v["price"]` |
+| L(12) | 係数 | `rate`（`CNY_TO_JPY_RATE`、デフォルト35） |
+| M(13) | MOQ | `moq`（常に書き込み、未指定=1） |
+| N(14) | 仕入総額(CNY) | `=K{r}*M{r}` |
+| O(15) | 仕入総額(JPY) | `=K{r}*M{r}*L{r}` |
+| P(16) | 原価/個(JPY) | `=K{r}*L{r}` |
+| Q(17) | 利益(JPY) | `=IFERROR(Sheet1!B12-Sheet1!B13-P{r},"")` |
+| R(18) | 利益率 | `=IFERROR(TEXT(Q{r}/Sheet1!B12,"0.0%"),"")` |
+| S(19) | 判定 | `=IF(AND(Q>=450, R>=25%), "◎","×")` |
+
+- 空行検出は K列（単価）が `None` の行を探す
+- フォーマットチェックは row 2（ヘッダー行）の列数が 18 以上かどうかで判定
 
 **Sheet5 追記ロジック（`append_1688`）**：セパレーター行（黒緑背景）＋8行（商品名/ショップ名/ショップURL/最低単価/MOQ/バリアント一覧/商品属性）を追記。
 
@@ -1068,11 +1120,14 @@ OUTPUT_BASE_DIR/
 | Sheet4 | ④1688仕入れ | `append_1688()` でバリアント1行ずつ追記 |
 | Sheet5 | ⑤1688テキスト | `append_1688()` でセパレーター＋8行追記 |
 
-**計算ロジック（Sheet4予定）**：
-- 原価（円）= 単価（元）× 35（送料・関税・代行手数料込み）
-- 利益 = Sheet1の「販売予定価格」 − 原価 − Sheet1の「FBA手数料」
-- 利益率 = 利益 ÷ 販売予定価格
-- 判定 = 利益率 ≥ 25% かつ 利益 ≥ 450円 → ◎ / それ以外 ×
+**計算ロジック（Sheet4 確定・19列）**：
+- 係数(L) = `CNY_TO_JPY_RATE`（.envで設定、デフォルト35。送料・関税・代行手数料込み）
+- 仕入総額(CNY)(N) = 単価(K) × MOQ(M)
+- 仕入総額(JPY)(O) = 単価(K) × MOQ(M) × 係数(L)
+- 原価/個(JPY)(P) = 単価(K) × 係数(L)
+- 利益(JPY)(Q) = Sheet1!B12（販売価格）− Sheet1!B13（FBA手数料）− 原価/個(P)
+- 利益率(R) = 利益(Q) ÷ 販売価格(Sheet1!B12)
+- 判定(S) = 利益率 ≥ 25% かつ 利益 ≥ 450円 → ◎ / それ以外 ×
 
 ---
 
@@ -1111,14 +1166,31 @@ _research_fetch_status = {"running": True, "step": "① URLを解析中..."}
 **`fetch_amazon_from_url()` のタブ管理**：
 
 ```
-① switch_to.new_window('tab') で確実にタブとして開く
+① 事前クリーンアップ（CDP方式）
+  Target.getTargets で全タブを取得。amazon.co.jp かつ /dp/ /gp/product/ を含まない
+  タブ（= AucFan側から開いた検索タブ）を Target.closeTarget で閉じる。
+  → window_handles は現在ウィンドウのみだが CDP は全ウィンドウを対象にできる
+
+② switch_to.new_window('tab') で確実にタブとして開く
   （window.open('') はポップアップウィンドウになる場合があり、
    その後 driver.close() でウィンドウごと閉じてしまうため変更）
 
-② スクレイピング後の後処理
+③ スクレイピング後の後処理
   len(driver.window_handles) > 1 → driver.close() でタブだけ閉じる
   len(driver.window_handles) == 1 → 閉じずに localhost:5001/research へ移動
   ※ 最後の1タブを close() するとChromeウィンドウごと閉じてしまうため
 
-③ localhost タブを探して前面に戻す（なければ original_handle に戻す）
+④ localhost タブを探して前面に戻す（なければ original_handle に戻す）
+  _is_app_tab() は "/research" AND (localhost|127.0.0.1|:5001) の両方を確認
 ```
+
+**`_is_app_tab(url)` ヘルパー**：
+
+```python
+def _is_app_tab(url: str) -> bool:
+    return "/research" in url and any(
+        x in url for x in ("localhost", "127.0.0.1", ":5001")
+    )
+```
+
+リサーチ追記ツールが別Chromeウィンドウで表示される場合でも、CDPで全ウィンドウを対象にして正しく `app_handle` を特定できる。

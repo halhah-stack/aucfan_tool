@@ -51,8 +51,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+`requirements.txt` には以下が含まれます（主要なもの）：
+
+| パッケージ | 用途 |
+|---|---|
+| `selenium` | Chrome リモートデバッグ接続・スクレイピング |
+| `flask` | Webアプリサーバー |
+| `openpyxl` | Excel (.xlsx) 読み書き |
+| `pandas` | データ処理 |
+| `deep-translator` | **1688商品名・バリアントの中国語→日本語自動翻訳** |
+| `requests` / `beautifulsoup4` | HTMLパース |
+| `Pillow` | 画像処理・Excel埋め込み用リサイズ |
+| `google-generativeai` | Gemini AI判定（除外ルール） |
+
 > **注意**: `.venv` フォルダはGitで管理されていません。  
 > 別Macに `.venv` フォルダをコピーしても動きません。必ず `pip install` をやり直してください。
+
+> **`deep-translator` について**: 1688スクレイパーが商品名とバリアントを自動翻訳するために使用します。Google翻訳APIを無料で利用します。インターネット接続が必要です。インストールは `pip install -r requirements.txt` で自動的に行われます。手動インストールが必要な場合は `pip install deep-translator` を実行してください。
 
 ---
 
@@ -357,4 +372,4 @@ aucfan_tool/
 
 ---
 
-*最終更新: 2026年5月24日（switch_role.sh による役割切り替えスクリプト追加）*
+*最終更新: 2026年5月28日（deep-translator 追加・Sheet4 19列化対応）*
