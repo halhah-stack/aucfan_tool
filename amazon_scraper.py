@@ -493,27 +493,35 @@ def fetch_amazon_from_url(url: str) -> dict:
         # 見つからなければ先頭を退避先として使う
         original_handle = app_handle or driver.window_handles[0]
 
-        # ── AucFanが開いたAmazon検索タブを閉じる ────────────────────
-        # AucFanのAmazonボタンで開いた検索・一覧ページ（/dp/ を含まない）が
-        # 残っていると、新規タブでAmazonを開く際にハングする。
-        # /dp/ を含む商品ページ（ユーザーが選択したTab3）はそのまま残す。
+        # ── AucFanが開いたAmazon検索タブをCDPで閉じる ──────────────
+        # Seleniumの window_handles は現在フォーカス中のChromeウィンドウの
+        # タブしか見えないことがある。別ウィンドウのタブを確実に操作するために
+        # CDP（Chrome DevTools Protocol）の Target API を使う。
+        #
+        # 閉じる対象: amazon.co.jp かつ /dp/ を含まない（検索・一覧ページ）
+        # 残す対象  : /dp/ を含む商品ページ（ユーザーが選択したタブ）
         closed_amazon = 0
-        for h in list(driver.window_handles):
-            if h == app_handle:
-                continue          # アプリタブは絶対に閉じない
-            try:
-                driver.switch_to.window(h)
-                url = driver.current_url
-                is_amazon        = "amazon.co.jp" in url
-                is_product_page  = "/dp/" in url or "/gp/product/" in url
-                if is_amazon and not is_product_page:
-                    if len(driver.window_handles) > 1:
-                        driver.close()
+        try:
+            result  = driver.execute_cdp_cmd("Target.getTargets", {})
+            targets = result.get("targetInfos", [])
+            for t in targets:
+                url       = t.get("url", "")
+                target_id = t.get("targetId", "")
+                is_amazon       = "amazon.co.jp" in url
+                is_product_page = "/dp/" in url or "/gp/product/" in url
+                if is_amazon and not is_product_page and target_id:
+                    try:
+                        driver.execute_cdp_cmd(
+                            "Target.closeTarget", {"targetId": target_id}
+                        )
                         closed_amazon += 1
-            except Exception:
-                pass
+                        logger.info(f"Amazon検索タブを閉じました: {url[:70]}")
+                    except Exception as e:
+                        logger.warning(f"CDPタブクローズ失敗: {e}")
+        except Exception as e:
+            logger.warning(f"CDP Target.getTargets 失敗: {e}")
         if closed_amazon:
-            logger.info(f"Amazon検索タブを {closed_amazon} 個閉じました")
+            logger.info(f"合計 {closed_amazon} 個のAmazon検索タブを閉じました")
 
         # アプリタブに戻る
         try:

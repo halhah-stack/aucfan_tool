@@ -354,8 +354,10 @@ def append_1688(excel_path: str, data: dict) -> dict:
                     "error": f"シート「{SHEET_1688_LIST}」がありません。"}
 
         # ── 列数チェック: 旧形式（18列未満）は拒否してユーザーに知らせる ──
+        # Sheet4の構成: Row1=タイトル Row2=列ヘッダー Row3=説明文
+        # → Row2を見て列数を確認する
         _ws4_check = wb[SHEET_1688_LIST]
-        _header_row = [_ws4_check.cell(3, c).value for c in range(1, 20)]
+        _header_row = [_ws4_check.cell(2, c).value for c in range(1, 20)]
         _col_count = sum(1 for v in _header_row if v is not None)
         if _col_count < 16:
             return {
