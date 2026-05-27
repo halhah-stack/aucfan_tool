@@ -202,22 +202,50 @@ def _parse_shop_info(driver) -> dict:
         # body テキストを先に取得（評価情報・年数はここから）
         body = driver.find_element(By.TAG_NAME, "body").text
 
-        # ── ① CSSセレクタでショップリンクを探す ─────────────────────
-        # 1688ショップURLパターン:
-        #   shop*.1688.com / member.1688.com/shop / supplier.1688.com
-        shop_els = driver.find_elements(By.CSS_SELECTOR, "a[href*='.1688.com']")
-        for el in shop_els:
-            href = el.get_attribute("href") or ""
-            text = (el.text or "").strip().split('\n')[0].strip()
-            is_shop_url = bool(re.search(
-                r'(shop[^/]*\.1688\.com|member\.1688\.com/shop|supplier\.1688\.com)',
-                href
-            ))
-            is_product_url = bool(re.search(
-                r'(detail\.|/offer/|/search|/page/offerlist)',
-                href
-            ))
-            if is_shop_url and not is_product_url and text and len(text) >= 2:
+        # ── ① JavaScriptで全リンクを収集して最適なショップURLを探す ──
+        # CSS セレクタでは拾えないケース（winport.1688.com 等）に対応するため
+        # JS で全 <a> を走査し、1688.com を含む非商品URLを抽出する。
+        def _is_shop_subdomain_url(u: str) -> bool:
+            """
+            True = ショップのサブドメインURL（例: winport.1688.com）
+            1688のショップURLは [shopname].1688.com 形式のサブドメインを持つ。
+            www/s/detail/login 等の既知の非ショップサブドメインは除外する。
+            """
+            m = re.match(r'https?://([^./]+)\.1688\.com', u)
+            if not m:
+                return False
+            sub = m.group(1).lower()
+            NON_SHOP = {
+                'www', 's', 'detail', 'login', 'account', 'message',
+                'trade', 'm', 'wap', 'crm', 'buyer', 'idea', 'seo',
+                'service', 'shopsign', 'img', 'image', 'static',
+            }
+            return sub not in NON_SHOP
+
+        try:
+            js_links = driver.execute_script("""
+                var out = [];
+                document.querySelectorAll('a').forEach(function(a) {
+                    var href = a.href || '';
+                    var text = (a.innerText || a.textContent || '').trim()
+                                .split('\\n')[0].trim();
+                    if (href.indexOf('1688.com') !== -1 && text.length >= 2)
+                        out.push({href: href, text: text});
+                });
+                return out;
+            """) or []
+        except Exception:
+            js_links = []
+
+        for item in js_links:
+            href = item.get("href", "")
+            text = item.get("text", "")
+            # ショップのサブドメインURLのみ対象
+            if not _is_shop_subdomain_url(href):
+                continue
+            # テキストに中国語が含まれる（ショップ名の特徴）
+            has_chinese = any('一' <= c <= '鿿' for c in text)
+            if has_chinese and len(text) >= 2:
                 info["url"]  = re.sub(r'\?.*$', '', href)
                 info["name"] = text
                 break
@@ -238,11 +266,10 @@ def _parse_shop_info(driver) -> dict:
                         text = (el.text or "").strip().split('\n')[0].strip()
                         if text and len(text) >= 2 and any('一' <= c <= '鿿' for c in text):
                             info["name"] = text
-                            # 親要素からhrefを探す
                             try:
                                 parent = el.find_element(By.XPATH, "..")
                                 href = parent.get_attribute("href") or ""
-                                if ".1688.com" in href:
+                                if _is_shop_subdomain_url(href):
                                     info["url"] = re.sub(r'\?.*$', '', href)
                             except Exception:
                                 pass
