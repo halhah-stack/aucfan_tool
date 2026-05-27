@@ -476,39 +476,48 @@ def fetch_amazon_from_url(url: str) -> dict:
     new_handle = None
 
     try:
-        # ── localhostタブを特定する ──────────────────────────────────
-        original_handle = driver.current_window_handle
+        # ── アプリタブ（リサーチツール）を特定する ───────────────────
+        # localhost / 127.0.0.1 / :5001 のいずれかにマッチするタブを探す
+        def _is_app_tab(url: str) -> bool:
+            return any(x in url for x in ("localhost", "127.0.0.1", ":5001"))
+
+        app_handle = None
         for h in driver.window_handles:
             try:
                 driver.switch_to.window(h)
-                if "localhost" in driver.current_url:
-                    original_handle = h
+                if _is_app_tab(driver.current_url):
+                    app_handle = h
                     break
             except Exception:
                 pass
+        # 見つからなければ先頭を退避先として使う
+        original_handle = app_handle or driver.window_handles[0]
 
-        # ── 既存のAmazonタブを閉じる ─────────────────────────────────
-        # アプリの「Amazonを開く」ボタンで開いたタブが残っていると、
-        # 新規タブでAmazonを開く際にセッション競合が起きて18秒以上かかる。
-        # スクレイピング前にすべての amazon.co.jp タブを閉じて解消する。
+        # ── 既存のAmazonタブをすべて閉じる ──────────────────────────
+        # アプリのAmazonボタンで開いたタブが残っていると新規タブの
+        # ページ読み込みが18秒以上ハングする。事前に閉じて解消する。
         closed_amazon = 0
         for h in list(driver.window_handles):
+            if h == app_handle:
+                continue          # アプリタブは絶対に閉じない
             try:
                 driver.switch_to.window(h)
                 if "amazon.co.jp" in driver.current_url:
-                    driver.close()
-                    closed_amazon += 1
+                    if len(driver.window_handles) > 1:   # 最後のタブは閉じない
+                        driver.close()
+                        closed_amazon += 1
             except Exception:
                 pass
         if closed_amazon:
             logger.info(f"既存Amazonタブを {closed_amazon} 個閉じました")
-        # localhostタブに戻る
+
+        # アプリタブに戻る
         try:
             driver.switch_to.window(original_handle)
         except Exception:
-            # original_handleが閉じられた場合（まず起きないが）残りの先頭へ
             if driver.window_handles:
                 driver.switch_to.window(driver.window_handles[0])
+                original_handle = driver.window_handles[0]
 
         # 新規タブを開いてURLへ移動
         # 開く前後のハンドル差分で確実に新タブを特定する。
@@ -575,17 +584,17 @@ def fetch_amazon_from_url(url: str) -> dict:
         except Exception:
             pass
         try:
-            # localhost（/researchページ）のタブを優先して前面に戻す
+            # アプリタブ（リサーチツール）を探して前面に戻す
             research_handle = None
             for h in driver.window_handles:
                 try:
                     driver.switch_to.window(h)
-                    if "localhost" in driver.current_url:
+                    cur = driver.current_url
+                    if any(x in cur for x in ("localhost", "127.0.0.1", ":5001")):
                         research_handle = h
                         break
                 except Exception:
                     pass
-            # localhostタブが見つからなければoriginal_handleに戻す
             if not research_handle:
                 if original_handle and original_handle in driver.window_handles:
                     driver.switch_to.window(original_handle)

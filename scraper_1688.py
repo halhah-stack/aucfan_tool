@@ -308,18 +308,24 @@ def fetch_1688_from_url(url: str) -> dict:
     try:
         from selenium.webdriver.common.by import By
 
-        # ── localhostタブを起点にする ───────────────────────────────
-        # 複数タブが開いている場合、localhostタブを起点に新タブを開くことで
-        # 余計な親子関係を避ける。
-        original_handle = driver.current_window_handle
+        # ── アプリタブ（リサーチツール）を特定する ───────────────────
+        def _is_app_tab(url: str) -> bool:
+            return any(x in url for x in ("localhost", "127.0.0.1", ":5001"))
+
+        app_handle = None
         for h in driver.window_handles:
             try:
                 driver.switch_to.window(h)
-                if "localhost" in driver.current_url:
-                    original_handle = h
+                if _is_app_tab(driver.current_url):
+                    app_handle = h
                     break
             except Exception:
                 pass
+        original_handle = app_handle or driver.window_handles[0]
+        try:
+            driver.switch_to.window(original_handle)
+        except Exception:
+            pass
 
         # ── 新規タブを開く（差分方式で確実に新タブを特定）──────────
         handles_before = set(driver.window_handles)
@@ -494,7 +500,8 @@ def fetch_1688_from_url(url: str) -> dict:
             for h in driver.window_handles:
                 try:
                     driver.switch_to.window(h)
-                    if "localhost" in driver.current_url:
+                    cur = driver.current_url
+                    if any(x in cur for x in ("localhost", "127.0.0.1", ":5001")):
                         break
                 except Exception:
                     pass
