@@ -2596,6 +2596,8 @@ _research_fetch_status = {
     "step":    "",      # 現在の処理ステップ説明
     "elapsed": 0,       # 開始からの経過秒（フロント側で計算）
 }
+# 2重実行防止ロック（同時リクエストが来ても1件しか処理しない）
+_research_fetch_lock = threading.Lock()
 
 _RESEARCH_HTML = """<!DOCTYPE html>
 <html lang="ja">
@@ -3119,6 +3121,13 @@ def api_research_amazon_fetch_url_append():
     if not url:
         return jsonify({"success": False, "error": "URLが指定されていません"})
 
+    # 2重実行防止：前の取得がまだ実行中なら即座に拒否
+    if not _research_fetch_lock.acquire(blocking=False):
+        return jsonify({
+            "success": False,
+            "error": "取得処理が実行中です。完了をお待ちください。"
+        }), 429
+
     _research_fetch_status = {"running": True, "step": "① URLを解析中..."}
     try:
         _research_fetch_status["step"] = "② ChromeでAmazonページを開いています..."
@@ -3132,6 +3141,7 @@ def api_research_amazon_fetch_url_append():
         return jsonify(result), status
     finally:
         _research_fetch_status = {"running": False, "step": ""}
+        _research_fetch_lock.release()
 
 
 @app.route("/api/research/amazon/open-calculator", methods=["POST"])

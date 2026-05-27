@@ -77,6 +77,9 @@ document.addEventListener('DOMContentLoaded', () => {
 function switchStep(step) {
   state.activeStep = step;
 
+  // タブ切り替え時はページ上部へスクロール（メニューの下のコンテンツが見えるように）
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+
   // 現在のステップを localStorage に保存（画面更新後も復元できるように）
   localStorage.setItem('activeStep', String(step));
 

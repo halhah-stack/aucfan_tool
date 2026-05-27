@@ -1,6 +1,6 @@
 # 引き継ぎメモ
 
-> 最終更新：2026-05-27  
+> 最終更新：2026-05-27（2回目）  
 > 次のClaudeセッションはここから読んで作業を再開すること。
 
 ---
@@ -278,6 +278,8 @@ python setup_gdrive_auth.py
 ## 注意事項
 
 - Chromeは必ず `start.sh` 経由で起動すること（ポート9222のデバッグオプションが必要）
-- `driver.quit()` は呼ばない（Chromeを閉じてしまうため）。`fetch_amazon_from_url()` は新規タブを閉じるだけ
+- `driver.quit()` は呼ばない（Chromeを閉じてしまうため）
+- **タブ管理**：`fetch_amazon_from_url()` は `switch_to.new_window('tab')` で確実にタブとして開く。スクレイピング後、他にタブが残っていれば `driver.close()` で閉じる。最後の1タブの場合は閉じずに `localhost:5001/research` へ移動（ウィンドウが消えるのを防ぐ）
+- **2重実行防止**：`_research_fetch_lock`（threading.Lock）でサーバー側をロック。処理中に2件目のリクエストが来たら 429 を即返す
 - Excel保存先: `config.OUTPUT_BASE_DIR` = `~/マイドライブ/AucFanToolData/リサーチ結果/`
 - 旧形式（フラット保存）のExcelも `/research` のファイル一覧で表示・選択可能

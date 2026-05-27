@@ -1049,3 +1049,18 @@ _research_fetch_status = {"running": True, "step": "① URLを解析中..."}
 - Seller Central の revcal ページは **KAT UI** フレームワーク製で `<kat-input>` 等のカスタム要素が Shadow DOM 内に `<input>` を持つため、通常の CSS セレクターでは入力欄が見つからない
 - JS で Shadow Root を再帰的に辿る `findInput()` / `findButton()` 関数で対応（入力欄・送信ボタン両方）
 - Selenium が既存のログイン済み Chrome セッションを使うため、手動ログイン後はそのまま使用可能
+
+**`fetch_amazon_from_url()` のタブ管理**：
+
+```
+① switch_to.new_window('tab') で確実にタブとして開く
+  （window.open('') はポップアップウィンドウになる場合があり、
+   その後 driver.close() でウィンドウごと閉じてしまうため変更）
+
+② スクレイピング後の後処理
+  len(driver.window_handles) > 1 → driver.close() でタブだけ閉じる
+  len(driver.window_handles) == 1 → 閉じずに localhost:5001/research へ移動
+  ※ 最後の1タブを close() するとChromeウィンドウごと閉じてしまうため
+
+③ localhost タブを探して前面に戻す（なければ original_handle に戻す）
+```

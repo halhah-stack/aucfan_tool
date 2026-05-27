@@ -479,7 +479,14 @@ def fetch_amazon_from_url(url: str) -> dict:
         original_handle = driver.current_window_handle
 
         # 新規タブを開いてURLへ移動
-        driver.execute_script("window.open('');")
+        # ※ window.open('') はブラウザ設定によってポップアップウィンドウとして開く場合があり
+        #   その場合 driver.close() でウィンドウごと閉じてしまう。
+        #   Selenium 4 の switch_to.new_window('tab') を使うことで確実にタブとして開く。
+        try:
+            driver.switch_to.new_window('tab')
+        except Exception:
+            # Selenium 3 系など new_window が使えない場合は従来方式にフォールバック
+            driver.execute_script("window.open('');")
         new_handle = driver.window_handles[-1]
         driver.switch_to.window(new_handle)
         driver.get(resolved_url)
@@ -518,11 +525,21 @@ def fetch_amazon_from_url(url: str) -> dict:
         return {"success": False, "error": f"取得中にエラー: {e}"}
 
     finally:
-        # 開いたタブだけ閉じて /research タブに戻る
+        # 開いたタブを閉じて /research タブに戻る
         try:
             if new_handle and new_handle in driver.window_handles:
                 driver.switch_to.window(new_handle)
-                driver.close()
+                remaining = driver.window_handles
+                if len(remaining) > 1:
+                    # 他のタブ/ウィンドウがある → このタブだけ閉じる
+                    driver.close()
+                else:
+                    # このタブが唯一の場合は閉じずに localhost へ移動
+                    # （closeするとChromeウィンドウごと閉じてしまうため）
+                    try:
+                        driver.get("http://localhost:5001/research")
+                    except Exception:
+                        pass
         except Exception:
             pass
         try:
