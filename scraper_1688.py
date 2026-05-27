@@ -88,57 +88,71 @@ def _parse_moq_from_text(text: str) -> tuple[int, str]:
 
 def _parse_variants_from_body(body_text: str) -> list[dict]:
     """
-    ページ本文の「规格」セクションから SKU バリアント一覧を抽出する。
+    ページ本文のバリアントセクションから SKU 一覧を抽出する。
 
-    期待するフォーマット（1バリアントにつき3行）:
-      规格
+    セクションヘッダーとして 规格 / 尺寸 / 颜色 / 型号 / 款式 / 套餐 等に対応。
+
+    フォーマット A（価格・在庫が別行）:
       小方镜
       ¥13.5
       库存199个
-      大方镜【新款】2个螺丝固定
-      ¥30
-      库存37个
+
+    フォーマット B（価格・在庫が同一行）:
+      正圆95*95【一对装】
+      ¥0.74库存436478套
 
     バリアントなし（単品）の場合は空リストを返す。
     """
+    SECTION_HEADERS = {'规格', '尺寸', '颜色', '型号', '款式', '套餐', '规格型号'}
     variants = []
     lines = [l.strip() for l in body_text.split('\n') if l.strip()]
 
-    # 「规格」セクション開始を探す
+    # バリアントセクション開始を探す
     start = -1
     for i, line in enumerate(lines):
-        if line == '规格':
+        if line in SECTION_HEADERS:
             start = i + 1
             break
     if start == -1:
         return []
 
     i = start
-    while i < len(lines) - 1:
-        name      = lines[i]
-        price_ln  = lines[i + 1] if i + 1 < len(lines) else ""
-        stock_ln  = lines[i + 2] if i + 2 < len(lines) else ""
+    while i < len(lines):
+        name    = lines[i]
+        next_ln = lines[i + 1] if i + 1 < len(lines) else ""
 
-        # 価格行チェック（¥XX 形式）
-        price_m = re.match(r'¥\s*(\d+(?:\.\d+)?)', price_ln)
-        if not price_m:
+        # ゴミデータ除外（短すぎる・記号のみ・価格行自体を名前と誤認しない）
+        if (len(name) < 2
+                or not re.search(r'[\w一-鿿\[\]【】]', name)
+                or re.match(r'^¥', name)):
             i += 1
             continue
 
-        stock_m = re.search(r'库存(\d+)', stock_ln)
-        stock = int(stock_m.group(1)) if stock_m else 0
+        # フォーマット B: ¥price库存N が同一行
+        combined_m = re.match(r'¥\s*(\d+(?:\.\d+)?)库存(\d+)', next_ln)
+        if combined_m:
+            variants.append({
+                "name":  name,
+                "price": float(combined_m.group(1)),
+                "stock": int(combined_m.group(2)),
+            })
+            i += 2
+            continue
 
-        # ゴミデータ除外（短すぎる・記号のみ）
-        if len(name) < 2 or not re.search(r'[\w一-鿿]', name):
+        # フォーマット A: ¥price と 库存N が別行
+        price_m = re.match(r'¥\s*(\d+(?:\.\d+)?)', next_ln)
+        if price_m:
+            stock_ln = lines[i + 2] if i + 2 < len(lines) else ""
+            stock_m  = re.search(r'库存(\d+)', stock_ln)
+            variants.append({
+                "name":  name,
+                "price": float(price_m.group(1)),
+                "stock": int(stock_m.group(1)) if stock_m else 0,
+            })
             i += 3
             continue
 
-        variants.append({
-            "name":  name,
-            "price": float(price_m.group(1)),
-            "stock": stock,
-        })
-        i += 3
+        i += 1
 
     return variants
 
@@ -150,19 +164,34 @@ def _parse_shop_info(driver) -> dict:
     info = {"name": "", "url": "", "rating": "", "repeat_rate": "", "years": ""}
 
     try:
-        # ショップURL: href に .1688.com かつ "shop" を含むリンク
-        els = driver.find_elements(By.CSS_SELECTOR, "a[href*='1688.com']")
-        for el in els:
+        # ショップURL: 1688ショップリンクを複数パターンで探す
+        # パターン1: shop*.1688.com（最も一般的）
+        # パターン2: member.1688.com/...（古い形式）
+        shop_els = (
+            driver.find_elements(By.CSS_SELECTOR, "a[href*='.1688.com']")
+        )
+        for el in shop_els:
             href = el.get_attribute("href") or ""
             text = el.text.strip().split('\n')[0]
-            if "shop" in href and text and len(text) > 4:
-                # クエリパラメータを除去
+            # ショップリンクの条件:
+            #   - shop/member/supplier を含む
+            #   - detail/offer/search 等の商品URLは除外
+            #   - テキストが4文字以上の中国語名
+            is_shop_url = bool(re.search(
+                r'(shop[^/]*\.1688\.com|member\.1688\.com/shop|supplier\.1688\.com)',
+                href
+            ))
+            is_product_url = bool(re.search(
+                r'(detail\.|/offer/|/search|/page/offerlist)',
+                href
+            ))
+            if is_shop_url and not is_product_url and text and len(text) > 3:
                 clean_url = re.sub(r'\?.*$', '', href)
                 info["url"]  = clean_url
                 info["name"] = text
                 break
 
-        # body テキストから評価情報を取得
+        # body テキストから評価情報を取得（ショップ名も body から補完）
         body = driver.find_element(By.TAG_NAME, "body").text
 
         m = re.search(r'店铺回头率\s*(\d+%)', body)
@@ -226,20 +255,22 @@ def fetch_1688_from_url(url: str) -> dict:
                 pass
 
         # ── 商品タイトル ────────────────────────────────────────────
+        # AliPrice等のプラグインが上部に別商品を注入することがあるため、
+        # 全候補を収集して「最も文字数が多いもの」をメインタイトルとして採用する。
         title = ""
+        title_candidates = []
         for sel in [".offer-title", "[class*='offer-title']", "[class*='title-text']"]:
             try:
                 els = driver.find_elements(By.CSS_SELECTOR, sel)
                 for el in els:
                     t = el.text.strip()
-                    # 中国語文字を含む場合だけ採用
                     if t and any('一' <= c <= '鿿' for c in t):
-                        title = t
-                        break
+                        title_candidates.append(t)
             except Exception:
                 pass
-            if title:
-                break
+        if title_candidates:
+            # 最長テキストをメインタイトルとして採用
+            title = max(title_candidates, key=len)
 
         # ── ショップ情報 ─────────────────────────────────────────────
         shop = _parse_shop_info(driver)
