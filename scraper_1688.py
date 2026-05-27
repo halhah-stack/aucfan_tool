@@ -147,7 +147,7 @@ def _parse_shop_info(driver) -> dict:
     """ショップ名・URL・評価情報を取得する。"""
     from selenium.webdriver.common.by import By
 
-    info = {"name": "", "url": "", "rating": "", "repeat_rate": ""}
+    info = {"name": "", "url": "", "rating": "", "repeat_rate": "", "years": ""}
 
     try:
         # ショップURL: href に .1688.com かつ "shop" を含むリンク
@@ -172,6 +172,15 @@ def _parse_shop_info(driver) -> dict:
         m = re.search(r'店铺服务分\s*([\d.]+分)', body)
         if m:
             info["rating"] = m.group(1)
+
+        # 入驻年数: "入驻X年" または "入驻X个月"
+        m = re.search(r'入驻(\d+)年', body)
+        if m:
+            info["years"] = f"{m.group(1)}年"
+        else:
+            m = re.search(r'入驻(\d+)个月', body)
+            if m:
+                info["years"] = f"{m.group(1)}ヶ月"
 
     except Exception as e:
         logger.warning(f"ショップ情報取得エラー: {e}")
@@ -328,6 +337,7 @@ def fetch_1688_from_url(url: str) -> dict:
             "shop_url":         shop["url"],
             "shop_rating":      shop["rating"],
             "shop_repeat_rate": shop["repeat_rate"],
+            "shop_years":       shop["years"],
             "min_price":        min_price or 0.0,
             "moq":              moq,
             "moq_unit":         moq_unit,

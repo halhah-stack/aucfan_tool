@@ -290,9 +290,17 @@ def _build_sheet3(ws):
 
 # ── Sheet4: ④1688仕入れ ─────────────────────────────────────────────
 def _build_sheet4(ws):
-    col_widths = [20, 40, 10, 24, 20, 12, 8, 12, 12, 10, 8]
-    headers    = ["ショップ名", "ショップURL", "信頼度", "商品名（親）", "バリアント",
-                  "単価(CNY)", "MOQ", "原価(円)\n=単価×35", "利益(円)", "利益率", "判定"]
+    # A=仕入れ選択 B=ショップ名 C=ショップURL D=信頼度 E=入驻年数
+    # F=商品名(中) G=商品名(日) H=バリアント(中) I=バリアント(日) J=在庫数
+    # K=単価(CNY) L=MOQ M=仕入総額(CNY) N=仕入総額(JPY) O=原価/個(JPY)
+    # P=利益(JPY) Q=利益率 R=判定
+    col_widths = [8, 20, 36, 12, 8, 26, 26, 20, 20, 8, 10, 6, 12, 12, 12, 10, 8, 10]
+    headers    = [
+        "仕入れ選択", "ショップ名", "ショップURL", "信頼度", "年数",
+        "商品名（中）", "商品名（日）", "バリアント（中）", "バリアント（日）", "在庫数",
+        "単価\n(CNY)", "MOQ", "仕入総額\n(CNY)", f"仕入総額\n(JPY)", "原価/個\n(JPY)",
+        "利益\n(JPY)", "利益率", "判定",
+    ]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -303,18 +311,18 @@ def _build_sheet4(ws):
     ws["A1"].fill = _fill(COLOR_HEADER_GREEN)
     ws["A1"].alignment = _center()
 
-    ws.row_dimensions[2].height = 30
+    ws.row_dimensions[2].height = 34
     for col, label in enumerate(headers, 1):
         c = ws.cell(2, col)
         c.value = label
         c.font = Font(name="BIZ UDGothic", bold=True, color=COLOR_WHITE)
         c.fill = _fill(COLOR_HEADER_GREEN)
-        c.alignment = _center()
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         c.border = _thin_border()
 
     ws.row_dimensions[3].height = 16
     ws.merge_cells(f"A3:{get_column_letter(len(headers))}3")
-    ws["A3"].value = "← research_tool.py の「1688取得」ボタンで追記されます"
+    ws["A3"].value = "← /research の「1688取得→追記」ボタンで追記されます"
     ws["A3"].font = Font(name="BIZ UDGothic", italic=True, color="999999")
 
 

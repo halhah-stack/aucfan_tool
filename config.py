@@ -210,6 +210,13 @@ GEMINI_RPM_LIMIT = int(os.getenv("GEMINI_RPM_LIMIT", "14"))   # 無料枠: 15RPM
 GEMINI_ENABLED = os.getenv("GEMINI_ENABLED", "true").lower() == "true"
 
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# 1688 → 円 換算係数
+# ─────────────────────────────────────────────
+# 単価(元) × CNY_TO_JPY_RATE = 原価(円)
+# 送料・関税・代行手数料等を含む独自係数。.env で変更可能。
+CNY_TO_JPY_RATE = int(os.getenv("CNY_TO_JPY_RATE", "35"))
+
 # Flask 設定
 # ─────────────────────────────────────────────
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5001"))

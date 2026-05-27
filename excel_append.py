@@ -320,8 +320,14 @@ def append_1688(excel_path: str, data: dict) -> dict:
     Sheet4（④1688仕入れ）と Sheet5（⑤1688テキスト）に
     1688データを追記して上書き保存する。
 
+    Sheet4 列構成 (A〜R / 18列):
+      A=仕入れ選択（手入力）  B=ショップ名  C=ショップURL  D=信頼度  E=入驻年数
+      F=商品名（中）  G=商品名（日・手入力）  H=バリアント（中）  I=バリアント（日・手入力）
+      J=在庫数  K=単価(CNY)  L=MOQ  M=仕入総額(CNY)=K×L  N=仕入総額(JPY)=K×L×rate
+      O=原価/個(JPY)=K×rate  P=利益(JPY)  Q=利益率  R=判定
+
     data キー:
-      title, shop_name, shop_url, shop_rating, shop_repeat_rate,
+      title, shop_name, shop_url, shop_rating, shop_repeat_rate, shop_years,
       min_price, moq, moq_unit, variants[{name, price, stock}],
       image_urls, attributes, url
 
@@ -331,9 +337,12 @@ def append_1688(excel_path: str, data: dict) -> dict:
     SHEET_1688_TEXT = "⑤1688テキスト"
 
     try:
+        import config
         from openpyxl import load_workbook
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
+
+        rate = getattr(config, "CNY_TO_JPY_RATE", 35)  # 元→円 換算係数
 
         path = Path(excel_path)
         if not path.exists():
@@ -350,22 +359,22 @@ def append_1688(excel_path: str, data: dict) -> dict:
         # ── Sheet4: ④1688仕入れ ─────────────────────────────────────
         ws4 = wb[SHEET_1688_LIST]
 
-        # 4行目以降の最初の空行を探す
+        # 4行目以降の最初の空行を探す（A列で判定）
         next_row = 4
         for r in range(4, (ws4.max_row or 3) + 2):
-            if ws4.cell(r, 1).value is None:
+            if ws4.cell(r, 2).value is None:   # B列(ショップ名)で判定
                 next_row = r
                 break
 
         variants = data.get("variants") or [
             {"name": "デフォルト", "price": data.get("min_price", 0), "stock": 0}
         ]
-        shop_url  = data.get("shop_url", "")
-        shop_name = data.get("shop_name", "")
-        title     = data.get("title", "")
-        rating    = data.get("shop_rating", "")
+        shop_url   = data.get("shop_url", "")
+        shop_name  = data.get("shop_name", "")
+        shop_years = data.get("shop_years", "")
+        title      = data.get("title", "")
 
-        # 信頼度テキスト（評価 + 回頭率）
+        # 信頼度テキスト（評価/回頭率）
         trust = "/".join(filter(None, [
             data.get("shop_rating", ""),
             data.get("shop_repeat_rate", "")
@@ -375,57 +384,91 @@ def append_1688(excel_path: str, data: dict) -> dict:
         for v in variants:
             price = float(v.get("price") or 0)
             moq   = int(data.get("moq") or 1)
+            stock = int(v.get("stock") or 0)
 
-            # 列: A=ショップ名, B=URL, C=信頼度, D=商品名,
-            #      E=バリアント, F=単価, G=MOQ, H=原価, I=利益, J=利益率, K=判定
-            ws4.cell(next_row, 1).value = shop_name
-            ws4.cell(next_row, 2).value = shop_url
-            ws4.cell(next_row, 3).value = trust
-            ws4.cell(next_row, 4).value = title
-            ws4.cell(next_row, 5).value = v.get("name", "")
-            ws4.cell(next_row, 6).value = price
-            ws4.cell(next_row, 7).value = moq
+            # A=仕入れ選択（空欄・手入力）
+            ws4.cell(next_row,  1).value = ""
+            # B=ショップ名
+            ws4.cell(next_row,  2).value = shop_name
+            # C=ショップURL
+            ws4.cell(next_row,  3).value = shop_url
+            # D=信頼度
+            ws4.cell(next_row,  4).value = trust
+            # E=入驻年数
+            ws4.cell(next_row,  5).value = shop_years
+            # F=商品名（中）
+            ws4.cell(next_row,  6).value = title
+            # G=商品名（日）手入力空欄
+            ws4.cell(next_row,  7).value = ""
+            # H=バリアント（中）
+            ws4.cell(next_row,  8).value = v.get("name", "")
+            # I=バリアント（日）手入力空欄
+            ws4.cell(next_row,  9).value = ""
+            # J=在庫数
+            ws4.cell(next_row, 10).value = stock if stock > 0 else ""
+            # K=単価(CNY)
+            ws4.cell(next_row, 11).value = price
+            # L=MOQ
+            ws4.cell(next_row, 12).value = moq
 
-            # 原価(円) = 単価×35
-            ws4.cell(next_row, 8).value = (
-                f"=F{next_row}*35" if price > 0 else ""
-            )
-            # 利益(円) = Sheet1のB12 - FBA(B13) - 原価
-            ws4.cell(next_row, 9).value = (
-                f"=IFERROR(Sheet1!B12-Sheet1!B13-H{next_row},\"\")"
-                if price > 0 else ""
-            )
-            # 利益率
-            ws4.cell(next_row, 10).value = (
-                f'=IFERROR(TEXT(I{next_row}/Sheet1!B12,"0.0%"),"")'
-                if price > 0 else ""
-            )
-            # 判定
-            ws4.cell(next_row, 11).value = (
-                f'=IFERROR(IF(AND(VALUE(SUBSTITUTE(J{next_row},"%",""))/100>=0.25,'
-                f'I{next_row}>=450),"◎ GO","× 再検討"),"")'
-                if price > 0 else ""
-            )
+            if price > 0:
+                r = next_row
+                # M=仕入総額(CNY) = 単価×MOQ
+                ws4.cell(r, 13).value = f"=K{r}*L{r}"
+                # N=仕入総額(JPY) = 単価×MOQ×rate
+                ws4.cell(r, 14).value = f"=K{r}*L{r}*{rate}"
+                # O=原価/個(JPY) = 単価×rate
+                ws4.cell(r, 15).value = f"=K{r}*{rate}"
+                # P=利益(JPY) = 販売価格 - FBA手数料 - 原価/個
+                ws4.cell(r, 16).value = (
+                    f'=IFERROR(Sheet1!B12-Sheet1!B13-O{r},"")'
+                )
+                # Q=利益率
+                ws4.cell(r, 17).value = (
+                    f'=IFERROR(TEXT(P{r}/Sheet1!B12,"0.0%"),"")'
+                )
+                # R=判定
+                ws4.cell(r, 18).value = (
+                    f'=IFERROR(IF(AND(VALUE(SUBSTITUTE(Q{r},"%",""))/100>=0.25,'
+                    f'P{r}>=450),"◎ GO","× 再検討"),"")'
+                )
+            else:
+                for col in range(13, 19):
+                    ws4.cell(next_row, col).value = ""
 
-            # 書式設定
-            for col in range(1, 12):
+            # ── 書式設定 ──
+            # 左揃え列: B,C,D,E,F,G,H,I
+            LEFT_COLS  = {2, 3, 4, 5, 6, 7, 8, 9}
+            # URL列（ハイパーリンク書式）: C
+            URL_COL    = 3
+            # 折り返し列: F,G,H,I
+            WRAP_COLS  = {6, 7, 8, 9}
+            # 入力促進（薄い黄色背景）: A,G,I
+            INPUT_COLS = {1, 7, 9}
+
+            for col in range(1, 19):
                 c = ws4.cell(next_row, col)
-                c.font = Font(name="BIZ UDGothic",
-                              color="0563C1" if col == 2 else "000000",
-                              underline="single" if col == 2 else "none")
+                is_url = (col == URL_COL)
+                c.font = Font(
+                    name="BIZ UDGothic",
+                    color="0563C1" if is_url else "000000",
+                    underline="single" if is_url else "none"
+                )
                 c.border = border
                 c.alignment = Alignment(
                     vertical="center",
-                    horizontal="left" if col in (1, 2, 3, 4, 5) else "center",
-                    wrap_text=(col in (4, 5))
+                    horizontal="left" if col in LEFT_COLS else "center",
+                    wrap_text=(col in WRAP_COLS)
                 )
+                if col in INPUT_COLS:
+                    c.fill = PatternFill("solid", fgColor="FFFDE7")  # 薄い黄
 
-            # URLにハイパーリンク
+            # URLにハイパーリンク（C列）
             if shop_url:
-                ws4.cell(next_row, 2).hyperlink = shop_url
+                ws4.cell(next_row, 3).hyperlink = shop_url
 
             written_rows.append(next_row)
-            ws4.row_dimensions[next_row].height = 32
+            ws4.row_dimensions[next_row].height = 34
             next_row += 1
 
         # ── Sheet5: ⑤1688テキスト ──────────────────────────────────
@@ -457,24 +500,26 @@ def append_1688(excel_path: str, data: dict) -> dict:
             sep.alignment = Alignment(horizontal="left", vertical="center")
             ws5.row_dimensions[start5].height = 22
 
-            _write5(start5 + 1, "商品名",    title)
-            _write5(start5 + 2, "ショップ名", shop_name)
+            _write5(start5 + 1, "商品名",      title)
+            _write5(start5 + 2, "ショップ名",  shop_name)
             _write5(start5 + 3, "ショップURL", shop_url)
-            _write5(start5 + 4, "最低単価",   f"¥{data.get('min_price', 0)} 元")
-            _write5(start5 + 5, "MOQ",
+            _write5(start5 + 4, "入驻年数",    shop_years)
+            _write5(start5 + 5, "信頼度",      trust)
+            _write5(start5 + 6, "最低単価",    f"¥{data.get('min_price', 0)} 元")
+            _write5(start5 + 7, "MOQ",
                     f"{data.get('moq', 1)}{data.get('moq_unit', '个')} 起批")
 
             # バリアント一覧
             variants_text = "\n".join(
-                f"{v['name']}  ¥{v['price']}  在庫{v['stock']}"
+                f"{v['name']}  ¥{v['price']}  在庫{v.get('stock', 0)}"
                 for v in variants
             )
-            _write5(start5 + 6, "バリアント", variants_text)
+            _write5(start5 + 8, "バリアント", variants_text)
 
             # 商品属性
             attrs = data.get("attributes") or {}
             attrs_text = "\n".join(f"{k}: {v}" for k, v in attrs.items())
-            _write5(start5 + 7, "商品属性",   attrs_text)
+            _write5(start5 + 9, "商品属性",   attrs_text)
 
         # ── 画像ダウンロード & 保存 ──────────────────────────────────
         ensure_product_folders(str(path))
