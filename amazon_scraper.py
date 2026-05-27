@@ -479,15 +479,16 @@ def fetch_amazon_from_url(url: str) -> dict:
         original_handle = driver.current_window_handle
 
         # 新規タブを開いてURLへ移動
-        # ※ window.open('') はブラウザ設定によってポップアップウィンドウとして開く場合があり
-        #   その場合 driver.close() でウィンドウごと閉じてしまう。
-        #   Selenium 4 の switch_to.new_window('tab') を使うことで確実にタブとして開く。
+        # ※ 複数タブが既に開いている場合に window_handles[-1] が新タブを指さないケースがある。
+        #   開く前後のハンドル差分で確実に新タブを特定する。
+        handles_before = set(driver.window_handles)
         try:
             driver.switch_to.new_window('tab')
         except Exception:
-            # Selenium 3 系など new_window が使えない場合は従来方式にフォールバック
-            driver.execute_script("window.open('');")
-        new_handle = driver.window_handles[-1]
+            driver.execute_script("window.open('about:blank');")
+        handles_after = set(driver.window_handles)
+        new_handles = handles_after - handles_before
+        new_handle = new_handles.pop() if new_handles else driver.window_handles[-1]
         driver.switch_to.window(new_handle)
         driver.get(resolved_url)
 
@@ -557,6 +558,11 @@ def fetch_amazon_from_url(url: str) -> dict:
             if not research_handle:
                 if original_handle and original_handle in driver.window_handles:
                     driver.switch_to.window(original_handle)
+            # Chrome画面を前面に表示（リサーチ追記ツールをフォーカス）
+            try:
+                driver.execute_script("window.focus();")
+            except Exception:
+                pass
         except Exception:
             pass
         # quit()は呼ばない（Chromeを閉じないため）

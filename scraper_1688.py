@@ -235,12 +235,15 @@ def fetch_1688_from_url(url: str) -> dict:
 
         original_handle = driver.current_window_handle
 
-        # ── 新規タブを開く ──────────────────────────────────────────
+        # ── 新規タブを開く（差分方式で確実に新タブを特定）──────────
+        handles_before = set(driver.window_handles)
         try:
             driver.switch_to.new_window('tab')
         except Exception:
-            driver.execute_script("window.open('');")
-        new_handle = driver.window_handles[-1]
+            driver.execute_script("window.open('about:blank');")
+        handles_after = set(driver.window_handles)
+        new_handles = handles_after - handles_before
+        new_handle = new_handles.pop() if new_handles else driver.window_handles[-1]
         driver.switch_to.window(new_handle)
         driver.get(url)
 
@@ -401,5 +404,10 @@ def fetch_1688_from_url(url: str) -> dict:
                         break
                 except Exception:
                     pass
+            # Chrome画面を前面に表示（リサーチ追記ツールをフォーカス）
+            try:
+                driver.execute_script("window.focus();")
+            except Exception:
+                pass
         except Exception:
             pass
