@@ -476,11 +476,7 @@ def fetch_amazon_from_url(url: str) -> dict:
     new_handle = None
 
     try:
-        # ── localhostタブを起点にする ───────────────────────────────
-        # 複数のAmazonタブが開いている状態でSeleniumが接続すると、
-        # AmazonタブがアクティブなままAmazonを新たに開こうとして
-        # セッション制限等でページが開かないことがある。
-        # 新タブ開設前に必ずlocalhostタブ（research）に切り替える。
+        # ── localhostタブを特定する ──────────────────────────────────
         original_handle = driver.current_window_handle
         for h in driver.window_handles:
             try:
@@ -490,6 +486,29 @@ def fetch_amazon_from_url(url: str) -> dict:
                     break
             except Exception:
                 pass
+
+        # ── 既存のAmazonタブを閉じる ─────────────────────────────────
+        # アプリの「Amazonを開く」ボタンで開いたタブが残っていると、
+        # 新規タブでAmazonを開く際にセッション競合が起きて18秒以上かかる。
+        # スクレイピング前にすべての amazon.co.jp タブを閉じて解消する。
+        closed_amazon = 0
+        for h in list(driver.window_handles):
+            try:
+                driver.switch_to.window(h)
+                if "amazon.co.jp" in driver.current_url:
+                    driver.close()
+                    closed_amazon += 1
+            except Exception:
+                pass
+        if closed_amazon:
+            logger.info(f"既存Amazonタブを {closed_amazon} 個閉じました")
+        # localhostタブに戻る
+        try:
+            driver.switch_to.window(original_handle)
+        except Exception:
+            # original_handleが閉じられた場合（まず起きないが）残りの先頭へ
+            if driver.window_handles:
+                driver.switch_to.window(driver.window_handles[0])
 
         # 新規タブを開いてURLへ移動
         # 開く前後のハンドル差分で確実に新タブを特定する。
