@@ -739,7 +739,7 @@ def api_export_excel_single(group_id):
     # フォルダ名 = xlsx ファイル名から "_リサーチ.xlsx" を除いた部分
     from excel_exporter import sanitize_filename
     folder_name = filename.replace("_リサーチ.xlsx", "")
-    product_dir = Path(config.OUTPUT_BASE_DIR) / folder_name
+    product_dir = Path(config.EXCEL_BASE_DIR) / folder_name
     save_path = product_dir / filename
     try:
         product_dir.mkdir(parents=True, exist_ok=True)
@@ -2654,6 +2654,10 @@ _RESEARCH_HTML = """<!DOCTYPE html>
   .file-badge { font-size: 10px; background: #C55A11; color: white;
                 padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
   .file-empty { padding: 20px; text-align: center; color: #aaa; font-size: 13px; }
+  .btn-delete-file { flex-shrink: 0; background: none; border: none; font-size: 15px;
+                     cursor: pointer; padding: 2px 4px; border-radius: 4px;
+                     color: #aaa; line-height: 1; transition: color 0.15s, background 0.15s; }
+  .btn-delete-file:hover { color: #dc2626; background: #fef2f2; }
 
   /* 読み込み済みExcel表示 */
   .excel-loaded { background: #EBF3FB; border-radius: 8px; padding: 12px 14px; }
@@ -2719,7 +2723,7 @@ _RESEARCH_HTML = """<!DOCTYPE html>
         <input id="folderPath" class="folder-input" type="text" placeholder="フォルダパス">
         <button class="btn btn-blue btn-sm" onclick="refreshList()">スキャン</button>
       </div>
-      <p class="hint">空白のままにすると保存先（Google Drive/AucFanToolData/リサーチ結果）を自動で探します。</p>
+      <p class="hint">空白のままにすると保存先（Google Drive/AucFanToolData/リサーチシート）を自動で探します。</p>
     </details>
 
     <!-- ファイル一覧 -->
@@ -2754,6 +2758,28 @@ _RESEARCH_HTML = """<!DOCTYPE html>
     </div>
 
     <div id="amazonResult" class="hidden result"></div>
+
+    <!-- FBA料金シミュレータ -->
+    <div style="margin-top:10px;">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <button id="btnOpenCalc" class="btn btn-calc"
+                onclick="openCalculator(null)"
+                style="font-size:13px; padding:8px 14px;">
+          💴 ① シミュレータを開く
+        </button>
+        <button id="btnReadCalc" class="btn btn-calc"
+                onclick="readCalcResult()"
+                style="font-size:13px; padding:8px 14px; background:#2E7D32;">
+          📋 ② 結果をExcelに転記
+        </button>
+      </div>
+      <p class="hint" style="margin-top:6px; font-size:11px;">
+        ① ASINを自動入力してシミュレータを開く → 仕入れ値（1688価格）を手動入力 →
+        ② FBA手数料・利益・利益率をExcel（①概要 B13）に転記<br>
+        判断基準: 利益率 25% 以上 または 利益 450円 以上 → ◎ GO
+      </p>
+    </div>
+    <div id="calcResult" class="hidden result" style="margin-top:6px; font-size:12px;"></div>
   </div>
 
   <!-- ③ 1688仕入れデータ取得 -->
@@ -2810,8 +2836,10 @@ async function refreshList() {
   document.getElementById("folderPath").placeholder = data.folder;
 
   div.innerHTML = '<div class="file-list">' +
-    data.files.map(f => `
-      <div class="file-item" onclick="selectFile('${f.path.replace(/'/g,"\\'")}', this)"
+    data.files.map(f => {
+      const safePath = f.path.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      return `
+      <div class="file-item" onclick="selectFile('${safePath}', this)"
            title="${f.path}">
         <div class="file-icon">📄</div>
         <div class="file-info">
@@ -2821,7 +2849,10 @@ async function refreshList() {
         ${f.amazon_count > 0
           ? `<div class="file-badge">Amazon ${f.amazon_count}件</div>`
           : ''}
-      </div>`).join("") +
+        <button class="btn-delete-file" title="削除"
+                onclick="event.stopPropagation(); deleteFile('${safePath}')">🗑</button>
+      </div>`;
+    }).join("") +
     '</div>';
 }
 
@@ -2874,6 +2905,34 @@ function updateBadge() {
   const b = document.getElementById("amazonBadge");
   b.textContent = amazonCount + "件";
   b.classList.remove("hidden");
+}
+
+async function deleteFile(path) {
+  const name = path.split("/").pop();
+  if (!confirm(`「${name}」を削除しますか？\\n\\nこの操作は取り消せません。`)) return;
+
+  try {
+    const res  = await fetch("/api/research/excel/delete", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: path})
+    });
+    const data = await res.json();
+    if (data.success) {
+      // 選択中ファイルが削除された場合は表示をリセット
+      if (loadedPath === path) {
+        loadedPath = "";
+        amazonCount = 0;
+        document.getElementById("excelLoaded").classList.add("hidden");
+        document.getElementById("amazonBadge").classList.add("hidden");
+      }
+      refreshList();
+    } else {
+      alert("削除に失敗しました: " + (data.error || "不明なエラー"));
+    }
+  } catch (e) {
+    alert("削除に失敗しました: " + e.message);
+  }
 }
 
 // ── Amazon URL取得 ──────────────────────────────────────────
@@ -2968,26 +3027,96 @@ async function fetchAmazonUrl() {
 }
 
 // ── FBA料金シミュレータ ────────────────────────────────────────
+// asin: 指定 ASIN（省略 or null 可）。省略時は loadedPath から自動取得を試みる。
 async function openCalculator(asin) {
-  const btn = event.target;
-  btn.textContent = "⏳ 起動中...";
-  btn.disabled = true;
+  const btn = event ? event.target : document.getElementById("btnOpenCalc");
+  if (btn) { btn.textContent = "⏳ 起動中..."; btn.disabled = true; }
   try {
+    const payload = {};
+    if (asin)       payload.asin       = asin;
+    if (loadedPath) payload.excel_path = loadedPath;
+
     const res  = await fetch("/api/research/amazon/open-calculator", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({asin: asin})
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
+    const area = document.getElementById("calcResult");
     if (data.success) {
-      btn.textContent = "✅ Chromeで開きました";
+      const btnMsg = data.asin
+        ? `✅ ASIN: ${data.asin} を入力しました`
+        : "✅ シミュレータを開きました";
+      if (btn) btn.textContent = btnMsg;
+      if (area && data.warning) {
+        area.innerHTML = `<span style="color:#C55A11;">⚠ ${data.warning}</span>`;
+        area.classList.remove("hidden");
+      }
+      if (area && data.asin && !data.warning) {
+        area.innerHTML =
+          `<span style="color:#2E7D32;">ASIN <strong>${data.asin}</strong> を入力しました。` +
+          `仕入れ値（1688価格）をシミュレータに手動入力してください。</span>`;
+        area.classList.remove("hidden");
+      }
     } else {
-      btn.textContent = "❌ " + data.error;
-      btn.disabled = false;
+      if (btn) { btn.textContent = "❌ " + (data.error || "エラー"); btn.disabled = false; }
+      if (area) { area.innerHTML = `<span style="color:red;">❌ ${data.error || "エラー"}</span>`; area.classList.remove("hidden"); }
     }
   } catch(e) {
-    btn.textContent = "❌ 通信エラー";
+    if (btn) { btn.textContent = "❌ 通信エラー"; btn.disabled = false; }
+  }
+}
+
+// ── revcal 結果を Excel に転記 ─────────────────────────────────
+async function readCalcResult() {
+  if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
+  const btn  = document.getElementById("btnReadCalc");
+  const area = document.getElementById("calcResult");
+  btn.textContent = "⏳ 読み取り中...";
+  btn.disabled = true;
+  area.innerHTML = '<span class="spinner"></span> シミュレータから結果を取得中...';
+  area.classList.remove("hidden");
+  try {
+    const res  = await fetch("/api/research/amazon/read-calc", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({excel_path: loadedPath})
+    });
+    const data = await res.json();
+    btn.textContent = "📋 ② 結果をExcelに転記";
     btn.disabled = false;
+
+    if (data.success) {
+      const fmt = v => v != null ? `¥${Math.round(v).toLocaleString()}` : "—";
+      const fmtP = v => v != null ? `${v.toFixed(1)}%` : "—";
+      const judgeColor = data.judgment === "◎ GO" ? "#2E7D32" : "#C62828";
+      let html = `
+        <table style="border-collapse:collapse; font-size:12px; width:100%;">
+          <tr><td style="padding:2px 8px; color:#555;">参照手数料</td>
+              <td style="padding:2px 8px; text-align:right;">${fmt(data.referral_fee)}</td></tr>
+          <tr><td style="padding:2px 8px; color:#555;">FBA配送代行手数料</td>
+              <td style="padding:2px 8px; text-align:right;">${fmt(data.fba_fee)}</td></tr>
+          <tr style="background:#FFF9C4;">
+              <td style="padding:2px 8px; font-weight:bold;">合計手数料 → Sheet1 B13</td>
+              <td style="padding:2px 8px; text-align:right; font-weight:bold;">${fmt(data.total_fee)}</td></tr>
+          ${data.b12_written ? `<tr style="background:#E8F5E9;">
+              <td style="padding:2px 8px;">販売価格 → Sheet1 B12（自動入力）</td>
+              <td style="padding:2px 8px; text-align:right;">${fmt(data.selling_price)}</td></tr>` : ""}
+          <tr><td style="padding:2px 8px; color:#555;">利益</td>
+              <td style="padding:2px 8px; text-align:right;">${fmt(data.profit)}</td></tr>
+          <tr><td style="padding:2px 8px; color:#555;">利益率</td>
+              <td style="padding:2px 8px; text-align:right;">${fmtP(data.profit_rate)}</td></tr>
+          ${data.judgment ? `<tr><td colspan="2" style="padding:4px 8px; font-weight:bold; font-size:14px; color:${judgeColor};">
+              ${data.judgment}（利益率${data.profit_rate_threshold}%以上 or 利益${data.profit_yen_threshold}円以上）</td></tr>` : ""}
+        </table>`;
+      area.innerHTML = html;
+    } else {
+      area.innerHTML = `<span style="color:red;">❌ ${data.error}</span>`;
+    }
+  } catch(e) {
+    btn.textContent = "📋 ② 結果をExcelに転記";
+    btn.disabled = false;
+    area.innerHTML = `<span style="color:red;">❌ 通信エラー</span>`;
   }
 }
 
@@ -3095,10 +3224,24 @@ def research_page():
 
 @app.route("/api/research/excel/list", methods=["POST"])
 def api_research_excel_list():
-    """指定フォルダ（省略時は OUTPUT_BASE_DIR）の xlsx ファイル一覧を返す。"""
+    """指定フォルダ（省略時は EXCEL_BASE_DIR、なければ OUTPUT_BASE_DIR）の xlsx ファイル一覧を返す。"""
     import time
     body   = request.get_json(silent=True) or {}
-    folder = (body.get("folder") or "").strip() or config.OUTPUT_BASE_DIR
+    explicit_folder = (body.get("folder") or "").strip()
+
+    if explicit_folder:
+        folder = explicit_folder
+    else:
+        # 新しい保存先 (リサーチシート) を優先、なければ旧保存先 (リサーチ結果) にフォールバック
+        excel_base = Path(config.EXCEL_BASE_DIR)
+        output_base = Path(config.OUTPUT_BASE_DIR)
+        if excel_base.exists():
+            folder = str(excel_base)
+        elif output_base.exists():
+            folder = str(output_base)
+        else:
+            folder = str(excel_base)  # 存在しなくても新しいパスを返す
+
     folder_path = Path(folder)
 
     if not folder_path.exists():
@@ -3161,10 +3304,17 @@ def api_research_excel_download():
     p = Path(path)
     if not p.exists() or not p.is_file():
         return "ファイルが見つかりません", 404
-    # パストラバーサル防止: OUTPUT_BASE_DIR 配下のみ許可
-    try:
-        p.resolve().relative_to(Path(config.OUTPUT_BASE_DIR).resolve())
-    except ValueError:
+    # パストラバーサル防止: OUTPUT_BASE_DIR または EXCEL_BASE_DIR 配下のみ許可
+    resolved = p.resolve()
+    allowed = False
+    for base_dir in [config.OUTPUT_BASE_DIR, config.EXCEL_BASE_DIR]:
+        try:
+            resolved.relative_to(Path(base_dir).resolve())
+            allowed = True
+            break
+        except ValueError:
+            pass
+    if not allowed:
         return "アクセスできないパスです", 403
     return send_file(
         str(p),
@@ -3172,6 +3322,40 @@ def api_research_excel_download():
         download_name=p.name,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+
+@app.route("/api/research/excel/delete", methods=["POST"])
+def api_research_excel_delete():
+    """Excelファイルを削除する。パストラバーサル防止あり。"""
+    body = request.get_json(silent=True) or {}
+    path = (body.get("path") or "").strip()
+    if not path:
+        return jsonify({"success": False, "error": "パスが指定されていません"}), 400
+
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        return jsonify({"success": False, "error": "ファイルが見つかりません"}), 404
+
+    # パストラバーサル防止: OUTPUT_BASE_DIR または EXCEL_BASE_DIR 配下のみ許可
+    resolved = p.resolve()
+    allowed = False
+    for base_dir in [config.OUTPUT_BASE_DIR, config.EXCEL_BASE_DIR]:
+        try:
+            resolved.relative_to(Path(base_dir).resolve())
+            allowed = True
+            break
+        except ValueError:
+            pass
+    if not allowed:
+        return jsonify({"success": False, "error": "アクセスできないパスです"}), 403
+
+    try:
+        p.unlink()
+        logger.info(f"Excel削除: {p}")
+        return jsonify({"success": True, "deleted": str(p)})
+    except Exception as e:
+        logger.error(f"Excel削除エラー: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/research/excel/load", methods=["POST"])
@@ -3253,70 +3437,82 @@ def api_research_amazon_fetch_url_append():
 @app.route("/api/research/amazon/open-calculator", methods=["POST"])
 def api_open_fba_calculator():
     """
-    FBA料金シミュレータ（非ログイン版）をChromeで開き、ASINを自動入力する。
-    既存のSelenium接続（port 9222）を使用。
+    FBA料金シミュレータをChromeで開き、ASINを自動入力する。
+    1688仕入れ値は手動入力のため、自動入力するのは ASIN のみ。
+
+    リクエスト body:
+      asin       (str, 任意) : 入力するASIN。省略時はURLを開くだけ。
+      excel_path (str, 任意) : asin省略時にSheet2の最初のASINを自動取得する。
     """
-    body = request.get_json(silent=True) or {}
-    asin = body.get("asin", "").strip()
-    if not asin:
-        return jsonify({"success": False, "error": "ASINが指定されていません"})
+    import config as _cfg
+    body       = request.get_json(silent=True) or {}
+    asin       = body.get("asin", "").strip()
+    excel_path = body.get("excel_path", "").strip()
+
+    # asin 未指定 & excel_path あり → Sheet2 から最初の ASIN を取得
+    if not asin and excel_path:
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(excel_path, read_only=True, data_only=True)
+            if "②Amazonライバル" in wb.sheetnames:
+                ws2 = wb["②Amazonライバル"]
+                for r in range(4, (ws2.max_row or 3) + 1):
+                    val = ws2.cell(r, 1).value  # A列 = ASIN
+                    if val:
+                        asin = str(val).strip()
+                        break
+            wb.close()
+        except Exception as e:
+            logger.warning(f"Excel ASIN取得失敗: {e}")
 
     try:
         from amazon_scraper import _connect_chrome
         import time
         from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
 
-        CALC_URL = "https://sellercentral.amazon.co.jp/revcal?ref=RC2nonlogin"
+        CALC_URL = _cfg.REVCAL_URL
 
         driver = _connect_chrome()
         if not driver:
             return jsonify({"success": False, "error": "Chromeに接続できません（port 9222）"})
 
-        # 既存のシミュレータタブを探す（revcal URLのみ再利用。ログインページは除外）
+        # 既存のシミュレータタブを探す（revcal URLのみ再利用）
         calc_handle = None
         for handle in driver.window_handles:
-            driver.switch_to.window(handle)
-            if "revcal" in driver.current_url:
-                calc_handle = handle
-                break
+            try:
+                driver.switch_to.window(handle)
+                if "revcal" in driver.current_url:
+                    calc_handle = handle
+                    break
+            except Exception:
+                pass
 
         if calc_handle:
-            # 既存タブに移動してURLをリロード
             driver.switch_to.window(calc_handle)
             driver.get(CALC_URL)
         else:
-            # 新規タブを開く
             driver.execute_script("window.open('');")
             calc_handle = driver.window_handles[-1]
             driver.switch_to.window(calc_handle)
             driver.get(CALC_URL)
 
-        # ページ読み込み待機（最大15秒）
         time.sleep(2)
 
-        # ASIN入力フィールドを探す
-        # Seller Central の revcal は KAT UI フレームワーク製で、
-        # <kat-input> などのカスタム要素が Shadow DOM 内に <input> を持つ。
-        # 通常の CSS セレクターは Shadow DOM を貫通できないため、
-        # JS で再帰的に Shadow Root を辿って検索する。
+        # ASIN なし → URL を開くだけ
+        if not asin:
+            logger.info("FBA料金シミュレータ: URLを開くだけ（ASIN未指定）")
+            return jsonify({
+                "success": True, "asin": "", "url": CALC_URL,
+                "message": "シミュレータを開きました。ASINと仕入れ値を手動で入力してください。"
+            })
 
+        # ── ASIN 入力欄を探す（通常セレクター → Shadow DOM 再帰） ────────
         input_el = None
-
-        # まず通常セレクターで試す（Shadow DOM 外にある場合）
-        normal_selectors = [
-            "input[id*='asin']",
-            "input[name*='asin']",
-            "input[data-testid*='asin']",
-            "input[placeholder*='ASIN']",
-            "input[placeholder*='asin']",
-            "#asin-search-input",
-        ]
-        for sel in normal_selectors:
+        for sel in ["input[id*='asin']", "input[name*='asin']",
+                    "input[placeholder*='ASIN']", "input[placeholder*='asin']",
+                    "input[data-testid*='asin']", "#asin-search-input"]:
             try:
-                els = driver.find_elements(By.CSS_SELECTOR, sel)
-                for el in els:
+                for el in driver.find_elements(By.CSS_SELECTOR, sel):
                     if el.is_displayed() and el.is_enabled():
                         input_el = el
                         break
@@ -3326,43 +3522,28 @@ def api_open_fba_calculator():
                 pass
 
         if not input_el:
-            # Shadow DOM を再帰的に検索する JS
-            # nav/header 内の入力欄はスキップ
             try:
                 input_el = driver.execute_script("""
-                    var NAV_SELECTOR =
-                        '#navbar, #navbar-main, nav, header,' +
-                        '[id*="nav-search"], [id*="topnav"],' +
-                        '[class*="navbar"], [class*="nav-bar"], [class*="nav-search"]';
-
+                    var NAV = '#navbar,#navbar-main,nav,header,[id*="nav-search"],[id*="topnav"],' +
+                              '[class*="navbar"],[class*="nav-bar"],[class*="nav-search"]';
                     function isInNav(el) {
-                        try { return !!el.closest(NAV_SELECTOR); } catch(e) { return false; }
+                        try { return !!el.closest(NAV); } catch(e) { return false; }
                     }
-
                     function findInput(root) {
-                        // 1. ASIN関連の属性を持つ input を優先検索
-                        var priority = root.querySelectorAll(
-                            'input[id*="asin"], input[name*="asin"],' +
-                            'input[placeholder*="ASIN"], input[data-testid*="asin"]'
-                        );
-                        for (var i = 0; i < priority.length; i++) {
-                            var el = priority[i];
-                            if (el.offsetParent !== null && !isInNav(el)) return el;
-                        }
-                        // 2. 表示中の text input（nav除外）
-                        var inputs = root.querySelectorAll('input[type="text"], input:not([type])');
-                        for (var j = 0; j < inputs.length; j++) {
-                            var el = inputs[j];
-                            if (el.offsetParent !== null && !isInNav(el)) return el;
-                        }
-                        // 3. Shadow DOM 内を再帰検索
+                        var pri = root.querySelectorAll(
+                            'input[id*="asin"],input[name*="asin"],' +
+                            'input[placeholder*="ASIN"],input[data-testid*="asin"]');
+                        for (var i=0;i<pri.length;i++)
+                            if (pri[i].offsetParent!==null && !isInNav(pri[i])) return pri[i];
+                        var all2 = root.querySelectorAll('input[type="text"],input:not([type])');
+                        for (var j=0;j<all2.length;j++)
+                            if (all2[j].offsetParent!==null && !isInNav(all2[j])) return all2[j];
                         var all = root.querySelectorAll('*');
-                        for (var k = 0; k < all.length; k++) {
+                        for (var k=0;k<all.length;k++)
                             if (all[k].shadowRoot) {
-                                var found = findInput(all[k].shadowRoot);
-                                if (found) return found;
+                                var f = findInput(all[k].shadowRoot);
+                                if (f) return f;
                             }
-                        }
                         return null;
                     }
                     return findInput(document);
@@ -3371,61 +3552,234 @@ def api_open_fba_calculator():
                 pass
 
         if not input_el:
+            logger.warning("FBA料金シミュレータ: ASIN入力欄が見つかりませんでした")
             return jsonify({
-                "success": False,
-                "error": "ASIN入力欄が見つかりませんでした。シミュレータページが表示されているか確認してください。"
+                "success": True, "asin": asin, "url": CALC_URL,
+                "warning": "シミュレータを開きましたが、ASIN入力欄が見つかりませんでした。手動で入力してください。"
             })
 
-        # 入力フィールドをクリアして ASIN を入力
-        driver.execute_script("arguments[0].value = '';", input_el)
-        driver.execute_script("arguments[0].click();", input_el)
+        # ASIN 入力
+        driver.execute_script("arguments[0].value='';arguments[0].click();", input_el)
         time.sleep(0.3)
         input_el.clear()
         input_el.send_keys(asin)
         time.sleep(0.3)
 
-        # 送信ボタンを探してクリック（Shadow DOM 内も検索）
+        # 送信ボタンをクリック（Shadow DOM 対応）
         submitted = False
         try:
             submitted = driver.execute_script("""
-                function findButton(root) {
-                    // type=submit または search/submit を含む id/class のボタン
+                function findBtn(root) {
                     var btns = root.querySelectorAll(
-                        'button[type="submit"], input[type="submit"],' +
-                        'button[id*="search"], button[id*="submit"],' +
-                        '.kat-button--primary, button.a-button-primary,' +
-                        'kat-button[variant="primary"]'
-                    );
-                    for (var i = 0; i < btns.length; i++) {
-                        if (btns[i].offsetParent !== null) {
-                            btns[i].click();
-                            return true;
-                        }
-                    }
-                    // Shadow DOM 内を再帰検索
+                        'button[type="submit"],input[type="submit"],' +
+                        'button[id*="search"],button[id*="submit"],' +
+                        '.kat-button--primary,button.a-button-primary,kat-button[variant="primary"]');
+                    for (var i=0;i<btns.length;i++)
+                        if (btns[i].offsetParent!==null) { btns[i].click(); return true; }
                     var all = root.querySelectorAll('*');
-                    for (var k = 0; k < all.length; k++) {
-                        if (all[k].shadowRoot) {
-                            if (findButton(all[k].shadowRoot)) return true;
-                        }
-                    }
+                    for (var k=0;k<all.length;k++)
+                        if (all[k].shadowRoot && findBtn(all[k].shadowRoot)) return true;
                     return false;
                 }
-                return findButton(document);
+                return findBtn(document);
             """)
         except Exception:
             pass
 
         if not submitted:
-            # ボタンが見つからない場合は Enter キーで送信
             from selenium.webdriver.common.keys import Keys
             input_el.send_keys(Keys.RETURN)
 
-        logger.info(f"FBA料金シミュレータ: ASIN={asin} 入力完了")
+        logger.info(f"FBA料金シミュレータ: ASIN={asin} 入力完了（仕入れ値は手動入力）")
         return jsonify({"success": True, "asin": asin, "url": CALC_URL})
 
     except Exception as e:
         logger.error(f"FBA料金シミュレータ起動エラー: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/research/amazon/read-calc", methods=["POST"])
+def api_read_fba_calc():
+    """
+    現在開いている revcal タブから計算結果をスクレイピングし、
+    Excelの Sheet1 に転記する。
+
+    リクエスト body:
+      excel_path (str, 必須) : 書き込み先 Excel のフルパス
+
+    書き込み先:
+      Sheet1 B12 = 販売価格（空の場合のみ上書き）
+      Sheet1 B13 = FBA手数料合計（常に上書き）
+    """
+    import config as _cfg
+    body       = request.get_json(silent=True) or {}
+    excel_path = body.get("excel_path", "").strip()
+
+    if not excel_path:
+        return jsonify({"success": False, "error": "Excelパスが指定されていません"})
+
+    try:
+        from amazon_scraper import _connect_chrome
+        from pathlib import Path
+        import time
+
+        driver = _connect_chrome()
+        if not driver:
+            return jsonify({"success": False, "error": "Chromeに接続できません（port 9222）"})
+
+        # revcal タブに切り替え
+        calc_handle = None
+        for handle in driver.window_handles:
+            try:
+                driver.switch_to.window(handle)
+                if "revcal" in driver.current_url or "revcal" in driver.current_url.lower():
+                    calc_handle = handle
+                    break
+            except Exception:
+                pass
+
+        if not calc_handle:
+            return jsonify({
+                "success": False,
+                "error": "FBA料金シミュレータのタブが見つかりません。先に「シミュレータを開く」ボタンを押してください。"
+            })
+
+        driver.switch_to.window(calc_handle)
+        time.sleep(1)
+
+        # ── ページ全体のテキストを取得（Shadow DOM も含む） ────────────
+        page_text = driver.execute_script("""
+            function collectText(root) {
+                var texts = [];
+                var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+                var node;
+                while (node = walker.nextNode()) {
+                    var t = node.textContent.trim();
+                    if (t) texts.push(t);
+                }
+                root.querySelectorAll('*').forEach(function(el) {
+                    if (el.shadowRoot) texts = texts.concat(collectText(el.shadowRoot));
+                });
+                return texts;
+            }
+            return collectText(document).join('\\n');
+        """) or ""
+
+        # ── 数値抽出ヘルパー ──────────────────────────────────────────
+        import re
+
+        def extract_yen(pattern, text):
+            """¥X,XXX 形式の数値を抽出して int を返す。"""
+            m = re.search(pattern, text, re.DOTALL)
+            if m:
+                raw = re.sub(r'[¥,\s円]', '', m.group(1))
+                try:
+                    return int(float(raw))
+                except (ValueError, TypeError):
+                    pass
+            return None
+
+        def extract_pct(pattern, text):
+            """XX.X% 形式の数値を抽出して float を返す。"""
+            m = re.search(pattern, text, re.DOTALL)
+            if m:
+                try:
+                    return float(m.group(1))
+                except (ValueError, TypeError):
+                    pass
+            return None
+
+        # ── 各値を抽出 ────────────────────────────────────────────────
+        # ページ上の数値は「ラベル」の直後（または近傍）にある
+        selling_price = extract_yen(
+            r'(?:商品売上|販売価格|売上)[^\d¥\-]*[\-]?¥?\s*([\d,]+)', page_text
+        )
+        referral_fee = extract_yen(
+            r'参照手数料[^\d¥\-]*[\-]?¥?\s*([\d,]+)', page_text
+        )
+        fba_fee = extract_yen(
+            r'FBA配送代行手数料[^\d¥\-]*[\-]?¥?\s*([\d,]+)', page_text
+        )
+        # 合計手数料は「合計」または「手数料合計」など
+        total_fee = extract_yen(
+            r'(?:合計手数料|手数料合計|合計)[^\d¥\-\n]*[\-]?¥?\s*([\d,]+)', page_text
+        )
+        # 合計が取れなければ referral + fba で計算
+        if total_fee is None and referral_fee is not None and fba_fee is not None:
+            total_fee = referral_fee + fba_fee
+
+        profit = extract_yen(
+            r'利益[^\d¥\-\n%]*[\-]?¥?\s*([\d,]+)', page_text
+        )
+        profit_rate = extract_pct(
+            r'利益率[^\d%\n]*(\d+\.?\d*)\s*%', page_text
+        )
+
+        if total_fee is None:
+            return jsonify({
+                "success": False,
+                "error": (
+                    "FBA手数料が取得できませんでした。\n"
+                    "シミュレータでASINを検索して結果が表示された状態で再試行してください。"
+                ),
+                "page_sample": page_text[:300]   # デバッグ用
+            })
+
+        # ── Excel に書き込む ──────────────────────────────────────────
+        from openpyxl import load_workbook
+        from openpyxl.styles import Font, PatternFill
+
+        path = Path(excel_path)
+        if not path.exists():
+            return jsonify({"success": False, "error": f"ファイルが見つかりません: {excel_path}"})
+
+        wb = load_workbook(str(path))
+        SHEET1 = "①概要"
+        if SHEET1 not in wb.sheetnames:
+            return jsonify({"success": False, "error": "シート「①概要」が見つかりません"})
+
+        ws1 = wb[SHEET1]
+
+        # B12: 販売価格（空の場合のみ書き込む）
+        b12_written = False
+        if selling_price and not ws1["B12"].value:
+            ws1["B12"].value = selling_price
+            b12_written = True
+
+        # B13: FBA手数料合計（常に上書き）
+        ws1["B13"].value = total_fee
+        # セルを黄色でハイライト（転記済みマーク）
+        ws1["B13"].fill = PatternFill("solid", fgColor="FFF2CC")
+
+        wb.save(str(path))
+
+        # ── 仕入れ判断 ────────────────────────────────────────────────
+        judgment = None
+        if profit is not None and profit_rate is not None:
+            if profit_rate >= _cfg.PROFIT_RATE_THRESHOLD or profit >= _cfg.PROFIT_YEN_THRESHOLD:
+                judgment = "◎ GO"
+            else:
+                judgment = "× 再検討"
+
+        logger.info(
+            f"revcal転記完了: FBA={total_fee}円 / 利益={profit}円 / 利益率={profit_rate}%"
+        )
+        return jsonify({
+            "success":       True,
+            "selling_price": selling_price,
+            "referral_fee":  referral_fee,
+            "fba_fee":       fba_fee,
+            "total_fee":     total_fee,
+            "profit":        profit,
+            "profit_rate":   profit_rate,
+            "judgment":      judgment,
+            "b12_written":   b12_written,
+            "profit_rate_threshold": _cfg.PROFIT_RATE_THRESHOLD,
+            "profit_yen_threshold":  _cfg.PROFIT_YEN_THRESHOLD,
+        })
+
+    except Exception as e:
+        logger.error(f"revcal転記エラー: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)})
 
 

@@ -160,6 +160,11 @@ _GDRIVE_ROOT = _find_gdrive_aucfan_root() or os.path.expanduser(
 _GDRIVE_BASE = os.path.join(_GDRIVE_ROOT, "リサーチ結果")
 OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
 
+# Excel リサーチシートの保存先（スクレイピングデータと分離）
+# AucFanToolData/リサーチシート/ にExcelファイルをまとめる。
+# スクレイピング画像（リサーチ結果/）と同階層に置くことで誤削除を防ぐ。
+EXCEL_BASE_DIR = os.getenv("EXCEL_BASE_DIR", os.path.join(_GDRIVE_ROOT, "リサーチシート"))
+
 # マスターセラーリストも Google Drive に保存（2拠点で共有）。
 # Google Drive 未接続時はローカルの data/sellers_master.json にフォールバック。
 _GDRIVE_SELLERS = os.path.join(_GDRIVE_ROOT, "sellers_master.json")
@@ -216,6 +221,22 @@ GEMINI_ENABLED = os.getenv("GEMINI_ENABLED", "true").lower() == "true"
 # 単価(元) × CNY_TO_JPY_RATE = 原価(円)
 # 送料・関税・代行手数料等を含む独自係数。.env で変更可能。
 CNY_TO_JPY_RATE = int(os.getenv("CNY_TO_JPY_RATE", "35"))
+
+# ─────────────────────────────────────────────
+# Amazon FBA 料金シミュレータ URL
+# ─────────────────────────────────────────────
+# URLが変更された場合は .env に REVCAL_URL=新しいURL を追記して対応。
+REVCAL_URL = os.getenv(
+    "REVCAL_URL",
+    "https://sellercentral.amazon.co.jp/revcal?ref=RC2nonlogin"
+)
+
+# ─────────────────────────────────────────────
+# 仕入れ判断基準
+# ─────────────────────────────────────────────
+# 利益率(%) と 利益(円) のどちらかを満たせば ◎ GO
+PROFIT_RATE_THRESHOLD = float(os.getenv("PROFIT_RATE_THRESHOLD", "25"))   # %
+PROFIT_YEN_THRESHOLD  = int(os.getenv("PROFIT_YEN_THRESHOLD",   "450"))   # 円
 
 # Flask 設定
 # ─────────────────────────────────────────────

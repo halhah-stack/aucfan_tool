@@ -320,11 +320,12 @@ def append_1688(excel_path: str, data: dict) -> dict:
     Sheet4（④1688仕入れ）と Sheet5（⑤1688テキスト）に
     1688データを追記して上書き保存する。
 
-    Sheet4 列構成 (A〜R / 18列):
+    Sheet4 列構成 (A〜S / 19列):
       A=仕入れ選択（手入力）  B=ショップ名  C=ショップURL  D=信頼度  E=入驻年数
-      F=商品名（中）  G=商品名（日・手入力）  H=バリアント（中）  I=バリアント（日・手入力）
-      J=在庫数  K=単価(CNY)  L=MOQ  M=仕入総額(CNY)=K×L  N=仕入総額(JPY)=K×L×rate
-      O=原価/個(JPY)=K×rate  P=利益(JPY)  Q=利益率  R=判定
+      F=商品名（中）  G=商品名（日・翻訳自動）  H=バリアント（中）  I=バリアント（日・翻訳自動）
+      J=在庫数  K=単価(CNY)  L=係数(CNY→JPY)  M=MOQ
+      N=仕入総額(CNY)=K×M  O=仕入総額(JPY)=K×M×L  P=原価/個(JPY)=K×L
+      Q=利益(JPY)=①概要!B12-①概要!B13-P  R=利益率  S=判定
 
     data キー:
       title, shop_name, shop_url, shop_rating, shop_repeat_rate, shop_years,
@@ -440,11 +441,11 @@ def append_1688(excel_path: str, data: dict) -> dict:
                 ws4.cell(r, 16).value = f"=K{r}*L{r}"
                 # Q=利益(JPY) = 販売価格 - FBA手数料 - 原価/個
                 ws4.cell(r, 17).value = (
-                    f'=IFERROR(Sheet1!B12-Sheet1!B13-P{r},"")'
+                    f"=IFERROR('{SHEET_OVERVIEW}'!B12-'{SHEET_OVERVIEW}'!B13-P{r},\"\")"
                 )
                 # R=利益率
                 ws4.cell(r, 18).value = (
-                    f'=IFERROR(TEXT(Q{r}/Sheet1!B12,"0.0%"),"")'
+                    f"=IFERROR(TEXT(Q{r}/'{SHEET_OVERVIEW}'!B12,\"0.0%\"),\"\")"
                 )
                 # S=判定
                 ws4.cell(r, 19).value = (
