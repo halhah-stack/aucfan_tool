@@ -133,15 +133,15 @@ def _find_gdrive_aucfan_root() -> str:
     """AucFanToolData フォルダのパスを自動検出して返す。
     見つからない場合は None を返す。
     検出順序:
-      1. ミラーリングモード: ~/マイドライブ*/AucFanToolData（リサーチ結果が存在するもの優先）
+      1. ミラーリングモード: ~/マイドライブ*/AucFanToolData（AucFanToolData が存在すれば有効）
       2. ストリーミングモード: ~/Library/CloudStorage/GoogleDrive-*/マイドライブ/AucFanToolData
     """
     home = Path.home()
     # 1. ミラーリングモード（全角カッコ付き含む）
-    # リサーチ結果フォルダが存在するパスのみ有効と判断する
+    # AucFanToolData フォルダが存在すれば有効（リサーチ結果の有無は問わない）
     for candidate in sorted(home.glob("マイドライブ*")):
         p = candidate / "AucFanToolData"
-        if p.exists() and (p / "リサーチ結果").exists():
+        if p.exists():
             return str(p)
     # 2. ストリーミングモード
     cloud = home / "Library" / "CloudStorage"
@@ -153,9 +153,7 @@ def _find_gdrive_aucfan_root() -> str:
     return None
 
 _GDRIVE_ROOT = _find_gdrive_aucfan_root() or os.path.expanduser(
-    "~/Library/CloudStorage/"
-    "GoogleDrive-shinozakistore@gmail.com/"
-    "マイドライブ/AucFanToolData"
+    "~/マイドライブ（shinozakistore@gmail.com）/AucFanToolData"
 )
 _GDRIVE_BASE = os.path.join(_GDRIVE_ROOT, "リサーチ結果")
 OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
