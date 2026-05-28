@@ -353,24 +353,92 @@ SELLERS_MASTER_PATH=/Users/shino/Library/CloudStorage/GoogleDrive-shinozakistore
 
 ## 次回セッションの作業候補
 
+### ⚡ セッション開始直後にやること（必ずここから）
+
+```bash
+# 1. 最新コードを取得
+cd ~/Downloads/aucfan_tool
+git pull
+
+# 2. アプリ起動
+./start.sh
+# → Chrome（ポート9222）とFlask（ポート5001）が起動する
+# → ブラウザで http://localhost:5001 が開く
 ```
-1. ASIN自動入力の動作確認（revcalページで実際に入力されるかテスト）
-   - KeyboardEvent方式（char-by-char）で実装済み
-   - 守谷Macでの実動作が未確認のため、十王Macで要テスト
 
-2. read-calc（FBA結果転記）の実動作テスト
-   - revcalで計算後「📥 計算結果をExcelに転記」ボタン押下
-   - Sheet1 B12/B13 に正しく書き込まれるか確認
+---
 
-3. 実動テスト（全修正の統合確認）
-   └── ./start.sh 後に /research で動作確認
-   チェック項目:
-     - Excelファイルがリサーチシートフォルダに保存されるか
-     - ファイル一覧に表示されるか
-     - 削除ボタンで削除できるか
-     - FBAシミュレータが新タブで開くか
+### ✅ チェック1: Excel作成・保存先確認（所要2分）
 
-4. Claude Excel アドイン連携（ユーザー要望・詳細未定）
+**操作手順:**
+1. AucFanリサーチツール（localhost:5001）でAucFanの商品カードを表示
+2. 商品カードの「📗 Excel」ボタンをクリック
+3. 成功メッセージが出たら以下を確認
+
+**確認コマンド:**
+```bash
+# Excelが正しい場所（リサーチシート）に保存されているか確認
+find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサーチシート/ -name "*.xlsx" | head -5
+```
+
+**期待結果:** `~/マイドライブ（shinozakistore@gmail.com）/AucFanToolData/リサーチシート/商品名/商品名_リサーチ.xlsx` が存在する  
+**NG例:** `~/マイドライブ/AucFanToolData/...`（メールなしフォルダ）に保存されていたら `.env` の `EXCEL_BASE_DIR` を確認
+
+---
+
+### ✅ チェック2: ファイル一覧・削除ボタン確認（所要2分）
+
+**操作手順:**
+1. ブラウザで `http://localhost:5001/research` を開く
+2. Excelファイルが一覧に表示されるか確認
+3. ファイルをクリックして選択できるか確認
+4. 🗑ボタンが表示されるか確認（クリックはテスト用ファイルで）
+
+**NG時の確認ポイント:**
+- ファイルが表示されない → `EXCEL_BASE_DIR` のパスが存在するか確認
+- 選択できない → ブラウザのコンソール（F12）でJSエラーを確認してClaudeに貼る
+
+---
+
+### ✅ チェック3: FBAシミュレータ新タブ確認（所要3分）
+
+**前提:** SellerCentralに手動でログインしておく（2段階認証あり）
+
+**操作手順:**
+1. `/research` でExcelファイルを選択（ASINが入っているもの）
+2. 「💴 FBAシミュレータで開く」ボタンをクリック
+3. **新タブ**でrevcalページが開くか確認
+4. ASINが入力欄に自動入力されているか確認
+
+**NG例と対処:**
+- 同じタブで開く → `app.py` の `api_open_fba_calculator()` の `switch_to.new_window` を確認
+- ASINが入力されない → ブラウザのコンソールでエラー確認 or Seleniumログを確認してClaudeに貼る
+
+---
+
+### ✅ チェック4: FBA結果Excel転記確認（所要5分）
+
+**前提:** チェック3でrevcalが開いてASINが入力済みの状態
+
+**操作手順:**
+1. revcalの原価欄に金額を手入力（例: 500）
+2. 計算を実行してFBA手数料・販売価格が表示されるのを確認
+3. `/research` ページに戻り「📥 計算結果をExcelに転記」ボタンをクリック
+4. Excelを開いて `①概要` シートの B12・B13 を確認
+
+**期待結果:**
+- B12: 販売価格（円）
+- B13: FBA手数料（円）
+- Sheet4のQ列・R列に利益・利益率が計算されている
+
+**NG時:** エラーメッセージをそのままClaudeに貼る
+
+---
+
+### 📋 未着手タスク
+
+```
+- Claude Excel アドイン連携（ユーザー要望・詳細未定）
 ```
 
 ---
