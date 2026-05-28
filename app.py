@@ -2837,9 +2837,9 @@ async function refreshList() {
 
   div.innerHTML = '<div class="file-list">' +
     data.files.map(f => {
-      const safePath = f.path.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const enc = encodeURIComponent(f.path);
       return `
-      <div class="file-item" onclick="selectFile('${safePath}', this)"
+      <div class="file-item" data-path="${enc}" onclick="selectFile(decodeURIComponent(this.dataset.path), this)"
            title="${f.path}">
         <div class="file-icon">📄</div>
         <div class="file-info">
@@ -2850,7 +2850,7 @@ async function refreshList() {
           ? `<div class="file-badge">Amazon ${f.amazon_count}件</div>`
           : ''}
         <button class="btn-delete-file" title="削除"
-                onclick="event.stopPropagation(); deleteFile('${safePath}')">🗑</button>
+                onclick="event.stopPropagation(); deleteFile(decodeURIComponent(this.parentElement.dataset.path))">🗑</button>
       </div>`;
     }).join("") +
     '</div>';
@@ -3488,15 +3488,15 @@ def api_open_fba_calculator():
                 pass
 
         if calc_handle:
+            # 既存タブをリロード
             driver.switch_to.window(calc_handle)
             driver.get(CALC_URL)
         else:
-            driver.execute_script("window.open('');")
-            calc_handle = driver.window_handles[-1]
-            driver.switch_to.window(calc_handle)
+            # Selenium で新タブを開いてからURLに移動（window.open より確実）
+            driver.switch_to.new_window("tab")
             driver.get(CALC_URL)
 
-        time.sleep(2)
+        time.sleep(3)
 
         # ASIN なし → URL を開くだけ
         if not asin:
@@ -3558,12 +3558,24 @@ def api_open_fba_calculator():
                 "warning": "シミュレータを開きましたが、ASIN入力欄が見つかりませんでした。手動で入力してください。"
             })
 
-        # ASIN 入力
-        driver.execute_script("arguments[0].value='';arguments[0].click();", input_el)
-        time.sleep(0.3)
-        input_el.clear()
-        input_el.send_keys(asin)
-        time.sleep(0.3)
+        # ASIN 入力（1文字ずつKeyboardEventを発火してKATフレームワークに認識させる）
+        driver.execute_script("""
+            var el = arguments[0], val = arguments[1];
+            el.scrollIntoView({block:'center'});
+            el.click();
+            el.focus();
+            el.value = '';
+            for (var i = 0; i < val.length; i++) {
+                var ch = val[i];
+                el.dispatchEvent(new KeyboardEvent('keydown',  {key:ch, bubbles:true}));
+                el.dispatchEvent(new KeyboardEvent('keypress', {key:ch, bubbles:true}));
+                el.value += ch;
+                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new KeyboardEvent('keyup',    {key:ch, bubbles:true}));
+            }
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+        """, input_el, asin)
+        time.sleep(0.5)
 
         # 送信ボタンをクリック（Shadow DOM 対応）
         submitted = False
@@ -3587,8 +3599,13 @@ def api_open_fba_calculator():
             pass
 
         if not submitted:
-            from selenium.webdriver.common.keys import Keys
-            input_el.send_keys(Keys.RETURN)
+            # フォールバック: ActionChains でクリックしてから Enter
+            try:
+                from selenium.webdriver.common.action_chains import ActionChains
+                from selenium.webdriver.common.keys import Keys
+                ActionChains(driver).move_to_element(input_el).click().send_keys(Keys.RETURN).perform()
+            except Exception:
+                pass
 
         logger.info(f"FBA料金シミュレータ: ASIN={asin} 入力完了（仕入れ値は手動入力）")
         return jsonify({"success": True, "asin": asin, "url": CALC_URL})
