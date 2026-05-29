@@ -186,21 +186,23 @@ def api_start():
 
         _stop_event.clear()
 
-        def run_scraper():
-            scraper = AucFanScraper(
+        from services.scraping import run_keyword_scraping
+        _scraper_thread = threading.Thread(
+            target=run_keyword_scraping,
+            kwargs=dict(
                 data_manager=_data_manager,
                 image_processor=_image_processor,
                 gemini_client=_gemini_client,
                 stop_event=_stop_event,
                 login_check_event=_login_check_event,
-            )
-            scraper.run(resume=resume, start_url=start_url or None)
-            # STEP1完了後にCSV・HTML・PDFを自動保存
-            final_status = _data_manager.get_progress().get("status", "done")
-            if final_status in ("done", "stopped"):
-                _save_export_files(_data_manager, out_dir)
-
-        _scraper_thread = threading.Thread(target=run_scraper, daemon=True, name="scraper")
+                resume=resume,
+                start_url=start_url,
+                out_dir=out_dir,
+                save_export_files_fn=_save_export_files,
+            ),
+            daemon=True,
+            name="scraper",
+        )
         _scraper_thread.start()
 
         logger.info(f"スクレイピング開始: keyword={keyword}, session={session_id}, start_url={start_url or '（現在タブ）'}")
