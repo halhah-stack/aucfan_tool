@@ -457,8 +457,21 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 | 高 | `app.py` の `/research` HTMLを `templates/research.html` に切り出し | 小 | JSバグが減る・デバッグしやすくなる | ✅ 完了（2026-05-29） |
 | 高 | `_parse_item_card()` の除外判定を別メソッドに切り出し | 小 | 除外ルール追加が楽になる | ✅ 完了（2026-05-29） |
 | 中 | `app.py` のAPIルートを `routes/` フォルダに分割 | 中 | 3300行のファイルが管理しやすくなる | ✅ 完了（2026-05-29 research系のみ） |
-| 中 | `app.py` のビジネスロジックを `services/` に分離 | 中 | テストが書きやすくなる | 未着手 |
+| 中 | `app.py` のビジネスロジックを `services/` に分離 | 中 | テストが書きやすくなる | 🔄 進行中 |
 | 低 | グローバル状態（`_seller_state` 等）をクラスに封じ込める | 中 | 並列処理に備えた設計 | 未着手 |
+
+#### services/ 分離の方針（確定）
+
+| ファイル | 役割 | 状態 |
+|---|---|---|
+| `services/export.py` | HTML/PDF/Excel/CSV生成ロジック | ✅ 完了（2026-05-30） |
+| `services/session.py` | セッション一覧・パース（純粋関数） | ✅ 完了（2026-05-30） |
+| `services/scraping.py` | `run_keyword_scraping()` スレッドターゲット | 🔜 次のタスク |
+
+**スクレイピングルート（api_start/stop/resume/progress）の方針：**
+- `api_stop`, `api_resume`, `api_progress` → **app.pyに残す**（薄いグルー関数のため分離不要）
+- `api_start` の `run_scraper()` 内部ロジック → `services/scraping.py` に切り出す
+- 将来のスクレイピング機能追加時：ビジネスロジックは `services/scraping.py`、ルートは `app.py`
 
 **進め方の原則**: 1タスクずつ → 動作確認 → commitの繰り返し。まとめてやらない。
 
@@ -514,6 +527,8 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] `_parse_item_card()` の除外判定を `_is_excluded()` に切り出し（2026-05-29）
 - [x] researchルートを `routes/research.py`（Blueprint）に分割（2026-05-29）・app.py 648行削減
 - [x] `routes/research.py` の不足インポート修正（Path, os, json, datetime, openpyxl）（2026-05-30）
+- [x] `services/export.py` 作成（HTML/PDF/Excel/CSV生成ロジック分離・app.py 456行削減）（2026-05-30）
+- [x] `services/session.py` 作成（セッション管理純粋関数・パラメーター注入方式）（2026-05-30）
 
 ---
 

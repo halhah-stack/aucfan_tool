@@ -62,6 +62,16 @@ aucfan_tool/
 │                           #   Blueprint名: research / インポート: Path, os, json, datetime, openpyxl 等
 │                           #   新しいルートを追加する場合はここに @research_bp.route() を追記する
 │
+├── services/               # ビジネスロジック層（Flask非依存・単体テスト可能）
+│   ├── __init__.py
+│   ├── export.py           # HTML/PDF/Excel/CSV生成ロジック（app.pyから分離済み）
+│   │                       #   _generate_export_html / _save_export_files / _build_export_html 等
+│   ├── session.py          # セッション管理純粋関数（app.pyから分離済み）
+│   │                       #   parse_session_info / list_sessions（running_names注入方式）
+│   └── scraping.py         # スクレイピングスレッドターゲット（🔜 作成予定）
+│                           #   run_keyword_scraping() を定義予定
+│                           #   【方針】api_stop/resume/progressはapp.pyに残す（薄いグルーのため）
+│
 ├── templates/
 │   ├── index.html          # シングルページUI（Jinja2テンプレート）
 │   └── research.html       # リサーチ追記ツールUI（app.pyのインライン文字列から分離済み）
