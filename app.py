@@ -84,38 +84,22 @@ _lock = threading.Lock()
 _login_check_event = threading.Event()
 
 # ─── STEP 2: セラーリサーチ グローバル状態 ───
-# SellerAnalyzer スレッドと Flask ルートハンドラが共有する辞書。
-# 操作は _seller_lock でスレッドセーフに保護する。
-_seller_state = {
-    "sellers": [],        # [{"seller_id": str, "seller_url": str, "status": "pending"|"running"|"done"|"error"}]
-    "current_index": -1,  # 現在処理中のセラーインデックス（-1 = 未開始）
-    "running": False,     # SellerAnalyzer スレッドが実行中かどうか
-    "phase": "idle",      # "idle"|"scraping_list"|"grouping"|"vision_check"|"done"|"stopped"|"error"
-    "stop_event": None,   # threading.Event（実行中のみ有効、停止リクエスト用）
-    "thread": None,       # SellerAnalyzer スレッド
-    "dm": None,           # 実行中の DataManager（/api/seller/status でのポーリング用）
-    "session_id": None,   # 完了セッション ID（履歴表示用）
-    "output_dir": None,   # 完了セッション出力ディレクトリ（Path）
-    "source_keyword": "", # 元になった STEP1 キーワード名（セッション履歴の表示に使用）
-}
-_seller_lock = threading.Lock()
+# SellerState クラスに移行済み（services/state.py）
+# _seller["key"] 形式で従来どおり辞書アクセス可能
+# _seller.lock でロック取得（旧: _seller_lock）
+from services.state import SellerState
+_seller = SellerState()
+# 後方互換エイリアス（既存コードが _seller_state を参照している箇所用）
+_seller_state = _seller
+_seller_lock = _seller.lock
 
 # ─── STEP 3: マスターセラーリサーチ グローバル状態 ───
-# _seller_state と同じ構造。SellersMaster からセラーを自動取得して
-# SellerAnalyzer を順次実行する。
-_master_state = {
-    "running": False,
-    "phase": "idle",       # "idle"|"scraping_list"|"grouping"|"vision_check"|"done"|"stopped"|"error"
-    "stop_event": None,    # threading.Event（実行中のみ有効）
-    "thread": None,        # SellerAnalyzer スレッド
-    "dm": None,            # 実行中の DataManager
-    "session_id": None,
-    "output_dir": None,
-    "total": 0,
-    "done": 0,
-    "current_seller": "",
-}
-_master_lock = threading.Lock()
+# MasterState クラスに移行済み（services/state.py）
+from services.state import MasterState
+_master = MasterState()
+# 後方互換エイリアス
+_master_state = _master
+_master_lock = _master.lock
 _sellers_master = SellersMaster()   # シングルトン
 
 
