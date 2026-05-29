@@ -308,6 +308,7 @@ driver.execute_script("""
 
 | 変数 | デフォルト値 | 説明 |
 |---|---|---|
+| `GDRIVE_EMAIL` | （空） | **GDriveアカウントのメールアドレス（.envで設定）** |
 | `OUTPUT_BASE_DIR` | GDrive: `マイドライブ/AucFanToolData/リサーチ結果` | スクレイピングデータ保存先 |
 | `EXCEL_BASE_DIR` | GDrive: `マイドライブ/AucFanToolData/リサーチシート` | **Excel保存先（スクレイピングと分離）** |
 | `CNY_TO_JPY_RATE` | `35` | 1688価格→円換算係数 |
@@ -435,11 +436,30 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 
 ---
 
-### 📋 未着手タスク
+---
 
-```
-- Claude Excel アドイン連携（ユーザー要望・詳細未定）
-```
+### 🔧 今後のリファクタリング候補（優先度順）
+
+**リスクなし（コメント・設定変更のみ）**
+- [x] `GDRIVE_EMAIL` を `.env` に移行（2026-05-29完了）
+- [ ] `seller_analyzer.py` と `scraper.py` の継承関係をコメントで明示
+- [ ] `.env.example` の追加項目を他Macへのセットアップ手順に反映
+
+**リスク小（メソッド切り出し・テスト後にcommit）**
+- [ ] `scraper.py` `_parse_item_card()` の除外判定ロジックを別メソッドに切り出し
+- [ ] `scraper.py` `_parse_item_card()` の画像DL・pHash処理を別メソッドに切り出し
+- [ ] `scraper.py` `_scrape_list_pages()` のページネーション処理を別メソッドに切り出し
+
+**リスク中（構造変更・慎重に）**
+- [ ] `app.py` の `/research` HTMLをインライン文字列から `templates/research.html` に切り出し（Jinja2）
+- [ ] `app.py` のAPIルートを `routes/` フォルダに分割
+- [ ] `app.py` のビジネスロジックを `services/` に分離
+- [ ] グローバル状態（`_seller_state` 等）をクラスに封じ込める
+
+**機能追加（将来）**
+- [ ] SP-API申請 → 価格・FBA手数料をAPI取得（Seleniumスクレイピング不要に）
+- [ ] リポジトリをprivateに変更することを検討
+- [ ] Claude Excel アドイン連携（詳細未定）
 
 ---
 

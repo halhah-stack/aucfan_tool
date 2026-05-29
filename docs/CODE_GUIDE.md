@@ -396,14 +396,23 @@ def _find_gdrive_aucfan_root() -> str:
                 return str(p)
     return None
 
-_GDRIVE_ROOT = _find_gdrive_aucfan_root() or os.path.expanduser(
-    "~/Library/CloudStorage/GoogleDrive-shinozakistore@gmail.com/マイドライブ/AucFanToolData"
+GDRIVE_EMAIL = os.getenv("GDRIVE_EMAIL", "")   # ← .envで設定（メールアドレスをコードに書かない）
+
+_gdrive_fallback = (
+    f"~/マイドライブ（{GDRIVE_EMAIL}）/AucFanToolData"
+    if GDRIVE_EMAIL
+    else "~/AucFanToolData"
 )
+_GDRIVE_ROOT = _find_gdrive_aucfan_root() or os.path.expanduser(_gdrive_fallback)
 _GDRIVE_BASE = os.path.join(_GDRIVE_ROOT, "リサーチ結果")
 OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
 ```
 
 `.env` に `OUTPUT_BASE_DIR` を明示した場合はそちらが優先（スタンドアロン運用時に `OUTPUT_BASE_DIR=リサーチ結果` と指定するケースなど）。
+
+**`GDRIVE_EMAIL` について（セキュリティ対応）**:
+
+メールアドレスをコードにハードコードするとpublic GitHubリポジトリに露出するため、`.env` で管理する方式に変更した。`_find_gdrive_aucfan_root()` が自動検出できた場合はこの値は使われない。自動検出に失敗したときのフォールバックパス構築にのみ使用される。`.env.example` には `GDRIVE_EMAIL=your_google_account@gmail.com` として記載されている。
 
 **3つの動作モード**:
 
