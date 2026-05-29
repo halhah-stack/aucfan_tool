@@ -59,6 +59,8 @@ aucfan_tool/
 ├── routes/                 # Flask Blueprint（APIルート分割）
 │   ├── __init__.py
 │   └── research.py         # /research・/api/research/* ルート（app.pyから分離済み）
+│                           #   Blueprint名: research / インポート: Path, os, json, datetime, openpyxl 等
+│                           #   新しいルートを追加する場合はここに @research_bp.route() を追記する
 │
 ├── templates/
 │   ├── index.html          # シングルページUI（Jinja2テンプレート）

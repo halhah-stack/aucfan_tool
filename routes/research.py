@@ -4,11 +4,17 @@ routes/research.py — リサーチ追記ツール関連APIルート
 /research および /api/research/* エンドポイントを Flask Blueprint として定義。
 app.py から切り出し済み（2026-05-29）。
 """
+import os
+import re
+import json
 import threading
 import logging
+import datetime as dt
+from pathlib import Path
 
 import config
 from flask import Blueprint, jsonify, render_template, request
+from openpyxl import load_workbook
 
 logger = logging.getLogger(__name__)
 

@@ -21,18 +21,18 @@
 | Excel保存先フォルダ自動作成（リサーチシートフォルダ） | `app.py` `/api/export/excel/<group_id>` | 完成 |
 | ExcelへのAmazonデータ追記 | `excel_append.py` `append_amazon()` | 完成 |
 | Amazon全画像ダウンロード | `excel_append.py` `download_all_images()` | 完成 |
-| /researchページ（Excelファイル一覧・選択） | `app.py` `_RESEARCH_HTML` | 完成 |
-| /researchページ（Excelファイル削除ボタン） | `app.py` `/api/research/excel/delete` | 完成（2026-05-29追加） |
-| /researchページ（Amazon URL追記） | `app.py` `/api/research/amazon/fetch-url-append` | 完成 |
-| /researchページ（Excelダウンロード） | `app.py` `/api/research/excel/download` | 完成 |
-| FBA料金シミュレータ自動入力（新タブで開く） | `app.py` `/api/research/amazon/open-calculator` | 完成（2026-05-29修正） |
-| FBA利益計算結果をExcelに転記 | `app.py` `/api/research/amazon/read-calc` | 完成（2026-05-29追加） |
-| Amazon取得中の進捗表示 | `app.py` `_research_fetch_status` + `/api/research/amazon/status` | 完成 |
+| /researchページ（Excelファイル一覧・選択） | `routes/research.py` `/api/research/excel/list` | 完成 |
+| /researchページ（Excelファイル削除ボタン） | `routes/research.py` `/api/research/excel/delete` | 完成 |
+| /researchページ（Amazon URL追記） | `routes/research.py` `/api/research/amazon/fetch-url-append` | 完成 |
+| /researchページ（Excelダウンロード） | `routes/research.py` `/api/research/excel/download` | 完成 |
+| FBA料金シミュレータ自動入力（新タブで開く） | `routes/research.py` `/api/research/amazon/open-calculator` | 完成 |
+| FBA利益計算結果をExcelに転記 | `routes/research.py` `/api/research/amazon/read-calc` | 完成 |
+| Amazon取得中の進捗表示 | `routes/research.py` `_research_fetch_status` + `/api/research/amazon/status` | 完成 |
 | メインアプリからリサーチツールを開くボタン | `templates/index.html` | 完成 |
 | 1688商品ページ取得（URL指定） | `scraper_1688.py` `fetch_1688_from_url()` | 完成 |
 | Excelへの1688データ追記 | `excel_append.py` `append_1688()` | 完成（Sheet4/5 + 画像保存） |
-| /researchページ（1688 URL追記） | `app.py` `/api/research/1688/fetch-url-append` | 完成 |
-| 1688取得中の進捗表示 | `app.py` `_research_1688_fetch_status` + `/api/research/1688/status` | 完成 |
+| /researchページ（1688 URL追記） | `routes/research.py` `/api/research/1688/fetch-url-append` | 完成 |
+| 1688取得中の進捗表示 | `routes/research.py` `_research_1688_fetch_status` + `/api/research/1688/status` | 完成 |
 
 ### ❌ 未実装のもの
 
@@ -150,8 +150,14 @@ ASINごとにセパレーター行 ＋ 6行:
 
 ```
 aucfan_tool/
-├── app.py                    Flaskアプリ（ポート5001）・全APIエンドポイント
-│                             /research ページのHTMLもインライン文字列で含む
+├── app.py                    Flaskアプリ（ポート5001）・メインAPIエンドポイント
+│                             /research ルートは routes/research.py に分離済み
+├── routes/
+│   ├── __init__.py
+│   └── research.py           /research・/api/research/* の全ルート（Blueprint）
+├── templates/
+│   ├── index.html            メインUI
+│   └── research.html         リサーチ追記ツールUI（app.pyから分離済み）
 ├── config.py                 設定（CHROME_DEBUG_PORT, OUTPUT_BASE_DIR, EXCEL_BASE_DIR等）
 ├── .env                      環境変数オーバーライド（守谷Mac専用パスを記載）
 ├── data_manager.py           データ管理（items.json / amazon_data.json）
@@ -507,6 +513,7 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] `/research` HTMLを `templates/research.html` に切り出し（2026-05-29）
 - [x] `_parse_item_card()` の除外判定を `_is_excluded()` に切り出し（2026-05-29）
 - [x] researchルートを `routes/research.py`（Blueprint）に分割（2026-05-29）・app.py 648行削減
+- [x] `routes/research.py` の不足インポート修正（Path, os, json, datetime, openpyxl）（2026-05-30）
 
 ---
 
