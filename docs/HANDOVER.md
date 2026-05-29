@@ -450,7 +450,7 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 |---|---|---|---|---|
 | 高 | `app.py` の `/research` HTMLを `templates/research.html` に切り出し | 小 | JSバグが減る・デバッグしやすくなる | ✅ 完了（2026-05-29） |
 | 高 | `_parse_item_card()` の除外判定を別メソッドに切り出し | 小 | 除外ルール追加が楽になる | ✅ 完了（2026-05-29） |
-| 中 | `app.py` のAPIルートを `routes/` フォルダに分割 | 中 | 3300行のファイルが管理しやすくなる | 🔜 次のタスク |
+| 中 | `app.py` のAPIルートを `routes/` フォルダに分割 | 中 | 3300行のファイルが管理しやすくなる | ✅ 完了（2026-05-29 research系のみ） |
 | 中 | `app.py` のビジネスロジックを `services/` に分離 | 中 | テストが書きやすくなる | 未着手 |
 | 低 | グローバル状態（`_seller_state` 等）をクラスに封じ込める | 中 | 並列処理に備えた設計 | 未着手 |
 
@@ -506,6 +506,7 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] FBA結果をExcelに転記する機能（2026-05-29）
 - [x] `/research` HTMLを `templates/research.html` に切り出し（2026-05-29）
 - [x] `_parse_item_card()` の除外判定を `_is_excluded()` に切り出し（2026-05-29）
+- [x] researchルートを `routes/research.py`（Blueprint）に分割（2026-05-29）・app.py 648行削減
 
 ---
 

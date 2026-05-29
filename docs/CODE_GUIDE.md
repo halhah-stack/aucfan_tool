@@ -56,8 +56,13 @@ aucfan_tool/
 │                           #   自動更新されるが、期限切れ・削除時は再度 setup_gdrive_auth.py を実行。
 ├── requirements.txt        # Python依存ライブラリ
 │
+├── routes/                 # Flask Blueprint（APIルート分割）
+│   ├── __init__.py
+│   └── research.py         # /research・/api/research/* ルート（app.pyから分離済み）
+│
 ├── templates/
-│   └── index.html          # シングルページUI（Jinja2テンプレート）
+│   ├── index.html          # シングルページUI（Jinja2テンプレート）
+│   └── research.html       # リサーチ追記ツールUI（app.pyのインライン文字列から分離済み）
 │
 ├── static/
 │   ├── app.js              # フロントエンドロジック（バニラJS）
