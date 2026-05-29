@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>リサーチ追記ツール</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "BIZ UDGothic", "Hiragino Sans", sans-serif;
+         background: #f0f2f5; color: #333; min-height: 100vh; }
+
+  .header { background: #1F4E79; color: white; padding: 14px 20px;
+            display: flex; align-items: center; justify-content: space-between; }
+  .header-title { font-size: 16px; font-weight: bold; }
+  .header-sub   { font-size: 11px; opacity: 0.75; margin-top: 2px; }
+  .back-link { color: rgba(255,255,255,0.8); font-size: 12px; text-decoration: none;
+               border: 1px solid rgba(255,255,255,0.4); padding: 4px 10px; border-radius: 4px; }
+  .back-link:hover { background: rgba(255,255,255,0.15); }
+
+  .main { max-width: 820px; margin: 20px auto; padding: 0 14px; }
+
+  .card { background: white; border-radius: 10px; padding: 18px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 14px; }
+  .card-title { font-size: 13px; font-weight: bold; color: #555;
+                border-left: 4px solid #1F4E79; padding-left: 9px;
+                margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+
+  /* ファイル一覧 */
+  .folder-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .folder-input { flex: 1; padding: 8px 10px; border: 2px solid #ddd;
+                  border-radius: 6px; font-size: 12px; font-family: monospace; }
+  .folder-input:focus { outline: none; border-color: #1F4E79; }
+
+  .file-list { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+  .file-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+               border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.15s; }
+  .file-item:last-child { border-bottom: none; }
+  .file-item:hover { background: #EBF3FB; }
+  .file-item.selected { background: #D6E8F7; border-left: 3px solid #1F4E79; }
+  .file-icon { font-size: 20px; flex-shrink: 0; }
+  .file-info { flex: 1; min-width: 0; }
+  .file-name { font-size: 13px; font-weight: bold; color: #1F4E79;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-meta { font-size: 11px; color: #888; margin-top: 2px; }
+  .file-badge { font-size: 10px; background: #C55A11; color: white;
+                padding: 1px 6px; border-radius: 8px; white-space: nowrap; }
+  .file-empty { padding: 20px; text-align: center; color: #aaa; font-size: 13px; }
+  .btn-delete-file { flex-shrink: 0; background: none; border: none; font-size: 15px;
+                     cursor: pointer; padding: 2px 4px; border-radius: 4px;
+                     color: #aaa; line-height: 1; transition: color 0.15s, background 0.15s; }
+  .btn-delete-file:hover { color: #dc2626; background: #fef2f2; }
+
+  /* 読み込み済みExcel表示 */
+  .excel-loaded { background: #EBF3FB; border-radius: 8px; padding: 12px 14px; }
+  .excel-loaded-name { font-size: 14px; font-weight: bold; color: #1F4E79; }
+  .excel-loaded-meta { font-size: 12px; color: #666; margin-top: 3px; }
+  .sheet-tags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 7px; }
+  .sheet-tag  { background: #1F4E79; color: white; font-size: 10px;
+                padding: 2px 7px; border-radius: 10px; }
+
+  .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px;
+         font-weight: bold; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+  .btn:hover:not(:disabled) { filter: brightness(0.9); }
+  .btn:active:not(:disabled) { transform: scale(0.97); }
+  .btn-blue   { background: #1F4E79; color: white; }
+  .btn-orange { background: #C55A11; color: white; }
+  .btn-calc   { background: #6B4C9A; color: white; font-size: 12px; padding: 6px 12px; }
+  .btn-sm     { padding: 5px 10px; font-size: 11px; }
+  .btn-gray   { background: #ccc; color: #777; cursor: not-allowed; }
+
+  .result { margin-top: 10px; padding: 11px 13px; border-radius: 7px;
+            font-size: 12px; line-height: 1.6; }
+  .result.success { background: #E9F7EF; border: 1px solid #27AE60; color: #1a6b3a; }
+  .result.error   { background: #FDE8E8; border: 1px solid #E74C3C; color: #a11a1a; }
+  .result.info    { background: #EBF5FB; border: 1px solid #2980B9; color: #1a4a6b; }
+
+  .badge { display: inline-block; background: #C55A11; color: white;
+           font-size: 10px; padding: 1px 7px; border-radius: 9px; margin-left: 6px; }
+
+  .spinner { display: inline-block; width: 14px; height: 14px;
+             border: 2px solid rgba(255,255,255,0.4); border-top-color: white;
+             border-radius: 50%; animation: spin 0.7s linear infinite;
+             margin-right: 5px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .hint { font-size: 11px; color: #999; margin-top: 8px; line-height: 1.6; }
+  .dim { opacity: 0.45; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="header-title">📊 リサーチ追記ツール</div>
+    <div class="header-sub">Excel に Amazon / 1688 データを追記する</div>
+  </div>
+  <a href="/" class="back-link">← AucFanアプリ</a>
+</div>
+
+<div class="main">
+
+  <!-- ① Excel選択 -->
+  <div class="card">
+    <div class="card-title">
+      ① Excel ファイルを選択
+      <button class="btn btn-blue btn-sm" onclick="refreshList()" style="margin-left:auto;">🔄 更新</button>
+    </div>
+
+    <!-- フォルダ変更（詳細） -->
+    <details style="margin-bottom:10px;">
+      <summary style="font-size:11px; color:#888; cursor:pointer;">📁 フォルダを変更する</summary>
+      <div style="margin-top:8px; display:flex; gap:8px;">
+        <input id="folderPath" class="folder-input" type="text" placeholder="フォルダパス">
+        <button class="btn btn-blue btn-sm" onclick="refreshList()">スキャン</button>
+      </div>
+      <p class="hint">空白のままにすると保存先（Google Drive/AucFanToolData/リサーチシート）を自動で探します。</p>
+    </details>
+
+    <!-- ファイル一覧 -->
+    <div id="fileList">
+      <div class="file-empty">読み込み中...</div>
+    </div>
+
+    <!-- 読み込み済み表示 -->
+    <div id="excelLoaded" class="hidden" style="margin-top:12px;"></div>
+  </div>
+
+  <!-- ② Amazon取得 -->
+  <div class="card">
+    <div class="card-title">
+      ② Amazon ライバルデータ取得
+      <span id="amazonBadge" class="badge hidden">0件</span>
+    </div>
+
+    <!-- URL入力エリア -->
+    <div style="display:flex; gap:8px; align-items:flex-start; margin-bottom:10px;">
+      <div style="flex:1;">
+        <input id="amazonUrl" class="folder-input" type="text"
+               placeholder="Amazon URL を貼り付け　例: https://amzn.asia/d/07AQHZFg　または https://www.amazon.co.jp/dp/B0XXXX"
+               style="width:100%; padding:9px 11px; font-size:13px;">
+        <p class="hint" style="margin-top:5px;">
+          短縮URL（amzn.asia/d/...）・通常URL どちらでも対応。複数ライバルは1件ずつ貼り付けて「取得→追記」を繰り返してください。
+        </p>
+      </div>
+      <button id="btnAmazonUrl" class="btn btn-orange" onclick="fetchAmazonUrl()" style="margin-top:1px;">
+        🔍 取得 → 追記
+      </button>
+    </div>
+
+    <div id="amazonResult" class="hidden result"></div>
+
+    <!-- FBA料金シミュレータ -->
+    <div style="margin-top:10px;">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+        <button id="btnOpenCalc" class="btn btn-calc"
+                onclick="openCalculator(null)"
+                style="font-size:13px; padding:8px 14px;">
+          💴 ① シミュレータを開く
+        </button>
+        <button id="btnReadCalc" class="btn btn-calc"
+                onclick="readCalcResult()"
+                style="font-size:13px; padding:8px 14px; background:#2E7D32;">
+          📋 ② 結果をExcelに転記
+        </button>
+      </div>
+      <p class="hint" style="margin-top:6px; font-size:11px;">
+        ① ASINを自動入力してシミュレータを開く → 仕入れ値（1688価格）を手動入力 →
+        ② FBA手数料・利益・利益率をExcel（①概要 B13）に転記<br>
+        判断基準: 利益率 25% 以上 または 利益 450円 以上 → ◎ GO
+      </p>
+    </div>
+    <div id="calcResult" class="hidden result" style="margin-top:6px; font-size:12px;"></div>
+  </div>
+
+  <!-- ③ 1688仕入れデータ取得 -->
+  <div class="card">
+    <div class="card-title">
+      ③ 1688 仕入れデータ取得
+      <span id="1688Badge" class="badge hidden">0件</span>
+    </div>
+
+    <!-- URL入力エリア -->
+    <div style="display:flex; gap:8px; align-items:flex-start; margin-bottom:10px;">
+      <div style="flex:1;">
+        <input id="url1688" class="folder-input" type="text"
+               placeholder="1688 商品URL を貼り付け　例: https://detail.1688.com/offer/XXXXXXXXXX.html"
+               style="width:100%; padding:9px 11px; font-size:13px;">
+        <p class="hint" style="margin-top:5px;">
+          1688の商品ページURLを貼り付けて「取得→追記」を押してください。Sheet4/5 に追記されます。
+        </p>
+      </div>
+      <button id="btn1688Url" class="btn btn-orange" onclick="fetch1688Url()" style="margin-top:1px;">
+        🔍 取得 → 追記
+      </button>
+    </div>
+
+    <div id="result1688" class="hidden result"></div>
+  </div>
+
+</div>
+
+<script>
+let loadedPath  = "";
+let amazonCount = 0;
+
+// ── ファイル一覧 ────────────────────────────────────────────
+async function refreshList() {
+  const folder = document.getElementById("folderPath").value.trim();
+  const div    = document.getElementById("fileList");
+  div.innerHTML = '<div class="file-empty">スキャン中...</div>';
+
+  const res  = await fetch("/api/research/excel/list", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({folder: folder})
+  });
+  const data = await res.json();
+
+  if (!data.success || !data.files.length) {
+    const msg = data.error || "Excelファイルが見つかりません";
+    div.innerHTML = `<div class="file-empty">📭 ${msg}</div>`;
+    return;
+  }
+
+  // フォルダパスを表示
+  document.getElementById("folderPath").placeholder = data.folder;
+
+  div.innerHTML = '<div class="file-list">' +
+    data.files.map(f => {
+      const enc = encodeURIComponent(f.path);
+      return `
+      <div class="file-item" data-path="${enc}" onclick="selectFile(decodeURIComponent(this.dataset.path), this)"
+           title="${f.path}">
+        <div class="file-icon">📄</div>
+        <div class="file-info">
+          <div class="file-name">${f.name}</div>
+          <div class="file-meta">${f.modified} &nbsp;·&nbsp; ${f.size}</div>
+        </div>
+        ${f.amazon_count > 0
+          ? `<div class="file-badge">Amazon ${f.amazon_count}件</div>`
+          : ''}
+        <button class="btn-delete-file" title="削除"
+                onclick="event.stopPropagation(); deleteFile(decodeURIComponent(this.parentElement.dataset.path))">🗑</button>
+      </div>`;
+    }).join("") +
+    '</div>';
+}
+
+async function selectFile(path, el) {
+  // 選択ハイライト
+  document.querySelectorAll(".file-item").forEach(e => e.classList.remove("selected"));
+  el.classList.add("selected");
+
+  // Excel情報取得
+  const res  = await fetch("/api/research/excel/load", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({path: path})
+  });
+  const data = await res.json();
+  const div  = document.getElementById("excelLoaded");
+
+  if (data.success) {
+    loadedPath  = path;
+    amazonCount = data.amazon_count || 0;
+    updateBadge();
+    const warn = data.is_research ? "" :
+      '<p style="color:#C55A11;font-size:11px;margin-top:4px;">⚠ 5シート構成ではない可能性があります</p>';
+    div.innerHTML = `
+      <div class="excel-loaded">
+        <div class="excel-loaded-name">✅ ${data.filename}</div>
+        <div class="excel-loaded-meta">
+          ${data.title || "（タイトル未取得）"}
+          &nbsp;·&nbsp; Amazon <strong>${amazonCount}件</strong>取得済み
+        </div>
+        <div class="sheet-tags">
+          ${(data.sheets||[]).map(s=>`<span class="sheet-tag">${s}</span>`).join("")}
+        </div>
+        ${warn}
+        <div style="margin-top:8px;">
+          <a class="btn btn-blue btn-sm" href="/api/research/excel/download?path=${encodeURIComponent(path)}"
+             download style="text-decoration:none;">
+            ⬇ Excelをダウンロード
+          </a>
+        </div>
+      </div>`;
+    div.classList.remove("hidden");
+  } else {
+    div.innerHTML = `<div class="result error">❌ ${data.error}</div>`;
+    div.classList.remove("hidden");
+  }
+}
+
+function updateBadge() {
+  const b = document.getElementById("amazonBadge");
+  b.textContent = amazonCount + "件";
+  b.classList.remove("hidden");
+}
+
+async function deleteFile(path) {
+  const name = path.split("/").pop();
+  if (!confirm(`「${name}」を削除しますか？\n\nこの操作は取り消せません。`)) return;
+
+  try {
+    const res  = await fetch("/api/research/excel/delete", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: path})
+    });
+    const data = await res.json();
+    if (data.success) {
+      // 選択中ファイルが削除された場合は表示をリセット
+      if (loadedPath === path) {
+        loadedPath = "";
+        amazonCount = 0;
+        document.getElementById("excelLoaded").classList.add("hidden");
+        document.getElementById("amazonBadge").classList.add("hidden");
+      }
+      refreshList();
+    } else {
+      alert("削除に失敗しました: " + (data.error || "不明なエラー"));
+    }
+  } catch (e) {
+    alert("削除に失敗しました: " + e.message);
+  }
+}
+
+// ── Amazon URL取得 ──────────────────────────────────────────
+let _fetchStartTime = null;
+let _fetchPollTimer = null;
+
+function _startProgressPolling(div) {
+  _fetchStartTime = Date.now();
+  _fetchPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch("/api/research/amazon/status");
+      const s = await r.json();
+      if (!s.running) return;
+      const sec = Math.floor((Date.now() - _fetchStartTime) / 1000);
+      div.innerHTML =
+        `<span class="spinner"></span>` +
+        `<strong>${s.step}</strong><br>` +
+        `<small style="color:#555;">経過 ${sec} 秒 ／ Amazonページを閉じないでください</small>`;
+    } catch(e) {}
+  }, 1000);
+}
+
+function _stopProgressPolling() {
+  if (_fetchPollTimer) { clearInterval(_fetchPollTimer); _fetchPollTimer = null; }
+}
+
+async function fetchAmazonUrl() {
+  if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
+
+  const url = document.getElementById("amazonUrl").value.trim();
+  if (!url) { alert("Amazon の URL を入力してください"); return; }
+
+  const btn = document.getElementById("btnAmazonUrl");
+  const div = document.getElementById("amazonResult");
+  btn.innerHTML = '<span class="spinner"></span>取得中...';
+  btn.disabled  = true;
+  div.className = "result info";
+  div.innerHTML =
+    `<span class="spinner"></span><strong>① URLを解析中...</strong><br>` +
+    `<small style="color:#555;">しばらくお待ちください（10〜30秒）</small>`;
+  div.classList.remove("hidden");
+  _startProgressPolling(div);
+
+  try {
+    const res  = await fetch("/api/research/amazon/fetch-url-append", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: loadedPath, url: url})
+    });
+    const data = await res.json();
+    _stopProgressPolling();
+
+    if (data.success) {
+      amazonCount++;
+      updateBadge();
+      document.querySelectorAll(".file-item.selected .file-badge").forEach(b => {
+        b.textContent = "Amazon " + amazonCount + "件";
+      });
+      // URLをクリア
+      document.getElementById("amazonUrl").value = "";
+      div.className = "result success";
+      const imgInfo = data.image_count > 0
+        ? `🖼 画像 ${data.image_count}枚保存 (amazon/${data.asin}/)`
+        : (data.has_image ? "🖼 画像あり" : "");
+      div.innerHTML =
+        `✅ Sheet2 の ${data.row} 行目に追記 ${imgInfo}<br>` +
+        `<strong>ASIN:</strong> ${data.asin} &nbsp; <strong>価格:</strong> ${data.price}<br>` +
+        `<span style="color:#555;">${data.title}</span><br>` +
+        `<button class="btn btn-calc" onclick="openCalculator('${data.asin}')" style="margin-top:8px;">` +
+        `💴 FBA料金シミュレータで開く</button>`;
+    } else if (data.duplicate) {
+      // 重複ASIN
+      div.className = "result info";
+      div.innerHTML =
+        `⚠️ <strong>ASIN ${data.asin}</strong> は既に ${data.row} 行目に追記済みです。<br>` +
+        `<small style="color:#555;">別のライバルのURLを入力してください。</small><br>` +
+        `<button class="btn btn-calc" onclick="openCalculator('${data.asin}')" style="margin-top:8px;">` +
+        `💴 FBA料金シミュレータで開く</button>`;
+    } else {
+      div.className = "result error";
+      div.textContent = "❌ " + data.error;
+    }
+  } catch(e) {
+    _stopProgressPolling();
+    div.className = "result error";
+    div.textContent = "❌ 通信エラー: " + e.message;
+  } finally {
+    _stopProgressPolling();
+    btn.innerHTML = "🔍 取得 → 追記";
+    btn.disabled  = false;
+  }
+}
+
+// ── FBA料金シミュレータ ────────────────────────────────────────
+// asin: 指定 ASIN（省略 or null 可）。省略時は loadedPath から自動取得を試みる。
+async function openCalculator(asin) {
+  const btn = event ? event.target : document.getElementById("btnOpenCalc");
+  if (btn) { btn.textContent = "⏳ 起動中..."; btn.disabled = true; }
+  try {
+    const payload = {};
+    if (asin)       payload.asin       = asin;
+    if (loadedPath) payload.excel_path = loadedPath;
+
+    const res  = await fetch("/api/research/amazon/open-calculator", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    const area = document.getElementById("calcResult");
+    if (data.success) {
+      const btnMsg = data.asin
+        ? `✅ ASIN: ${data.asin} を入力しました`
+        : "✅ シミュレータを開きました";
+      if (btn) btn.textContent = btnMsg;
+      if (area && data.warning) {
+        area.innerHTML = `<span style="color:#C55A11;">⚠ ${data.warning}</span>`;
+        area.classList.remove("hidden");
+      }
+      if (area && data.asin && !data.warning) {
+        area.innerHTML =
+          `<span style="color:#2E7D32;">ASIN <strong>${data.asin}</strong> を入力しました。` +
+          `仕入れ値（1688価格）をシミュレータに手動入力してください。</span>`;
+        area.classList.remove("hidden");
+      }
+    } else {
+      if (btn) { btn.textContent = "❌ " + (data.error || "エラー"); btn.disabled = false; }
+      if (area) { area.innerHTML = `<span style="color:red;">❌ ${data.error || "エラー"}</span>`; area.classList.remove("hidden"); }
+    }
+  } catch(e) {
+    if (btn) { btn.textContent = "❌ 通信エラー"; btn.disabled = false; }
+  }
+}
+
+// ── revcal 結果を Excel に転記 ─────────────────────────────────
+async function readCalcResult() {
+  if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
+  const btn  = document.getElementById("btnReadCalc");
+  const area = document.getElementById("calcResult");
+  btn.textContent = "⏳ 読み取り中...";
+  btn.disabled = true;
+  area.innerHTML = '<span class="spinner"></span> シミュレータから結果を取得中...';
+  area.classList.remove("hidden");
+  try {
+    const res  = await fetch("/api/research/amazon/read-calc", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({excel_path: loadedPath})
+    });
+    const data = await res.json();
+    btn.textContent = "📋 ② 結果をExcelに転記";
+    btn.disabled = false;
+
+    if (data.success) {
+      const fmt = v => v != null ? `¥${Math.round(v).toLocaleString()}` : "—";
+      const fmtP = v => v != null ? `${v.toFixed(1)}%` : "—";
+      const judgeColor = data.judgment === "◎ GO" ? "#2E7D32" : "#C62828";
+      let html = `
+        <table style="border-collapse:collapse; font-size:12px; width:100%;">
+          <tr><td style="padding:2px 8px; color:#555;">参照手数料</td>
+              <td style="padding:2px 8px; text-align:right;">${fmt(data.referral_fee)}</td></tr>
+          <tr><td style="padding:2px 8px; color:#555;">FBA配送代行手数料</td>
+              <td style="padding:2px 8px; text-align:right;">${fmt(data.fba_fee)}</td></tr>
+          <tr style="background:#FFF9C4;">
+              <td style="padding:2px 8px; font-weight:bold;">合計手数料 → Sheet1 B13</td>
+              <td style="padding:2px 8px; text-align:right; font-weight:bold;">${fmt(data.total_fee)}</td></tr>
+          ${data.b12_written ? `<tr style="background:#E8F5E9;">
+              <td style="padding:2px 8px;">販売価格 → Sheet1 B12（自動入力）</td>
+              <td style="padding:2px 8px; text-align:right;">${fmt(data.selling_price)}</td></tr>` : ""}
+          <tr><td style="padding:2px 8px; color:#555;">利益</td>
+              <td style="padding:2px 8px; text-align:right;">${fmt(data.profit)}</td></tr>
+          <tr><td style="padding:2px 8px; color:#555;">利益率</td>
+              <td style="padding:2px 8px; text-align:right;">${fmtP(data.profit_rate)}</td></tr>
+          ${data.judgment ? `<tr><td colspan="2" style="padding:4px 8px; font-weight:bold; font-size:14px; color:${judgeColor};">
+              ${data.judgment}（利益率${data.profit_rate_threshold}%以上 or 利益${data.profit_yen_threshold}円以上）</td></tr>` : ""}
+        </table>`;
+      area.innerHTML = html;
+    } else {
+      area.innerHTML = `<span style="color:red;">❌ ${data.error}</span>`;
+    }
+  } catch(e) {
+    btn.textContent = "📋 ② 結果をExcelに転記";
+    btn.disabled = false;
+    area.innerHTML = `<span style="color:red;">❌ 通信エラー</span>`;
+  }
+}
+
+// ── 1688 URL取得 ──────────────────────────────────────────────
+let _1688FetchStartTime = null;
+let _1688FetchPollTimer = null;
+let fetch1688Count = 0;
+
+function _start1688ProgressPolling(div) {
+  _1688FetchStartTime = Date.now();
+  _1688FetchPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch("/api/research/1688/status");
+      const s = await r.json();
+      if (!s.running) return;
+      const sec = Math.floor((Date.now() - _1688FetchStartTime) / 1000);
+      div.innerHTML =
+        `<span class="spinner"></span>` +
+        `<strong>${s.step}</strong><br>` +
+        `<small style="color:#555;">経過 ${sec} 秒 ／ 1688ページを閉じないでください</small>`;
+    } catch(e) {}
+  }, 1000);
+}
+
+function _stop1688ProgressPolling() {
+  if (_1688FetchPollTimer) { clearInterval(_1688FetchPollTimer); _1688FetchPollTimer = null; }
+}
+
+async function fetch1688Url() {
+  if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
+
+  const url = document.getElementById("url1688").value.trim();
+  if (!url) { alert("1688 の URL を入力してください"); return; }
+
+  const btn = document.getElementById("btn1688Url");
+  const div = document.getElementById("result1688");
+  btn.innerHTML = '<span class="spinner"></span>取得中...';
+  btn.disabled  = true;
+  div.className = "result info";
+  div.innerHTML =
+    `<span class="spinner"></span><strong>① URLを解析中...</strong><br>` +
+    `<small style="color:#555;">しばらくお待ちください（10〜30秒）</small>`;
+  div.classList.remove("hidden");
+  _start1688ProgressPolling(div);
+
+  try {
+    const res  = await fetch("/api/research/1688/fetch-url-append", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: loadedPath, url: url})
+    });
+    const data = await res.json();
+    _stop1688ProgressPolling();
+
+    if (data.success) {
+      fetch1688Count++;
+      document.getElementById("url1688").value = "";
+      const badge = document.getElementById("1688Badge");
+      badge.textContent = fetch1688Count + "件";
+      badge.classList.remove("hidden");
+      div.className = "result success";
+      const imgInfo = data.image_count > 0
+        ? `🖼 画像 ${data.image_count}枚保存 (1688/)` : "";
+      div.innerHTML =
+        `✅ Sheet4 の ${data.row} 行目から追記（${data.variant_count}バリアント）${imgInfo}<br>` +
+        `<strong>ショップ:</strong> ${data.shop_name || "不明"} &nbsp;` +
+        `<strong>最低単価:</strong> ${data.min_price} 元<br>` +
+        `<span style="color:#555;">${data.title}</span>`;
+    } else {
+      div.className = "result error";
+      div.textContent = "❌ " + data.error;
+    }
+  } catch(e) {
+    _stop1688ProgressPolling();
+    div.className = "result error";
+    div.textContent = "❌ 通信エラー: " + e.message;
+  } finally {
+    _stop1688ProgressPolling();
+    btn.innerHTML = "🔍 取得 → 追記";
+    btn.disabled  = false;
+  }
+}
+
+// Enterキーで送信
+document.addEventListener("DOMContentLoaded", () => {
+  const inp = document.getElementById("amazonUrl");
+  if (inp) inp.addEventListener("keydown", e => { if (e.key === "Enter") fetchAmazonUrl(); });
+  const inp2 = document.getElementById("url1688");
+  if (inp2) inp2.addEventListener("keydown", e => { if (e.key === "Enter") fetch1688Url(); });
+});
+
+// 起動時にファイル一覧を読み込む
+refreshList();
+</script>
+</body>
+</html>
