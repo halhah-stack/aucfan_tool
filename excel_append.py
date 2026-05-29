@@ -15,6 +15,7 @@ import logging
 import re
 import shutil
 import tempfile
+import threading
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -27,6 +28,27 @@ SHEET_AMAZON_LIST  = "②Amazonライバル"
 SHEET_AMAZON_TEXT  = "③Amazonテキスト"
 SHEET_1688_LIST    = "④1688仕入れ"
 SHEET_1688_TEXT    = "⑤1688テキスト"
+
+# ── 行高・列幅定数（magic number撲滅） ──────────────────────────────────
+ROW_HEIGHT_AMAZON_IMAGE = 90   # Sheet2 画像行の高さ（ピクセル）
+ROW_HEIGHT_1688_DATA    = 34   # Sheet4 データ行の高さ
+ROW_HEIGHT_TEXT_MIN     = 18   # テキストシート最小行高
+ROW_HEIGHT_TEXT_MAX_AM  = 150  # Sheet3 テキスト最大行高
+ROW_HEIGHT_TEXT_MAX_16  = 120  # Sheet5 テキスト最大行高
+ROW_HEIGHT_SEPARATOR    = 6    # セパレーター行の高さ
+ROW_HEIGHT_HEADER       = 22   # ヘッダー行の高さ
+
+# ── ファイル単位の書き込みロック ─────────────────────────────────────────
+# 同じExcelファイルへの同時書き込みを防ぐ（パス→Lockのマッピング）
+_file_locks: dict[str, threading.Lock] = {}
+_file_locks_meta = threading.Lock()
+
+def _get_file_lock(path: str) -> threading.Lock:
+    """パスに対応するLockを取得（なければ作成）する。"""
+    with _file_locks_meta:
+        if path not in _file_locks:
+            _file_locks[path] = threading.Lock()
+        return _file_locks[path]
 
 IMAGE_FOLDER_NAME  = "amazon"   # Excelと同フォルダ内の amazon/ サブフォルダ
 
@@ -184,7 +206,7 @@ def append_amazon(excel_path: str, data: dict) -> dict:
                 next_row = r
                 break
 
-        ws2.row_dimensions[next_row].height = 90
+        ws2.row_dimensions[next_row].height = ROW_HEIGHT_AMAZON_IMAGE
 
         input_url = data.get("input_url", "") or ""
         resolved_url = data.get("url", "") or ""
@@ -261,7 +283,7 @@ def append_amazon(excel_path: str, data: dict) -> dict:
                 start = cur_max + 2 if cur_max > 2 else 4
 
                 def _write(r, label, value):
-                    height = max(18, min(150, len(str(value)) // 4 + 18))
+                    height = max(ROW_HEIGHT_TEXT_MIN, min(ROW_HEIGHT_TEXT_MAX_AM, len(str(value)) // 4 + 18))
                     ws3.row_dimensions[r].height = height
                     c_label = ws3.cell(r, 1)
                     c_label.value = label
@@ -275,14 +297,14 @@ def append_amazon(excel_path: str, data: dict) -> dict:
                     c_val.border = border
 
                 # セパレーター
-                ws3.row_dimensions[start - 1].height = 6
+                ws3.row_dimensions[start - 1].height = ROW_HEIGHT_SEPARATOR
                 ws3.merge_cells(f"A{start}:B{start}")
                 sep = ws3.cell(start, 1)
                 sep.value = f"── {data.get('asin', '')}  {data.get('title', '')[:50]} ──"
                 sep.font = Font(name="BIZ UDGothic", bold=True, color="FFFFFF")
                 sep.fill = PatternFill("solid", fgColor="375623")
                 sep.alignment = Alignment(horizontal="left", vertical="center")
-                ws3.row_dimensions[start].height = 22
+                ws3.row_dimensions[start].height = ROW_HEIGHT_HEADER
 
                 _write(start + 1, "タイトル",   data.get("title", ""))
                 _write(start + 2, "価格",        data.get("price", ""))
@@ -293,8 +315,9 @@ def append_amazon(excel_path: str, data: dict) -> dict:
                 )
                 _write(start + 5, "仕様・詳細",  specs_text)
 
-            # 保存（tmpフォルダ削除前に必ず実行）
-            wb.save(str(path))
+            # 保存（tmpフォルダ削除前に必ず実行・ファイルロック取得）
+            with _get_file_lock(str(path.resolve())):
+                wb.save(str(path))
 
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -488,7 +511,7 @@ def append_1688(excel_path: str, data: dict) -> dict:
                 ws4.cell(next_row, 3).hyperlink = shop_url
 
             written_rows.append(next_row)
-            ws4.row_dimensions[next_row].height = 34
+            ws4.row_dimensions[next_row].height = ROW_HEIGHT_1688_DATA
             next_row += 1
 
         # ── Sheet5: ⑤1688テキスト ──────────────────────────────────
@@ -498,7 +521,7 @@ def append_1688(excel_path: str, data: dict) -> dict:
             start5  = cur_max + 2 if cur_max > 2 else 4
 
             def _write5(r, label, value):
-                height = max(18, min(120, len(str(value)) // 4 + 18))
+                height = max(ROW_HEIGHT_TEXT_MIN, min(ROW_HEIGHT_TEXT_MAX_16, len(str(value)) // 4 + 18))
                 ws5.row_dimensions[r].height = height
                 c_l = ws5.cell(r, 1)
                 c_l.value = label
@@ -518,7 +541,7 @@ def append_1688(excel_path: str, data: dict) -> dict:
             sep.font  = Font(name="BIZ UDGothic", bold=True, color="FFFFFF")
             sep.fill  = PatternFill("solid", fgColor="375623")
             sep.alignment = Alignment(horizontal="left", vertical="center")
-            ws5.row_dimensions[start5].height = 22
+            ws5.row_dimensions[start5].height = ROW_HEIGHT_HEADER
 
             _write5(start5 + 1, "商品名",      title)
             _write5(start5 + 2, "ショップ名",  shop_name)
@@ -551,7 +574,8 @@ def append_1688(excel_path: str, data: dict) -> dict:
             saved = download_all_images(image_urls, img_dir, shop_key)
             saved_count = len(saved)
 
-        wb.save(str(path))
+        with _get_file_lock(str(path.resolve())):
+            wb.save(str(path))
 
         return {
             "success":       True,

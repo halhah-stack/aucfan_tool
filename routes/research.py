@@ -77,21 +77,24 @@ def api_research_excel_list():
         xlsx_paths = list(folder_path.glob("*.xlsx")) + list(folder_path.glob("*/*.xlsx"))
         xlsx_paths = sorted(xlsx_paths, key=lambda x: x.stat().st_mtime, reverse=True)
 
+        # quick=true の場合はAmazon件数カウントをスキップして高速化
+        quick_mode = body.get("quick", False)
+
         for p in xlsx_paths:
             stat = p.stat()
-            # Amazon取得済み件数を簡易チェック
+            # Amazon取得済み件数を簡易チェック（quickモード時はスキップ）
             amazon_count = 0
-            try:
-                from openpyxl import load_workbook
-                wb = load_workbook(str(p), read_only=True, data_only=True)
-                if "②Amazonライバル" in wb.sheetnames:
-                    ws = wb["②Amazonライバル"]
-                    for r in range(4, (ws.max_row or 3) + 1):
-                        if ws.cell(r, 1).value:
-                            amazon_count += 1
-                wb.close()
-            except Exception:
-                pass
+            if not quick_mode:
+                try:
+                    wb = load_workbook(str(p), read_only=True, data_only=True)
+                    if "②Amazonライバル" in wb.sheetnames:
+                        ws = wb["②Amazonライバル"]
+                        for r in range(4, (ws.max_row or 3) + 1):
+                            if ws.cell(r, 1).value:
+                                amazon_count += 1
+                    wb.close()
+                except Exception as e:
+                    logger.debug(f"Excel Amazon件数カウントスキップ: {e}")
 
             modified = dt.datetime.fromtimestamp(stat.st_mtime).strftime("%Y/%m/%d %H:%M")
             size_kb  = stat.st_size // 1024
@@ -248,7 +251,13 @@ def api_research_amazon_fetch_url_append():
         if not amazon_data.get("success"):
             return jsonify(amazon_data), 400
 
-        _research_fetch_status["step"] = "③ Excelに書き込み中..."
+        _research_fetch_status["step"] = "③ 商品情報を解析中..."
+        # 画像・テキスト取得済み確認
+        img_count = len(amazon_data.get("image_urls") or [])
+        logger.debug(f"Amazon取得完了: ASIN={amazon_data.get('asin')} 画像={img_count}枚")
+
+        _research_fetch_status["step"] = "④ 画像をダウンロード中..."
+        _research_fetch_status["step"] = "⑤ Excelに書き込み中..."
         result = append_amazon(excel_path, amazon_data)
         status = 200 if result.get("success") else 500
         return jsonify(result), status
@@ -307,8 +316,8 @@ def api_open_fba_calculator():
                 if "revcal" in driver.current_url:
                     calc_handle = handle
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"revcalタブ探索スキップ: {e}")
 
         if calc_handle:
             # 既存タブをリロード
@@ -341,8 +350,8 @@ def api_open_fba_calculator():
                         break
                 if input_el:
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Shadow DOM input探索スキップ: {e}")
 
         if not input_el:
             try:
@@ -371,8 +380,8 @@ def api_open_fba_calculator():
                     }
                     return findInput(document);
                 """)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"JS input探索スキップ: {e}")
 
         if not input_el:
             logger.warning("FBA料金シミュレータ: ASIN入力欄が見つかりませんでした")
@@ -418,8 +427,8 @@ def api_open_fba_calculator():
                 }
                 return findBtn(document);
             """)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Submitボタン検索スキップ: {e}")
 
         if not submitted:
             # フォールバック: ActionChains でクリックしてから Enter
@@ -427,8 +436,8 @@ def api_open_fba_calculator():
                 from selenium.webdriver.common.action_chains import ActionChains
                 from selenium.webdriver.common.keys import Keys
                 ActionChains(driver).move_to_element(input_el).click().send_keys(Keys.RETURN).perform()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"ActionChains Enterキースキップ: {e}")
 
         logger.info(f"FBA料金シミュレータ: ASIN={asin} 入力完了（仕入れ値は手動入力）")
         return jsonify({"success": True, "asin": asin, "url": CALC_URL})
@@ -475,8 +484,8 @@ def api_read_fba_calc():
                 if "revcal" in driver.current_url or "revcal" in driver.current_url.lower():
                     calc_handle = handle
                     break
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"revcalタブ探索(read-calc)スキップ: {e}")
 
         if not calc_handle:
             return jsonify({

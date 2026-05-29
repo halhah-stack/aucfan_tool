@@ -402,6 +402,9 @@ async function fetchAmazonUrl() {
         `<small style="color:#555;">別のライバルのURLを入力してください。</small><br>` +
         `<button class="btn btn-calc" onclick="openCalculator('${data.asin}')" style="margin-top:8px;">` +
         `💴 FBA料金シミュレータで開く</button>`;
+    } else if (res.status === 429) {
+      div.className = "result info";
+      div.innerHTML = `⏳ <strong>取得処理が実行中です。</strong><br><small>完了後に再度お試しください。</small>`;
     } else {
       div.className = "result error";
       div.textContent = "❌ " + data.error;
@@ -576,6 +579,9 @@ async function fetch1688Url() {
         `<strong>ショップ:</strong> ${data.shop_name || "不明"} &nbsp;` +
         `<strong>最低単価:</strong> ${data.min_price} 元<br>` +
         `<span style="color:#555;">${data.title}</span>`;
+    } else if (res.status === 429) {
+      div.className = "result info";
+      div.innerHTML = `⏳ <strong>取得処理が実行中です。</strong><br><small>完了後に再度お試しください。</small>`;
     } else {
       div.className = "result error";
       div.textContent = "❌ " + data.error;

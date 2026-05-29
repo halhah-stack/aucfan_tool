@@ -49,10 +49,10 @@ def _translate_zh_to_ja(text: str) -> str:
         return result or ""
     except ImportError:
         logger.debug("deep_translator 未インストール。pip install deep-translator で追加可能。")
-        return ""
+        return "（翻訳不可）"
     except Exception as e:
         logger.warning(f"翻訳失敗 ({text[:30]}): {e}")
-        return ""
+        return "（翻訳不可）"
 
 
 # ── Chrome接続 ──────────────────────────────────────────────────────────
