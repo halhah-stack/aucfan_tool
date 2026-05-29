@@ -728,31 +728,93 @@ class AucFanScraper:
         """
         _parse_item_card の診断版。フィルタ理由も返す。
         Returns: (item_dict | None, reject_reason: str)
-          reject_reason: "" | "no_title" | "price" | "condition"
+          reject_reason: "" | "no_title" | "keyword" | "maker" | "price" | "condition"
         """
-        item = self._parse_item_card(card, keyword, base_url)
-        if item is not None:
-            return (item, "")
-
-        # どの条件で弾かれたか判定
+        # タイトル
         title_el = self._find_element_soup(card, config.SELECTORS["list"]["title"])
         title = title_el.get_text(strip=True) if title_el else ""
         if not title:
             return (None, "no_title")
 
-        # 商品状態フィルタで弾かれたか確認
-        if self.skip_price_filter and config.SELLER_NEW_ONLY:
-            for dt in card.find_all("dt"):
-                if "商品状態" in dt.get_text():
-                    dd = dt.find_next_sibling("dd")
-                    if dd:
-                        condition = dd.get_text(strip=True)
-                        if condition and not any(w in condition for w in config.SELLER_NEW_CONDITIONS):
-                            return (None, "condition")
-                    break
+        # 価格
+        price_el = self._find_element_soup(card, config.SELECTORS["list"]["price"])
+        price = self._extract_price(price_el.get_text(strip=True) if price_el else "0")
 
-        # タイトルはあるが None → 価格フィルタ
-        return (None, "price")
+        # 商品状態
+        condition = ""
+        for dt in card.find_all("dt"):
+            if "商品状態" in dt.get_text():
+                dd = dt.find_next_sibling("dd")
+                if dd:
+                    condition = dd.get_text(strip=True)
+                break
+
+        # 除外判定（_is_excluded を共用）
+        excluded, reason = self._is_excluded(title, price, condition)
+        if excluded:
+            # reason 例: "キーワード除外 [チケット]" → カテゴリ文字列に変換
+            if "キーワード除外" in reason:
+                return (None, "keyword")
+            if "メーカー名除外" in reason:
+                return (None, "maker")
+            if "価格除外" in reason:
+                return (None, "price")
+            if "商品状態除外" in reason:
+                return (None, "condition")
+            return (None, "excluded")
+
+        # 除外されなければ通常パース
+        item = self._parse_item_card(card, keyword, base_url)
+        return (item, "")
+
+    def _is_excluded(self, title: str, price: int, condition: str) -> tuple:
+        """
+        商品を除外すべきか判定する。
+        戻り値: (excluded: bool, reason: str)
+        excluded=True のとき呼び出し元は None を返す。
+
+        除外ルール:
+          1. タイトルキーワード除外（EXCLUDE_TITLE_KEYWORDS）
+          2. タイトル先頭メーカー名除外（EXCLUDE_MAKER_KEYWORDS）
+          3. 価格フィルター（MIN_PRICE / MAX_PRICE×1.5）
+          4. 商品状態除外（SELLER_NEW_ONLY モード時）
+        """
+        # 1. タイトルキーワード除外（チケット・金券・商品券など）
+        for kw in config.EXCLUDE_TITLE_KEYWORDS:
+            if kw in title:
+                return True, f"キーワード除外 [{kw}]"
+
+        # 2. タイトル先頭メーカー名除外
+        # 「送料無料 HITACHI 冷蔵庫...」のような先頭1〜2トークンにメーカー名が来るパターンを検出
+        # ただし自動車・バイク・カー用品カテゴリ（AUTOMOTIVE_KEYWORDS にヒット）はスキップ
+        is_automotive = any(kw in title for kw in config.AUTOMOTIVE_KEYWORDS)
+        if not is_automotive:
+            title_tokens = title.split()
+            check_tokens = []
+            for tok in title_tokens[:3]:
+                if tok in config.TITLE_STATUS_WORDS:
+                    continue          # 状態ワードはスキップ
+                check_tokens.append(tok)
+                if len(check_tokens) >= 2:
+                    break             # 先頭から最大2トークン（状態ワード除く）を検査
+            for tok in check_tokens:
+                if tok.lower() in config.EXCLUDE_MAKER_KEYWORDS:
+                    return True, f"メーカー名除外 [{tok}]"
+
+        # 3. 価格フィルター（一覧取得段階で大まかに除外する）
+        # 上限は MAX_PRICE×1.5 と緩めに設定し、詳細取得後の正確な価格で再判定する余地を残す。
+        # セラー分析モード（skip_price_filter=True）では全商品を対象とするためスキップ。
+        if not self.skip_price_filter:
+            if price > 0 and (price < config.MIN_PRICE or price > config.MAX_PRICE * 1.5):
+                return True, f"価格除外 [{price}円]"
+
+        # 4. STEP2/3モード（skip_price_filter=True）かつ SELLER_NEW_ONLY=true のとき
+        # 商品状態が新品系ワードでない商品を除外する
+        if self.skip_price_filter and config.SELLER_NEW_ONLY:
+            if condition and not any(w in condition for w in config.SELLER_NEW_CONDITIONS):
+                return True, f"商品状態除外 [{condition}]"
+
+        return False, ""
 
     def _parse_item_card(self, card, keyword: str, base_url: str) -> Optional[dict]:
         """個別の商品カードをパースして辞書を返す"""
@@ -763,40 +825,9 @@ class AucFanScraper:
         if not title:
             return None
 
-        # タイトルキーワード除外（チケット・金券・商品券など）
-        for kw in config.EXCLUDE_TITLE_KEYWORDS:
-            if kw in title:
-                logger.debug(f"キーワード除外 [{kw}]: {title[:60]}")
-                return None
-
-        # タイトル先頭メーカー名除外
-        # 「送料無料 HITACHI 冷蔵庫...」のような先頭1〜2トークンにメーカー名が来るパターンを検出
-        # ただし自動車・バイク・カー用品カテゴリ（AUTOMOTIVE_KEYWORDS にヒット）はスキップ
-        _is_automotive = any(kw in title for kw in config.AUTOMOTIVE_KEYWORDS)
-        if not _is_automotive:
-            _title_tokens = title.split()
-            _check_tokens = []
-            for _tok in _title_tokens[:3]:
-                if _tok in config.TITLE_STATUS_WORDS:
-                    continue          # 状態ワードはスキップ
-                _check_tokens.append(_tok)
-                if len(_check_tokens) >= 2:
-                    break             # 先頭から最大2トークン（状態ワード除く）を検査
-            for _tok in _check_tokens:
-                if _tok.lower() in config.EXCLUDE_MAKER_KEYWORDS:
-                    logger.debug(f"メーカー名除外 [{_tok}]: {title[:60]}")
-                    return None
-
         # 価格（数字を抽出）
         price_el = self._find_element_soup(card, config.SELECTORS["list"]["price"])
         price = self._extract_price(price_el.get_text(strip=True) if price_el else "0")
-
-        # 価格フィルター（一覧取得段階で大まかに除外する）
-        # 上限は MAX_PRICE×1.5 と緩めに設定し、詳細取得後の正確な価格で再判定する余地を残す。
-        # セラー分析モード（skip_price_filter=True）では全商品を対象とするためスキップ。
-        if not self.skip_price_filter:
-            if price > 0 and (price < config.MIN_PRICE or price > config.MAX_PRICE * 1.5):
-                return None
 
         # 商品状態を取得（<dt>商品状態</dt><dd>新品</dd> 構造から抽出）
         condition = ""
@@ -807,12 +838,11 @@ class AucFanScraper:
                     condition = dd.get_text(strip=True)
                 break
 
-        # STEP2/3モード（skip_price_filter=True）かつ SELLER_NEW_ONLY=true のとき
-        # 商品状態が新品系ワードでない商品を除外する
-        if self.skip_price_filter and config.SELLER_NEW_ONLY:
-            if condition and not any(w in condition for w in config.SELLER_NEW_CONDITIONS):
-                logger.debug(f"商品状態除外 [{condition}]: {title[:60]}")
-                return None
+        # 除外判定
+        excluded, reason = self._is_excluded(title, price, condition)
+        if excluded:
+            logger.debug(f"{reason}: {title[:60]}")
+            return None
 
         # セラーID + セラー検索URL（a.sellerLink の href を流用）
         seller_el = self._find_element_soup(card, config.SELECTORS["list"]["seller"])
