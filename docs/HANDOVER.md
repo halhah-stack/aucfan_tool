@@ -500,6 +500,35 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 
 ---
 
+### フェーズ1.6：品質改善（コードレビューによる発見）
+
+> 2026-05-30 コードベース評価から抽出。優先度順。
+
+#### 🔴 高優先（信頼性・データ保護）
+
+| # | タスク | 対象ファイル | 内容 |
+|---|---|---|---|
+| Q-1 | Excelファイルロック実装 | `excel_append.py` | 複数リクエストの同時書き込み防止。`portalocker` or `threading.Lock` でファイルロック |
+| Q-2 | エラーログ漏れ修正 | `routes/research.py` | `except Exception` でログなし握りつぶしが多数。全箇所に `logger.error()` 追加 |
+| Q-3 | Amazon/1688排他UI通知 | `routes/research.py` | 処理中に別リクエストが来たとき「処理中です・しばらくお待ちください」をUIに表示 |
+
+#### 🟠 中優先（ユーザー体験・パフォーマンス）
+
+| # | タスク | 対象ファイル | 内容 |
+|---|---|---|---|
+| Q-4 | Excelリスト取得の高速化 | `routes/research.py` | ファイル一覧取得時に全件openpyxlで開くのを改善（Amazon件数カウントをキャッシュ or 省略オプション） |
+| Q-5 | 1688翻訳失敗の通知 | `scraper_1688.py` | 翻訳失敗時に空文字でなく「翻訳不可」マーカーを表示してユーザーが気づけるように |
+| Q-6 | Amazon取得進捗の細分化 | `routes/research.py` | 3段階の進捗を5〜6段階に増やしてフリーズ感を軽減 |
+
+#### 🟡 低優先（コード整理）
+
+| # | タスク | 対象ファイル | 内容 |
+|---|---|---|---|
+| Q-7 | magic number 定数化 | `excel_append.py` 等 | `height = 90` 等を定数 `ROW_HEIGHT_IMAGE = 90` に変更 |
+| Q-8 | `research_tool.py` 削除検討 | `research_tool.py` | 旧スタンドアロン版。`/research` に統合済みなら削除 |
+
+---
+
 ### フェーズ2：機能追加（SP-API連携）
 
 **目的**: Seleniumスクレイピングに依存せず、Amazon公式APIから価格・手数料を取得して差益計算を自動化する。
