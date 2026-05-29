@@ -9,9 +9,9 @@ app.py — AucFan リサーチツール メインエントリーポイント
     の3ステップ分の API エンドポイントを提供
 
 【グローバル状態】
-  _data_manager      : STEP 1 用 DataManager（スクレイパースレッドと共有）
-  _scraper_thread    : STEP 1 スクレイピングスレッド
-  _stop_event        : 停止シグナル（set() で全スレッドに停止を通知）
+  _s1.dm      : STEP 1 用 DataManager（スクレイパースレッドと共有）
+  _s1.thread    : STEP 1 スクレイピングスレッド
+  _s1.stop_event        : 停止シグナル（set() で全スレッドに停止を通知）
   _seller_state      : STEP 2（セラーリサーチ）の実行状態
   _master_state      : STEP 3（マスターセラーリサーチ）の実行状態
   _sellers_master    : SellersMaster シングルトン（data/sellers_master.json を管理）
@@ -70,18 +70,19 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["SECRET_KEY"] = os.urandom(24)
 
 # ─── STEP 1: キーワードリサーチ グローバル状態 ───
-# スクレイパースレッドと Flask ルートハンドラが同一オブジェクトを共有する。
-# 操作は _lock でスレッドセーフに保護する。
-_scraper_thread: threading.Thread = None
-_stop_event = threading.Event()          # set() でスクレイパーに停止を通知
-_data_manager: DataManager = None        # 現在アクティブな DataManager
-_image_processor: ImageProcessor = None  # 画像ダウンロード・pHash 計算
-_gemini_client: GeminiClient = None      # Gemini API クライアント
-_session_output_dir: Path = None         # 現セッションの出力ディレクトリ
-_lock = threading.Lock()
-# ログイン即時チェックトリガー（UIの「今すぐ確認」ボタンから set() する）
-# STEP1/2/3 すべてのスクレイパーで共有する
-_login_check_event = threading.Event()
+# ScraperState クラスに移行済み（services/state.py）
+# 属性アクセス: _s1.dm / _s1.thread / _s1.output_dir / _s1.lock 等
+from services.state import ScraperState
+_s1 = ScraperState()
+# 後方互換エイリアス（既存コードの段階移行用）
+_s1.thread = None     # 使用箇所は _s1.thread に移行済み
+_s1.stop_event     = _s1.stop_event
+_s1.login_check_event = _s1.login_check_event
+_s1.dm   = None     # 使用箇所は _s1.dm に移行済み
+_s1.image_processor = None    # 使用箇所は _s1.image_processor に移行済み
+_s1.gemini_client  = None     # 使用箇所は _s1.gemini_client に移行済み
+_s1.output_dir = None # 使用箇所は _s1.output_dir に移行済み
+_s1.lock = _s1.lock
 
 # ─── STEP 2: セラーリサーチ グローバル状態 ───
 # SellerState クラスに移行済み（services/state.py）
@@ -112,8 +113,7 @@ def get_dm() -> DataManager:
     読み取り専用アクセスのためロック不要で呼び出せる。
     スクレイピング未開始・データ未ロード時は None を返す。
     """
-    global _data_manager
-    return _data_manager
+    return _s1.dm
 
 
 # ─────────────────────────────────────────────
@@ -131,8 +131,8 @@ def serve_image(filename):
     保存済み画像を配信。
     構成: LOCAL_IMAGE_CACHE_DIR / セッション名 / images / ファイル名
     """
-    if _session_output_dir is not None:
-        session_images = Path(config.LOCAL_IMAGE_CACHE_DIR) / _session_output_dir.name / "images"
+    if _s1.output_dir is not None:
+        session_images = Path(config.LOCAL_IMAGE_CACHE_DIR) / _s1.output_dir.name / "images"
         if (session_images / filename).exists():
             return send_from_directory(str(session_images), filename)
     abort(404)
@@ -145,11 +145,9 @@ def serve_image(filename):
 @app.route("/api/start", methods=["POST"])
 def api_start():
     """スクレイピング開始"""
-    global _scraper_thread, _stop_event, _data_manager, _image_processor
-    global _gemini_client, _session_output_dir
 
-    with _lock:
-        if _scraper_thread and _scraper_thread.is_alive():
+    with _s1.lock:
+        if _s1.thread and _s1.thread.is_alive():
             return jsonify({"success": False, "message": "スクレイピングは既に実行中です"}), 400
 
         data = request.get_json(silent=True) or {}
@@ -159,26 +157,26 @@ def api_start():
 
         # セッション初期化 (S1_YYYYMMDD_NN_keyword)
         out_dir, session_id = make_output_dir(keyword, step=1)
-        _session_output_dir = out_dir
-        _data_manager = DataManager(session_id, out_dir)
-        _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name / "images")
-        _gemini_client = GeminiClient()
+        _s1.output_dir = out_dir
+        _s1.dm = DataManager(session_id, out_dir)
+        _s1.image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name / "images")
+        _s1.gemini_client = GeminiClient()
 
         # 再開の場合は前回データをロード
         if resume:
-            _data_manager.load_previous_session()
+            _s1.dm.load_previous_session()
 
-        _stop_event.clear()
+        _s1.stop_event.clear()
 
         from services.scraping import run_keyword_scraping
-        _scraper_thread = threading.Thread(
+        _s1.thread = threading.Thread(
             target=run_keyword_scraping,
             kwargs=dict(
-                data_manager=_data_manager,
-                image_processor=_image_processor,
-                gemini_client=_gemini_client,
-                stop_event=_stop_event,
-                login_check_event=_login_check_event,
+                data_manager=_s1.dm,
+                image_processor=_s1.image_processor,
+                gemini_client=_s1.gemini_client,
+                stop_event=_s1.stop_event,
+                login_check_event=_s1.login_check_event,
                 resume=resume,
                 start_url=start_url,
                 out_dir=out_dir,
@@ -187,7 +185,7 @@ def api_start():
             daemon=True,
             name="scraper",
         )
-        _scraper_thread.start()
+        _s1.thread.start()
 
         logger.info(f"スクレイピング開始: keyword={keyword}, session={session_id}, start_url={start_url or '（現在タブ）'}")
         return jsonify({
@@ -202,7 +200,7 @@ def api_start():
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
     """スクレイピングを停止"""
-    _stop_event.set()
+    _s1.stop_event.set()
     logger.info("停止リクエストを受け取りました")
     return jsonify({"success": True, "message": "停止中..."})
 
@@ -247,13 +245,13 @@ def api_stream():
                 if dm:
                     progress = dm.get_progress()
                     stats = dm.get_stats()
-                    is_running = _scraper_thread is not None and _scraper_thread.is_alive()
+                    is_running = _s1.thread is not None and _s1.thread.is_alive()
 
                     payload = {
                         "progress": progress,
                         "stats": stats,
                         "is_running": is_running,
-                        "gemini_enabled": _gemini_client.available if _gemini_client else False,
+                        "gemini_enabled": _s1.gemini_client.available if _s1.gemini_client else False,
                         "is_seller_analysis": progress.get("keyword", "") == "seller_analysis",
                     }
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -288,7 +286,7 @@ def api_progress():
     return jsonify({
         "progress": dm.get_progress(),
         "stats": dm.get_stats(),
-        "is_running": _scraper_thread is not None and _scraper_thread.is_alive(),
+        "is_running": _s1.thread is not None and _s1.thread.is_alive(),
     })
 
 
@@ -443,7 +441,7 @@ def api_ng_analyze():
     if not reason:
         return jsonify({"error": "理由テキストが空です"}), 400
 
-    gc = _gemini_client
+    gc = _s1.gemini_client
     if gc is None or not gc.available:
         return jsonify({"error": "Gemini API が無効です"}), 503
 
@@ -471,16 +469,16 @@ def api_export_html():
         return jsonify({"error": "データがありません"}), 400
 
     images_dir = (
-        Path(config.LOCAL_IMAGE_CACHE_DIR) / _session_output_dir.name / "images"
-        if _session_output_dir else Path(config.LOCAL_IMAGE_CACHE_DIR)
+        Path(config.LOCAL_IMAGE_CACHE_DIR) / _s1.output_dir.name / "images"
+        if _s1.output_dir else Path(config.LOCAL_IMAGE_CACHE_DIR)
     )
     html = _generate_export_html(dm, images_dir)
     if not html:
         return jsonify({"error": "商品データがありません"}), 400
 
     # セッションIDをファイル名に使う（例: S1_20260507_01_バフ_Mac用.html）
-    if _session_output_dir:
-        session_id = _session_output_dir.name
+    if _s1.output_dir:
+        session_id = _s1.output_dir.name
     else:
         keyword = dm.get_progress().get("keyword", "")
         safe_kw = "".join(c for c in keyword if c.isalnum() or c in ("_", "-"))[:20] or "result"
@@ -508,7 +506,7 @@ def api_export_pdf():
         return jsonify({"error": "データがありません"}), 400
 
     # 画像は現在のセッションフォルダ内 images/ を参照
-    session_dir = _session_output_dir
+    session_dir = _s1.output_dir
     if session_dir is None:
         return jsonify({"error": "セッションが読み込まれていません"}), 400
 
@@ -539,10 +537,10 @@ def api_export_excel_single(group_id):
     if not dm:
         return jsonify({"error": "データがありません"}), 400
 
-    if _session_output_dir is None:
+    if _s1.output_dir is None:
         return jsonify({"error": "セッションが読み込まれていません"}), 400
 
-    session_name = _session_output_dir.name
+    session_name = _s1.output_dir.name
     result = generate_excel_single_with_session(dm, group_id, session_name, embed_images=True)
     if not result:
         return jsonify({"error": "グループが見つかりません"}), 404
@@ -595,9 +593,8 @@ def api_load_csv():
     """
     results.csv をアップロードしてグリッドに表示する。
     CSV の各行をアイテムとして新規 DataManager セッションにロードし、
-    _data_manager を差し替える（画像は別途 /images/ から参照）。
+    _s1.dm を差し替える（画像は別途 /images/ から参照）。
     """
-    global _data_manager, _image_processor, _gemini_client, _session_output_dir
 
     file = request.files.get("file")
     if not file:
@@ -658,11 +655,11 @@ def api_load_csv():
         )
         dm.save_all()
 
-        with _lock:
-            _data_manager = dm
-            _image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name / "images")
-            _gemini_client = GeminiClient()
-            _session_output_dir = out_dir
+        with _s1.lock:
+            _s1.dm = dm
+            _s1.image_processor = ImageProcessor(Path(config.LOCAL_IMAGE_CACHE_DIR) / out_dir.name / "images")
+            _s1.gemini_client = GeminiClient()
+            _s1.output_dir = out_dir
 
         logger.info(f"CSV読み込み完了: {file.filename} → {loaded}件 セッション={session_id}")
         return jsonify({
@@ -971,17 +968,17 @@ def api_sessions():
 @app.route("/api/current_session")
 def api_current_session():
     """現在グリッドに表示中のセッション情報を返す"""
-    if _session_output_dir is None or _data_manager is None:
+    if _s1.output_dir is None or _s1.dm is None:
         return jsonify({"session": None})
-    info = _parse_session_info(_session_output_dir.name)
+    info = _parse_session_info(_s1.output_dir.name)
     return jsonify({
         "session": {
-            "name": _session_output_dir.name,
+            "name": _s1.output_dir.name,
             "label": info["label"],
             "date_str": info["date_str"],
             "step": info["step"],
-            "total_items": _data_manager.total_items,
-            "status": _data_manager.get_progress().get("status", ""),
+            "total_items": _s1.dm.total_items,
+            "status": _s1.dm.get_progress().get("status", ""),
         }
     })
 
@@ -990,9 +987,8 @@ def api_current_session():
 def api_delete_session(session_name):
     """
     セッションフォルダを丸ごと削除する。
-    現在メモリにロードされているセッションを削除する場合は _data_manager もリセット。
+    現在メモリにロードされているセッションを削除する場合は _s1.dm もリセット。
     """
-    global _data_manager, _image_processor, _gemini_client, _session_output_dir
 
     # パストラバーサル防止
     if ".." in session_name or "/" in session_name or "\\" in session_name:
@@ -1015,11 +1011,11 @@ def api_delete_session(session_name):
             logger.info(f"ローカル画像キャッシュ削除: {local_img_dir}")
 
         # 削除したセッションが現在ロード中なら状態をリセット
-        if _session_output_dir is not None and _session_output_dir.resolve() == session_dir.resolve():
-            _data_manager = None
-            _image_processor = None
-            _gemini_client = None
-            _session_output_dir = None
+        if _s1.output_dir is not None and _s1.output_dir.resolve() == session_dir.resolve():
+            _s1.dm = None
+            _s1.image_processor = None
+            _s1.gemini_client = None
+            _s1.output_dir = None
             logger.info("現在のセッションを削除したためメモリをリセットしました")
 
         return jsonify({"success": True, "name": session_name})
@@ -1121,7 +1117,6 @@ def api_seller_ids_from_session(session_name):
 @app.route("/api/sessions/<session_name>/load", methods=["POST"])
 def api_load_session(session_name):
     """過去セッションをロード"""
-    global _data_manager, _image_processor, _gemini_client, _session_output_dir
 
     base = Path(config.OUTPUT_BASE_DIR)
     session_dir = base / session_name
@@ -1129,15 +1124,15 @@ def api_load_session(session_name):
     if not session_dir.exists():
         return jsonify({"success": False, "message": "セッションが見つかりません"}), 404
 
-    _session_output_dir = session_dir
-    _data_manager = DataManager(session_name, session_dir)
-    _data_manager.load_previous_session()
-    _gemini_client = GeminiClient()
+    _s1.output_dir = session_dir
+    _s1.dm = DataManager(session_name, session_dir)
+    _s1.dm.load_previous_session()
+    _s1.gemini_client = GeminiClient()
 
     return jsonify({
         "success": True,
         "session": session_name,
-        "total_items": _data_manager.total_items,
+        "total_items": _s1.dm.total_items,
     })
 
 
@@ -1155,8 +1150,8 @@ def _parse_session_info(name: str) -> dict:
 def _list_sessions(step: int = None):
     """グローバル状態を収集して services.session.list_sessions に委譲するラッパー"""
     running_names: set = set()
-    if _scraper_thread and _scraper_thread.is_alive() and _session_output_dir:
-        running_names.add(_session_output_dir.name)
+    if _s1.thread and _s1.thread.is_alive() and _s1.output_dir:
+        running_names.add(_s1.output_dir.name)
     with _seller_lock:
         if _seller_state["running"] and _seller_state.get("output_dir"):
             running_names.add(Path(_seller_state["output_dir"]).name)
@@ -1334,11 +1329,11 @@ def api_latest_csv_import():
     session_name = ""
 
     # 1. 現在アクティブなセッションの CSV を優先
-    if _session_output_dir is not None:
-        candidate = _session_output_dir / "results.csv"
+    if _s1.output_dir is not None:
+        candidate = _s1.output_dir / "results.csv"
         if candidate.exists():
             csv_path = candidate
-            session_name = _session_output_dir.name
+            session_name = _s1.output_dir.name
 
     # 2. なければ最新セッションを探す
     if csv_path is None:
@@ -1502,9 +1497,8 @@ def api_seller_scrape_start():
 def _run_seller_analysis(stop_ev: threading.Event):
     """
     SellerAnalyzer を使って全セラーを 1 セッションにまとめてスクレイプする
-    バックグラウンドスレッド。完了後に _data_manager を差し替えてメイン UI で表示可能にする。
+    バックグラウンドスレッド。完了後に _s1.dm を差し替えてメイン UI で表示可能にする。
     """
-    global _data_manager, _image_processor, _gemini_client, _session_output_dir
 
     with _seller_lock:
         sellers = list(_seller_state["sellers"])
@@ -1545,7 +1539,7 @@ def _run_seller_analysis(stop_ev: threading.Event):
         gemini_client=gc,
         stop_event=stop_ev,
         on_seller_progress=on_progress,
-        login_check_event=_login_check_event,
+        login_check_event=_s1.login_check_event,
     )
     analyzer.run()
 
@@ -1556,11 +1550,11 @@ def _run_seller_analysis(stop_ev: threading.Event):
         _save_export_files(dm, out_dir)
 
     # 完了後: メイン UI でそのまま結果を表示できるよう差し替え
-    with _lock:
-        _data_manager = dm
-        _image_processor = img
-        _gemini_client = gc
-        _session_output_dir = out_dir
+    with _s1.lock:
+        _s1.dm = dm
+        _s1.image_processor = img
+        _s1.gemini_client = gc
+        _s1.output_dir = out_dir
 
     with _seller_lock:
         _seller_state["running"] = False
@@ -1588,10 +1582,10 @@ def api_seller_scrape_stop():
 def api_login_check():
     """
     UIの「今すぐ確認して再開」ボタンから呼び出す。
-    _login_check_event を set() して、スクレイパーの待機ループを即座に起こす。
+    _s1.login_check_event を set() して、スクレイパーの待機ループを即座に起こす。
     STEP1 / STEP2 / STEP3 すべてで共通の Event を使用する。
     """
-    _login_check_event.set()
+    _s1.login_check_event.set()
     logger.info("ログイン即時チェックトリガー受信")
     return jsonify({"status": "checking"})
 
@@ -1835,7 +1829,6 @@ def api_master_delete_seller(seller_id):
 
 def _run_master_analysis(targets: list, stop_ev: threading.Event):
     """STEP 3 バックグラウンドスレッド"""
-    global _data_manager, _image_processor, _gemini_client, _session_output_dir
 
     out_dir, session_id = make_output_dir("master_analysis", step=3)
     dm = DataManager(session_id, out_dir)
@@ -1895,7 +1888,7 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
         gemini_client=gc,
         stop_event=stop_ev,
         on_seller_progress=on_progress,
-        login_check_event=_login_check_event,
+        login_check_event=_s1.login_check_event,
     )
     analyzer.run()
 
@@ -1904,11 +1897,11 @@ def _run_master_analysis(targets: list, stop_ev: threading.Event):
         _save_export_files(dm, out_dir)
 
     # 完了後にメイン UI に差し替え
-    with _lock:
-        _data_manager = dm
-        _image_processor = img
-        _gemini_client = gc
-        _session_output_dir = out_dir
+    with _s1.lock:
+        _s1.dm = dm
+        _s1.image_processor = img
+        _s1.gemini_client = gc
+        _s1.output_dir = out_dir
 
     with _master_lock:
         _master_state["running"] = False
@@ -2060,7 +2053,6 @@ def _auto_load_latest_session():
     前回のスクレイピング結果をすぐに表示できるようにする。
     セッションが存在しない場合は何もしない。
     """
-    global _data_manager, _gemini_client, _session_output_dir
 
     base = Path(config.OUTPUT_BASE_DIR)
     if not base.exists():
@@ -2078,13 +2070,13 @@ def _auto_load_latest_session():
 
     try:
         session_name = latest_dir.name
-        _session_output_dir = latest_dir
-        _data_manager = DataManager(session_name, latest_dir)
-        _data_manager.load_previous_session()
-        _gemini_client = GeminiClient()
+        _s1.output_dir = latest_dir
+        _s1.dm = DataManager(session_name, latest_dir)
+        _s1.dm.load_previous_session()
+        _s1.gemini_client = GeminiClient()
         logger.info(
             f"[起動時自動ロード] セッション: {session_name}"
-            f" ({_data_manager.total_items}件)"
+            f" ({_s1.dm.total_items}件)"
         )
     except Exception as e:
         logger.warning(f"[起動時自動ロード] 失敗（スキップ）: {e}")
