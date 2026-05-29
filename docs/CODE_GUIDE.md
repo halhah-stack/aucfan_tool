@@ -68,9 +68,13 @@ aucfan_tool/
 │   │                       #   _generate_export_html / _save_export_files / _build_export_html 等
 │   ├── session.py          # セッション管理純粋関数（app.pyから分離済み）
 │   │                       #   parse_session_info / list_sessions（running_names注入方式）
-│   └── scraping.py         # スクレイピングスレッドターゲット（🔜 作成予定）
-│                           #   run_keyword_scraping() を定義予定
-│                           #   【方針】api_stop/resume/progressはapp.pyに残す（薄いグルーのため）
+│   ├── scraping.py         # スクレイピングスレッドターゲット（app.pyから分離済み）
+│   │                       #   run_keyword_scraping() — api_start()のスレッド処理を担当
+│   │                       #   【方針】api_stop/resume/progressはapp.pyに残す（薄いグルーのため）
+│   └── state.py            # アプリケーション状態クラス定義（app.pyから分離済み）
+│                           #   ScraperState(_s1) / SellerState(_seller) / MasterState(_master)
+│                           #   辞書互換インターフェース（__getitem__/__setitem__）付き
+│                           #   global宣言を完全撤廃（app.py 3900行 → 2108行）
 │
 ├── templates/
 │   ├── index.html          # シングルページUI（Jinja2テンプレート）

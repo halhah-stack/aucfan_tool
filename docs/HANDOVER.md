@@ -1,6 +1,6 @@
 # 引き継ぎメモ
 
-> 最終更新：2026-05-29（6回目）  
+> 最終更新：2026-05-30（7回目）  
 > 次のClaudeセッションはここから読んで作業を再開すること。
 
 ---
@@ -457,8 +457,8 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 | 高 | `app.py` の `/research` HTMLを `templates/research.html` に切り出し | 小 | JSバグが減る・デバッグしやすくなる | ✅ 完了（2026-05-29） |
 | 高 | `_parse_item_card()` の除外判定を別メソッドに切り出し | 小 | 除外ルール追加が楽になる | ✅ 完了（2026-05-29） |
 | 中 | `app.py` のAPIルートを `routes/` フォルダに分割 | 中 | 3300行のファイルが管理しやすくなる | ✅ 完了（2026-05-29 research系のみ） |
-| 中 | `app.py` のビジネスロジックを `services/` に分離 | 中 | テストが書きやすくなる | 🔄 進行中 |
-| 低 | グローバル状態（`_seller_state` 等）をクラスに封じ込める | 中 | 並列処理に備えた設計 | 🔄 進行中（ブランチ: refactor/global-state-class） |
+| 中 | `app.py` のビジネスロジックを `services/` に分離 | 中 | テストが書きやすくなる | ✅ 完了（2026-05-30） |
+| 低 | グローバル状態（`_seller_state` 等）をクラスに封じ込める | 中 | 並列処理に備えた設計 | ✅ 完了（2026-05-30・global宣言完全撤廃） |
 
 #### services/ 分離の方針（確定）
 
@@ -481,13 +481,22 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 
 | 順 | 対象 | クラス名 | 変更箇所 | 状態 |
 |---|---|---|---|---|
-| 1 | STEP2 seller | `SellerState` | 約92箇所 | 🔜 次のタスク |
-| 2 | STEP3 master | `MasterState` | 約43箇所 | 未着手 |
-| 3 | STEP1 scraper | `ScraperState` | 約165箇所 | 未着手 |
+| 1 | STEP2 seller | `SellerState` | 約92箇所 | ✅ 完了 |
+| 2 | STEP3 master | `MasterState` | 約43箇所 | ✅ 完了 |
+| 3 | STEP1 scraper | `ScraperState` | 約165箇所 | ✅ 完了 |
 
-**将来の恩恵**: 並列スクレイピング対応・自動テスト・複数セッション管理が容易になる
+**成果**: `global` 宣言がapp.pyから完全撤廃（0箇所）。app.py 3900行 → 2108行（約46%削減）。
 
 **進め方の原則**: 1タスクずつ → 動作確認 → commitの繰り返し。まとめてやらない。
+
+---
+
+### フェーズ1.5：未実装機能（フェーズ1完了後の残タスク）
+
+| タスク | 内容 | 状態 |
+|---|---|---|
+| 1688調査タブ（メインアプリ統合） | メインアプリの商品カードから直接1688調査できるUI | 未着手 |
+| `upload_images_to_gdrive.py` git管理 | 現在gitignore扱い → 追加するか判断 | 保留 |
 
 ---
 
@@ -544,10 +553,11 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] `services/export.py` 作成（HTML/PDF/Excel/CSV生成ロジック分離・app.py 456行削減）（2026-05-30）
 - [x] `services/session.py` 作成（セッション管理純粋関数・パラメーター注入方式）（2026-05-30）
 - [x] `services/scraping.py` 作成（`run_keyword_scraping()` スレッドターゲット分離）（2026-05-30）
-- [ ] グローバル状態クラス化（ブランチ: refactor/global-state-class）（進行中）
-  - [ ] STEP2: SellerState クラス（約92箇所）
-  - [ ] STEP3: MasterState クラス（約43箇所）
-  - [ ] STEP1: ScraperState クラス（約165箇所）
+- [x] グローバル状態クラス化 完了（2026-05-30）
+  - [x] STEP2: SellerState クラス（辞書互換・後方互換エイリアス付き）
+  - [x] STEP3: MasterState クラス（同上）
+  - [x] STEP1: ScraperState クラス（global宣言完全撤廃）
+  - [x] `services/state.py` 新規作成（3クラス定義）
 
 ---
 
