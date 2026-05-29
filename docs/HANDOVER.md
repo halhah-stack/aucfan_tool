@@ -458,7 +458,7 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 | 高 | `_parse_item_card()` の除外判定を別メソッドに切り出し | 小 | 除外ルール追加が楽になる | ✅ 完了（2026-05-29） |
 | 中 | `app.py` のAPIルートを `routes/` フォルダに分割 | 中 | 3300行のファイルが管理しやすくなる | ✅ 完了（2026-05-29 research系のみ） |
 | 中 | `app.py` のビジネスロジックを `services/` に分離 | 中 | テストが書きやすくなる | 🔄 進行中 |
-| 低 | グローバル状態（`_seller_state` 等）をクラスに封じ込める | 中 | 並列処理に備えた設計 | 未着手 |
+| 低 | グローバル状態（`_seller_state` 等）をクラスに封じ込める | 中 | 並列処理に備えた設計 | 🔄 進行中（ブランチ: refactor/global-state-class） |
 
 #### services/ 分離の方針（確定）
 
@@ -466,12 +466,26 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 |---|---|---|
 | `services/export.py` | HTML/PDF/Excel/CSV生成ロジック | ✅ 完了（2026-05-30） |
 | `services/session.py` | セッション一覧・パース（純粋関数） | ✅ 完了（2026-05-30） |
-| `services/scraping.py` | `run_keyword_scraping()` スレッドターゲット | 🔜 次のタスク |
+| `services/scraping.py` | `run_keyword_scraping()` スレッドターゲット | ✅ 完了（2026-05-30） |
 
 **スクレイピングルート（api_start/stop/resume/progress）の方針：**
 - `api_stop`, `api_resume`, `api_progress` → **app.pyに残す**（薄いグルー関数のため分離不要）
-- `api_start` の `run_scraper()` 内部ロジック → `services/scraping.py` に切り出す
+- `api_start` の `run_scraper()` 内部ロジック → `services/scraping.py` に切り出し済み
 - 将来のスクレイピング機能追加時：ビジネスロジックは `services/scraping.py`、ルートは `app.py`
+
+#### グローバル状態クラス化の方針（確定）
+
+**実施ブランチ**: `refactor/global-state-class`（問題時は `git checkout main` で即戻し）
+
+**クラス設計**: 辞書互換インターフェース（`__getitem__`/`__setitem__`）で段階的移行
+
+| 順 | 対象 | クラス名 | 変更箇所 | 状態 |
+|---|---|---|---|---|
+| 1 | STEP2 seller | `SellerState` | 約92箇所 | 🔜 次のタスク |
+| 2 | STEP3 master | `MasterState` | 約43箇所 | 未着手 |
+| 3 | STEP1 scraper | `ScraperState` | 約165箇所 | 未着手 |
+
+**将来の恩恵**: 並列スクレイピング対応・自動テスト・複数セッション管理が容易になる
 
 **進め方の原則**: 1タスクずつ → 動作確認 → commitの繰り返し。まとめてやらない。
 
@@ -529,6 +543,11 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] `routes/research.py` の不足インポート修正（Path, os, json, datetime, openpyxl）（2026-05-30）
 - [x] `services/export.py` 作成（HTML/PDF/Excel/CSV生成ロジック分離・app.py 456行削減）（2026-05-30）
 - [x] `services/session.py` 作成（セッション管理純粋関数・パラメーター注入方式）（2026-05-30）
+- [x] `services/scraping.py` 作成（`run_keyword_scraping()` スレッドターゲット分離）（2026-05-30）
+- [ ] グローバル状態クラス化（ブランチ: refactor/global-state-class）（進行中）
+  - [ ] STEP2: SellerState クラス（約92箇所）
+  - [ ] STEP3: MasterState クラス（約43箇所）
+  - [ ] STEP1: ScraperState クラス（約165箇所）
 
 ---
 
