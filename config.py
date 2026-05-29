@@ -152,9 +152,16 @@ def _find_gdrive_aucfan_root() -> str:
                 return str(p)
     return None
 
-_GDRIVE_ROOT = _find_gdrive_aucfan_root() or os.path.expanduser(
-    "~/マイドライブ（shinozakistore@gmail.com）/AucFanToolData"
+# GDriveのGoogleアカウントメールアドレス（.envで上書き可）
+# フォールバックパスのみで使用。通常は _find_gdrive_aucfan_root() が自動検出する。
+GDRIVE_EMAIL = os.getenv("GDRIVE_EMAIL", "")
+
+_gdrive_fallback = (
+    f"~/マイドライブ（{GDRIVE_EMAIL}）/AucFanToolData"
+    if GDRIVE_EMAIL
+    else "~/AucFanToolData"
 )
+_GDRIVE_ROOT = _find_gdrive_aucfan_root() or os.path.expanduser(_gdrive_fallback)
 _GDRIVE_BASE = os.path.join(_GDRIVE_ROOT, "リサーチ結果")
 OUTPUT_BASE_DIR = os.getenv("OUTPUT_BASE_DIR", _GDRIVE_BASE)
 

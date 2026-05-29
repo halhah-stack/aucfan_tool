@@ -554,11 +554,11 @@ def _save_export_files(dm, output_dir: Path):
     import shutil
 
     # Google Drive 保存先フォルダ（config._GDRIVE_ROOT と同じパス）
+    # メールアドレスは config.GDRIVE_EMAIL（.envで設定）から取得
+    _gdrive_email = config.GDRIVE_EMAIL
     _GDRIVE_DIR = Path(os.path.expanduser(
-        "~/Library/CloudStorage/"
-        "GoogleDrive-shinozakistore@gmail.com/"
-        "マイドライブ/AucFanToolData"
-    ))
+        f"~/Library/CloudStorage/GoogleDrive-{_gdrive_email}/マイドライブ/AucFanToolData"
+    )) if _gdrive_email else Path(config.OUTPUT_BASE_DIR).parent
 
     session_name = output_dir.name   # 例: S1_20260508_01_LEDライト
     images_dir   = Path(config.LOCAL_IMAGE_CACHE_DIR) / session_name / "images"
