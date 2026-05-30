@@ -997,7 +997,7 @@ function renderGroupCard(group) {
     ? `<span class="seller-count-label">${allSellers.length}名</span>` : '';
   const multiSellerClass = allSellers.length > 1 ? ' multi-seller' : '';
 
-  // アリプライス・Amazon検索URL
+  // アリプライス・Amazon検索URL・1688画像検索URL
   const searchTitle = encodeURIComponent((group.title || '').substring(0, 50));
   const aliprice_url = `https://aliprice.com/search?q=${searchTitle}`;
   const amazon_url = `https://www.amazon.co.jp/s?k=${searchTitle}`;
@@ -1039,6 +1039,9 @@ function renderGroupCard(group) {
       </a>
       <a class="btn btn-secondary btn-sm" href="${amazon_url}" target="_blank" rel="noopener">
         📦 Amazon
+      </a>
+      <a class="btn btn-warning btn-sm" href="https://s.1688.com/selloffer/offer_search.htm" target="_blank" rel="noopener" title="1688画像検索トップを開く（画像検索は手動）">
+        🔍 1688
       </a>
       <button class="btn btn-success btn-sm" onclick="updateGroupStatus('${groupId}', 'ok')">
         ✅ OK
