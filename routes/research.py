@@ -670,8 +670,13 @@ def api_research_1688_fetch_url_append():
 
         _research_1688_fetch_status["step"] = "③ Excelに書き込み中..."
         result = append_1688(excel_path, data_1688)
-        status = 200 if result.get("success") else 500
-        return jsonify(result), status
+        if not result.get("success"):
+            return jsonify(result), 500
+
+        # ── SP-API転記済みなら利益計算も返す ─────────────────────
+        profit_result = _calc_profit_from_excel(excel_path)
+        result.update(profit_result)
+        return jsonify(result), 200
     finally:
         _research_1688_fetch_status = {"running": False, "step": ""}
         _research_1688_fetch_lock.release()
@@ -743,6 +748,9 @@ def api_sp_fetch():
         if not excel_path:
             return jsonify({"success": False, "error": "不正なExcelパスです"}), 400
         try:
+            from openpyxl.styles import PatternFill
+            sp_fill = PatternFill("solid", fgColor=config.EXCEL_COLOR_SP_API)
+
             wb = load_workbook(excel_path)
             ws = wb["①概要"]
             effective_price = info.get("price")
@@ -750,8 +758,10 @@ def api_sp_fetch():
 
             if effective_price and ws["B12"].value is None:
                 ws["B12"] = effective_price
+                ws["B12"].fill = sp_fill
             if fba_fee:
                 ws["B13"] = fba_fee
+                ws["B13"].fill = sp_fill
 
             wb.save(excel_path)
             logger.info(f"[SP-API] Excel転記完了: {excel_path} B12={effective_price} B13={fba_fee}")
@@ -759,48 +769,95 @@ def api_sp_fetch():
             logger.error(f"[SP-API] Excel転記エラー: {e}")
             return jsonify({"success": False, "error": f"Excel転記失敗: {e}"}), 500
 
-    # ── 利益判定 ─────────────────────────────────────────────────────────
-    profit_ok = False
-    try:
-        if excel_path:
-            wb2 = load_workbook(excel_path, data_only=True)
-            ws4 = wb2["④1688仕入れ"]
-            for row in ws4.iter_rows(min_row=4):
-                profit      = row[16].value  # Q列 (0-indexed: 16)
-                profit_rate = row[17].value  # R列
-                if profit is not None:
-                    rate_val = 0.0
-                    if isinstance(profit_rate, str):
-                        try:
-                            rate_val = float(profit_rate.replace("%", ""))
-                        except ValueError:
-                            pass
-                    elif isinstance(profit_rate, (int, float)):
-                        rate_val = float(profit_rate) * 100
-                    if (rate_val >= config.PROFIT_RATE_THRESHOLD or
-                            profit >= config.PROFIT_YEN_THRESHOLD):
-                        profit_ok = True
-                        break
-    except Exception:
-        pass  # 利益判定はおまけ。失敗してもレスポンスは返す
+    # ── 1688原価込み利益計算（共通関数で処理）────────────────────────────
+    profit_result   = _calc_profit_from_excel(excel_path) if excel_path else {}
+    variants_profit = profit_result.get("variants_profit", [])
+    profit_ok       = profit_result.get("profit_ok", False)
 
     return jsonify({
-        "success":      True,
-        "asin":         info["asin"],
-        "title":        info["title"],
-        "brand":        info.get("brand", ""),
-        "rank":         info["rank"],
-        "category":     info["category"],
-        "list_price":   info["list_price"],
-        "price":        info["price"],
-        "fba_fee":      info["fba_fee"],
-        "referral_fee": info.get("referral_fee"),
-        "total_fee":    info.get("total_fee"),
-        "profit_ok":    profit_ok,
-        "fee_error":    info.get("fee_error"),   # FBA手数料取得失敗時のメッセージ（非対応カテゴリ等）
-        "message":      "SP-API 取得・転記完了",
-        "error":        None,
+        "success":          True,
+        "asin":             info["asin"],
+        "title":            info["title"],
+        "brand":            info.get("brand", ""),
+        "rank":             info["rank"],
+        "category":         info["category"],
+        "list_price":       info["list_price"],
+        "price":            info["price"],
+        "fba_fee":          info["fba_fee"],
+        "referral_fee":     info.get("referral_fee"),
+        "total_fee":        info.get("total_fee"),
+        "profit_ok":        profit_ok,
+        "variants_profit":  variants_profit,   # 全バリアントの利益計算結果
+        "fee_error":        info.get("fee_error"),
+        "message":          "SP-API 取得・転記完了",
+        "error":            None,
     })
+
+
+def _calc_profit_from_excel(excel_path: str) -> dict:
+    """
+    Excelから販売価格(B12)・FBA手数料(B13)・Sheet4の1688単価を読み取り、
+    全バリアントの利益計算を行う共通関数。
+
+    Returns:
+        {
+          "profit_ok":       bool,
+          "variants_profit": list,   # バリアント別 {variant, cny_price, cost, profit, profit_rate, ok}
+          "selling_price":   int,
+          "fba_fee":         int,
+        }
+    """
+    result = {"profit_ok": False, "variants_profit": [], "selling_price": None, "fba_fee": None}
+    try:
+        wb = load_workbook(excel_path, data_only=True)
+
+        # B12/B13 を読む
+        ws1 = wb["①概要"]
+        selling_price = ws1["B12"].value
+        fba_fee_val   = ws1["B13"].value or 0
+
+        if not isinstance(selling_price, (int, float)) or selling_price <= 0:
+            return result   # 販売価格未設定 → 計算不可
+
+        result["selling_price"] = int(selling_price)
+        result["fba_fee"]       = int(fba_fee_val)
+
+        # Sheet4 の K列・L列を読む
+        if "④1688仕入れ" not in wb.sheetnames:
+            return result
+
+        ws4 = wb["④1688仕入れ"]
+        variants_profit = []
+        for row in ws4.iter_rows(min_row=4, values_only=True):
+            cny_price  = row[10]   # K列
+            rate_val   = row[11]   # L列
+            variant_ja = row[8] or row[7] or ""   # I列 or H列
+
+            if not isinstance(cny_price, (int, float)) or cny_price <= 0:
+                continue
+
+            rate    = rate_val if isinstance(rate_val, (int, float)) else config.CNY_TO_JPY_RATE
+            cost    = round(cny_price * rate)
+            profit  = round(selling_price - fba_fee_val - cost)
+            p_rate  = round(profit / selling_price * 100, 1) if selling_price > 0 else 0
+            ok      = (p_rate >= config.PROFIT_RATE_THRESHOLD or
+                       profit >= config.PROFIT_YEN_THRESHOLD)
+
+            variants_profit.append({
+                "variant":     str(variant_ja),
+                "cny_price":   cny_price,
+                "cost":        cost,
+                "profit":      profit,
+                "profit_rate": p_rate,
+                "ok":          ok,
+            })
+
+        result["variants_profit"] = variants_profit
+        result["profit_ok"]       = any(v["ok"] for v in variants_profit)
+        logger.info(f"[利益計算] {len(variants_profit)}バリアント profit_ok={result['profit_ok']}")
+    except Exception as e:
+        logger.warning(f"[利益計算] エラー（スキップ）: {e}")
+    return result
 
 
 def _validate_excel_path(path: str) -> str | None:

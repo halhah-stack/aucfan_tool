@@ -1,6 +1,6 @@
 # 引き継ぎメモ
 
-> 最終更新：2026-05-30（11回目）  
+> 最終更新：2026-05-31（12回目）  
 > 次のClaudeセッションはここから読んで作業を再開すること。
 
 ---
@@ -32,6 +32,9 @@
 | SP-API 現在価格取得（Product Pricing API） | `sp_api_client.py` `get_listing_price()` | 完成（価格未入力時のフォールバック） |
 | SP-API 一括取得→Excel転記 | `routes/research.py` `/api/research/amazon/sp-fetch` | 完成 |
 | /researchページ（SP-API フェッチボタン） | `templates/research.html` | 完成 |
+| SP-API転記セルの水色表示 | `routes/research.py` + `config.EXCEL_COLOR_SP_API` | 完成（.envで色変更可） |
+| 1688原価込み利益計算・バリアント別表示 | `routes/research.py` `_calc_profit_from_excel()` | 完成 |
+| 利益計算の順番不問対応 | SP-API先・1688先どちらでも可 | 完成 |
 | Amazon取得中の進捗表示 | `routes/research.py` `_research_fetch_status` + `/api/research/amazon/status` | 完成 |
 | メインアプリからリサーチツールを開くボタン | `templates/index.html` | 完成 |
 | 1688商品ページ取得（URL指定） | `scraper_1688.py` `fetch_1688_from_url()` | 完成 |
@@ -585,8 +588,9 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 **UIボタン**: `/research` ページの「🚀 SP-API で取得・転記」
 
 **注意事項**:
-- 自動車・一部カテゴリのASINは Products Fees API が `InvalidParameterValue` を返す（非対応）
+- 自己発送専用（FBA出品なし）のASINは Products Fees API が `InvalidParameterValue` を返す
   → その場合はタイトル・ランク・価格のみ転記、B13（FBA手数料）は空欄、UIに警告表示
+  → 対処: Amazon検索で「配送料無料」にチェックしてFBA出品のASINを使用する
 - revcal（FBAシミュレータ手動版）も引き続き `/research` ページで使用可能（フォールバック）
 - ライブラリ追加不要（`requests` のみ使用）
 
@@ -608,13 +612,18 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] `services/scraping.py` 作成（`run_keyword_scraping()` スレッドターゲット分離）（2026-05-30）
 - [x] 商品カードに「🔍 1688」ボタン追加（2026-05-30）→ 1688トップページを開くシンプルリンク
 - [x] 1688画像検索自動化を調査・断念（2026-05-30）→ 詳細は「1688画像検索自動化について」参照
-- [x] SP-API デベロッパー登録申請完了（2026-05-30）審査中・ケースID: 20424413801
+- [x] SP-API デベロッパー登録・承認・Refresh Token取得（2026-05-30）
 - [x] SP-API 承認・Refresh Token取得（2026-05-30）
 - [x] `sp_api_client.py` 作成（Catalog Items / Product Pricing / Products Fees API）（2026-05-30）
 - [x] `/api/research/amazon/sp-fetch` エンドポイント実装（2026-05-30）
 - [x] `/research` ページに「🚀 SP-API で取得・転記」ボタン追加（2026-05-30）
 - [x] `app.py` の `/callback` 一時エンドポイント削除（2026-05-30）
 - [x] `get_refresh_token.py` 削除（2026-05-30）
+- [x] SP-API転記セルを水色で表示・`config.EXCEL_COLOR_SP_API` で管理（2026-05-31）
+- [x] `_calc_profit_from_excel()` 共通関数: 1688原価込み利益計算（2026-05-31）
+- [x] 利益計算の順番不問対応（SP-API先・1688先どちらでも表示）（2026-05-31）
+- [x] ◎ GO（緑バナー）/ × 要検討（赤バナー）のUI表示（2026-05-31）
+- [x] ドキュメント全更新（USER_GUIDE / CODE_GUIDE / HANDOVER）（2026-05-31）
 - [x] フェーズ1.6 品質改善タスク Q-1〜Q-8 全完了（2026-05-30）
   - [x] Q-8: `research_tool.py` 削除（旧スタンドアロン版。`excel_exporter.py` コメントも更新）
 - [x] グローバル状態クラス化 完了（2026-05-30）

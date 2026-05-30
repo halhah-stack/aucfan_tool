@@ -50,6 +50,7 @@ COLOR_HEADER_ORANGE = "C55A11"   # オレンジ（Amazon系）
 COLOR_HEADER_GREEN  = "375623"   # 緑（1688系）
 COLOR_SECTION_LIGHT = "D9E1F2"   # 薄青（セクション背景）
 COLOR_INPUT_YELLOW  = "FFFF99"   # 黄色（手入力セル）
+# SP-API自動転記セル色は config.EXCEL_COLOR_SP_API で管理（デフォルト: "CCE5FF" 水色）
 COLOR_WHITE         = "FFFFFF"
 COLOR_GRAY          = "F2F2F2"
 
@@ -171,7 +172,7 @@ def _build_sheet1(ws, group: dict):
     ws.row_dimensions[11].height = 20
     ws.merge_cells("A11:E11")
     sec2 = ws["A11"]
-    sec2.value = "▼ 販売価格・FBA手数料（手入力）"
+    sec2.value = "▼ 販売価格・FBA手数料（手入力=黄 / SP-API自動=水色）"
     sec2.font = _header_font(COLOR_WHITE)
     sec2.fill = _fill(COLOR_HEADER_ORANGE)
     sec2.alignment = _left()

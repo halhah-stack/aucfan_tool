@@ -325,8 +325,8 @@ class SpApiClient:
                     fees = self.get_fees_estimate(asin, effective_price)
                     result.update(fees)
                 except RuntimeError as fee_err:
-                    # FBA手数料見積もり非対応カテゴリ（自動車等）はスキップして続行
-                    logger.warning(f"[SP-API] {asin}: FBA手数料取得失敗（非対応カテゴリの可能性）: {fee_err}")
+                    # FBA手数料取得失敗 → 自己発送専用ASINの可能性
+                    logger.warning(f"[SP-API] {asin}: FBA手数料取得失敗（自己発送専用ASINの可能性）: {fee_err}")
                     result["fee_error"] = str(fee_err)
             else:
                 logger.warning(f"[SP-API] {asin}: 価格を取得できなかったため手数料計算をスキップ")

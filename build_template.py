@@ -125,7 +125,7 @@ cell(ws, 2, 6, "",
 ws.row_dimensions[3].height = 18
 ws.merge_cells("A3:L3")
 c = ws["A3"]
-c.value     = "  ■ 黄色 = 手入力セル　　■ 緑色 = 自動計算セル"
+c.value     = "  ■ 黄色 = 手入力セル　　■ 水色 = SP-API自動転記セル　　■ 緑色 = 自動計算セル"
 c.font      = Font(name=FONT_NAME, size=10, color="555555")
 c.fill      = fill("FAFAFA")
 c.alignment = aln("left", "center")

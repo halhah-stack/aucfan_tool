@@ -441,6 +441,49 @@ async function fetchAmazonUrl() {
   }
 }
 
+// ── 利益計算結果の表示（SP-API・1688共通） ─────────────────────
+function _showProfitResult(data, area) {
+  if (!area) return;
+  const vp = data.variants_profit || [];
+  if (vp.length === 0) return;
+
+  const bannerOk = data.profit_ok;
+  const bannerStyle = bannerOk
+    ? "background:#1B5E20;color:#fff;padding:10px 16px;border-radius:6px;font-size:18px;font-weight:bold;text-align:center;margin-bottom:8px;"
+    : "background:#B71C1C;color:#fff;padding:10px 16px;border-radius:6px;font-size:18px;font-weight:bold;text-align:center;margin-bottom:8px;";
+  const banner = `<div style="${bannerStyle}">${bannerOk ? "◎ GO — 仕入れ候補！" : "× 要検討"}</div>`;
+
+  const price   = data.selling_price || data.price || 0;
+  const fba     = data.fba_fee || 0;
+  const basicInfo = price
+    ? `<div style="font-size:11px;color:#555;margin-bottom:4px;">販売価格: ¥${price.toLocaleString()} &nbsp; FBA手数料: ¥${fba.toLocaleString()}</div>`
+    : "";
+
+  const rows = vp.map(v => {
+    const okStyle = v.ok ? "background:#E8F5E9;font-weight:bold;" : "background:#FFEBEE;";
+    return `<tr style="${okStyle}">` +
+      `<td style="padding:3px 6px;">${v.ok ? "◎" : "×"}</td>` +
+      `<td style="padding:3px 6px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${v.variant}">${v.variant || "—"}</td>` +
+      `<td style="padding:3px 6px;text-align:right;">¥${v.cny_price}元 → ¥${v.cost.toLocaleString()}</td>` +
+      `<td style="padding:3px 6px;text-align:right;font-weight:bold;">¥${v.profit.toLocaleString()}</td>` +
+      `<td style="padding:3px 6px;text-align:right;font-weight:bold;">${v.profit_rate}%</td>` +
+      `</tr>`;
+  }).join("");
+  const table =
+    `<table style="width:100%;border-collapse:collapse;font-size:11px;">` +
+    `<thead><tr style="background:#E0E0E0;">` +
+    `<th style="padding:3px 6px;"></th>` +
+    `<th style="padding:3px 6px;text-align:left;">バリアント</th>` +
+    `<th style="padding:3px 6px;text-align:right;">原価</th>` +
+    `<th style="padding:3px 6px;text-align:right;">利益</th>` +
+    `<th style="padding:3px 6px;text-align:right;">利益率</th>` +
+    `</tr></thead><tbody>${rows}</tbody></table>`;
+
+  area.className = "result success";
+  area.innerHTML = banner + basicInfo + table;
+  area.classList.remove("hidden");
+}
+
 // ── SP-API フェッチ ────────────────────────────────────────────
 async function spApiFetch() {
   const btn    = document.getElementById("btnSpFetch");
@@ -485,18 +528,26 @@ async function spApiFetch() {
     const data = await res.json();
 
     if (data.success) {
-      const go = data.profit_ok ? "🟢 ◎ GO" : "🔴 要検討";
+      // 商品基本情報
+      const basicInfo =
+        `<div style="font-size:12px;margin-bottom:6px;">` +
+        `<strong>${data.asin}</strong> &nbsp; <span style="color:#555;">${data.title}</span><br>` +
+        `カテゴリ: ${data.category} &nbsp; ランク: ${data.rank ? data.rank.toLocaleString() : "—"}<br>` +
+        `販売価格: <strong>¥${(data.price||0).toLocaleString()}</strong> &nbsp; ` +
+        `FBA手数料: <strong>¥${(data.fba_fee||0).toLocaleString()}</strong> &nbsp; ` +
+        `販売手数料: ¥${(data.referral_fee||0).toLocaleString()}` +
+        (data.fee_error ? `<br><span style="color:#e65100;font-size:11px;">⚠️ FBA手数料取得不可: B13未転記。Amazon検索で「配送料無料」にチェックしてFBA出品のASINを使用してください。</span>` : "") +
+        `</div>`;
+
+      const noProfit = `<div style="font-size:11px;color:#888;">1688データ未取得のため利益計算なし</div>`;
+
       area.className = "result success";
-      area.innerHTML =
-        `✅ <strong>${data.asin}</strong><br>` +
-        `<span style="color:#555;">${data.title}</span><br>` +
-        `<strong>価格:</strong> ¥${(data.price||0).toLocaleString()} &nbsp; ` +
-        `<strong>FBA手数料:</strong> ¥${(data.fba_fee||0).toLocaleString()} &nbsp; ` +
-        `<strong>販売手数料:</strong> ¥${(data.referral_fee||0).toLocaleString()}<br>` +
-        `<strong>カテゴリ:</strong> ${data.category} &nbsp; ` +
-        `<strong>ランク:</strong> ${data.rank ? data.rank.toLocaleString() : "-"}<br>` +
-        `<strong>判定:</strong> ${go}` +
-        (data.fee_error ? `<br><span style="color:#e65100;font-size:11px;">⚠️ FBA手数料取得不可（非対応カテゴリ）: B13未転記</span>` : "");
+      area.innerHTML = basicInfo + ((data.variants_profit||[]).length === 0 ? noProfit : "");
+      area.classList.remove("hidden");
+
+      // 利益計算は共通関数で追記
+      _showProfitResult(data, area);
+
     } else {
       area.className = "result error";
       area.innerHTML = `❌ エラー: ${data.error || "取得失敗"}`;
@@ -669,6 +720,11 @@ async function fetch1688Url() {
         `<strong>ショップ:</strong> ${data.shop_name || "不明"} &nbsp;` +
         `<strong>最低単価:</strong> ${data.min_price} 元<br>` +
         `<span style="color:#555;">${data.title}</span>`;
+
+      // SP-API取得済みなら利益計算結果も表示
+      if ((data.variants_profit || []).length > 0) {
+        _showProfitResult(data, document.getElementById("spApiResult"));
+      }
     } else if (res.status === 429) {
       div.className = "result info";
       div.innerHTML = `⏳ <strong>取得処理が実行中です。</strong><br><small>完了後に再度お試しください。</small>`;

@@ -251,6 +251,14 @@ SP_API_CLIENT_SECRET  = os.getenv("SP_API_CLIENT_SECRET", "")
 SP_API_REFRESH_TOKEN  = os.getenv("SP_API_REFRESH_TOKEN", "")
 SP_API_MARKETPLACE_ID = os.getenv("SP_API_MARKETPLACE_ID", "A1VC38T7YXB528")  # 日本
 
+# ─────────────────────────────────────────────
+# Excel セル色設定
+#   手入力セル   : 黄色（FFFF99）← excel_exporter.py の COLOR_INPUT_YELLOW
+#   SP-API自動転記: 水色（CCE5FF）← SP-API で B12/B13 に書き込んだ際に適用
+# .env で上書き可能（例: EXCEL_COLOR_SP_API=B3E5FC）
+# ─────────────────────────────────────────────
+EXCEL_COLOR_SP_API = os.getenv("EXCEL_COLOR_SP_API", "CCE5FF")   # 水色
+
 # Flask 設定
 # ─────────────────────────────────────────────
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5001"))

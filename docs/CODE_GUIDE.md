@@ -1,7 +1,7 @@
 # コード解説書（エンジニア向け）
 
 > 対象読者：このツールをメンテナンス・拡張するエンジニア  
-> 最終更新：2026-05-30（1688ボタン追加・画像検索自動化断念・詳細はHANDOVER.md参照）
+> 最終更新：2026-05-31（SP-API実装・利益計算自動化・詳細はHANDOVER.md参照）
 
 ---
 
@@ -56,10 +56,21 @@ aucfan_tool/
 │                           #   自動更新されるが、期限切れ・削除時は再度 setup_gdrive_auth.py を実行。
 ├── requirements.txt        # Python依存ライブラリ
 │
+├── sp_api_client.py        # Amazon SP-API クライアント（2026-05-30追加）
+│                           #   SpApiClient クラス: LWAアクセストークン取得・キャッシュ
+│                           #   get_catalog_item(asin)   → タイトル・ランク・カテゴリ・参考価格
+│                           #   get_listing_price(asin)  → 現在の最安値（価格未入力時のフォールバック）
+│                           #   get_fees_estimate(asin, price) → FBA手数料・販売手数料
+│                           #   fetch_product_info(asin, price) → 上記3つを統合して一括返却
+│                           #   get_client() → シングルトンインスタンス取得
+│                           #   認証情報は config.py の SP_API_* から読む
+│                           #   外部ライブラリ不要（requests のみ使用）
+│
 ├── routes/                 # Flask Blueprint（APIルート分割）
 │   ├── __init__.py
 │   └── research.py         # /research・/api/research/* ルート（app.pyから分離済み）
-│                           #   Blueprint名: research / インポート: Path, os, json, datetime, openpyxl 等
+│                           #   Blueprint名: research
+│                           #   _calc_profit_from_excel(path) 共通関数: B12/B13+Sheet4のK/Lから利益計算
 │                           #   新しいルートを追加する場合はここに @research_bp.route() を追記する
 │
 ├── services/               # ビジネスロジック層（Flask非依存・単体テスト可能）
@@ -129,6 +140,10 @@ AUTOMOTIVE_KEYWORDS    = set(_RULES.get("automotive_keywords", []))
 | Gemini | `GEMINI_API_KEY`, `GEMINI_MODEL_VISION`, `GEMINI_RPM_LIMIT=14` | AI判定の設定 |
 | Flask | `FLASK_PORT=5001`, `FLASK_HOST=0.0.0.0` | Webサーバー設定 |
 | 出力先 | `OUTPUT_BASE_DIR=（Google Driveパス）` | セッションフォルダの親ディレクトリ。デフォルトは `~/Library/CloudStorage/.../AucFanToolData/リサーチ結果`。Google Drive未接続時はローカルの `リサーチ結果/` にフォールバック |
+| SP-API | `SP_API_CLIENT_ID`, `SP_API_CLIENT_SECRET`, `SP_API_REFRESH_TOKEN`, `SP_API_MARKETPLACE_ID` | Amazon SP-API 認証情報（.envで管理） |
+| 1688係数 | `CNY_TO_JPY_RATE=35` | 元→円換算係数（送料・関税・代行手数料込み） |
+| 利益判定 | `PROFIT_RATE_THRESHOLD=25`, `PROFIT_YEN_THRESHOLD=450` | ◎判定の閾値（%・円） |
+| Excelセル色 | `EXCEL_COLOR_SP_API=CCE5FF` | SP-API自動転記セルの背景色（水色） |
 
 **CSS セレクター (`SELECTORS` 辞書)**: AucFanのHTML構造が変わった際はここを更新します。`list`キー配下が一覧ページ用、`detail`キー配下が詳細ページ用で、それぞれ候補セレクターをリストで持ちます（先頭から順に試行します）。
 
