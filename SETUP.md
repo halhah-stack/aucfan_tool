@@ -133,6 +133,19 @@ GEMINI_ENABLED=true
 
 # Flask
 FLASK_PORT=5001
+
+# Amazon SP-API（リサーチ追記ツールの利益計算に使用）
+# Seller Central のデベロッパーコンソールから取得
+# https://sellercentral-japan.amazon.com/sellingpartner/developerconsole
+SP_API_CLIENT_ID=amzn1.application-oa2-client.xxxx
+SP_API_CLIENT_SECRET=amzn1.oa2-cs.v1.xxxx
+SP_API_REFRESH_TOKEN=Atzr|xxxx
+SP_API_MARKETPLACE_ID=A1VC38T7YXB528
+
+# 利益計算設定（変更可）
+CNY_TO_JPY_RATE=35          # 1688係数（元→円：送料・関税・代行手数料込み）
+PROFIT_RATE_THRESHOLD=25    # ◎判定の利益率閾値（%）
+PROFIT_YEN_THRESHOLD=450    # ◎判定の利益額閾値（円）
 ```
 
 > **パスの手動指定について**: `OUTPUT_BASE_DIR` などにパスを書く場合は、そのMacのユーザー名に合わせてください。別Macの `/Users/ユーザー名/...` をそのままコピーしても動きません（パスが存在しないためエラーになります）。`config.py` が自動検出するため、通常は書かなくてOKです。
