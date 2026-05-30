@@ -540,18 +540,22 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - ポータル: solutionproviderportal.amazon.com / アカウント: EKIYOU
 - ケースID: 20424413801
 - **⚡ 次回セッションでやること（最優先）：**
-  1. `https://sellercentral-japan.amazon.com/sellingpartner/developerconsole` を開く
-  2. 「新しいアプリクライアントを追加」をクリック
-  3. Client ID / Client Secret を発行・コピー
-  4. 「アプリの認可」でRefresh Tokenを取得
-  5. `.env` に以下を追加：
-     ```
-     SP_API_CLIENT_ID=...
-     SP_API_CLIENT_SECRET=...
-     SP_API_REFRESH_TOKEN=...
-     SP_API_MARKETPLACE_ID=A1VC38T7YXB528（日本）
-     ```
-  6. Catalog Items API・Products Fees APIの実装開始
+  - ソリューションプロバイダーポータル（新システム）の再申請完了（2026-05-30）→ 承認メール待ち
+  - Client ID・Client Secretは取得済み（.envに手動記載が必要）
+  - 承認後の手順：
+    1. `https://solutionproviderportal.amazon.com` でリダイレクトURI `http://localhost:5001/callback` を登録
+    2. `http://localhost:5001` でアプリを起動
+    3. 承認URLにアクセス → 「許可」→ localhost:5001/callbackにRefresh Tokenが表示される
+    4. `.env` に以下を追加：
+       ```
+       SP_API_CLIENT_ID=amzn1.application-oa2-client.c8d50cb79dd34f728124a9fcf484f3b1
+       SP_API_CLIENT_SECRET=（メモした値）
+       SP_API_REFRESH_TOKEN=（取得した値）
+       SP_API_MARKETPLACE_ID=A1VC38T7YXB528
+       ```
+    5. Catalog Items API・Products Fees APIの実装開始
+
+- **app.pyに一時コールバックエンドポイント追加済み**（`/callback`）→ Refresh Token取得後に削除すること
 
 #### ステップ2：商品検索APIで価格・ランキング取得
 
