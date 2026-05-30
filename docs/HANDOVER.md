@@ -1,6 +1,6 @@
 # 引き継ぎメモ
 
-> 最終更新：2026-05-30（8回目）  
+> 最終更新：2026-05-30（9回目）  
 > 次のClaudeセッションはここから読んで作業を再開すること。
 
 ---
@@ -495,7 +495,7 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 
 | タスク | 内容 | 状態 |
 |---|---|---|
-| 1688調査タブ（メインアプリ統合） | メインアプリの商品カードから直接1688調査できるUI | 未着手 |
+| 1688調査タブ（メインアプリ統合） | 商品カードに「1688画像検索」ボタン追加。AucFan商品画像URLを1688画像検索（s.1688.com）に直接投げて新タブで開く | **次のタスク** |
 | `upload_images_to_gdrive.py` git管理 | 現在gitignore扱い → 追加するか判断 | 保留 |
 
 ---
@@ -535,9 +535,22 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 
 #### ステップ1：SP-API申請（出品者として資格あり）
 
-- セラーセントラル → デベロッパー登録で申請
-- 承認まで1〜2週間かかるため**最優先で着手**
-- 申請中に ステップ2〜3 の実装を先行できる
+- ✅ **申請完了（2026-05-30）**
+- ポータル: solutionproviderportal.amazon.com / アカウント: EKIYOU
+- ケースID: 20424413801
+- 現在のステータス: **審査中**（承認まで数日〜1週間）
+- 承認メール（shinozakistore@gmail.com）待ち
+- 承認後の手順：
+  1. solutionproviderportal.amazon.com → 「新しいアプリクライアントを追加」
+  2. Client ID / Client Secret を発行・コピー
+  3. 「アプリの認可」でRefresh Tokenを取得
+  4. `.env` に以下を追加：
+     ```
+     SP_API_CLIENT_ID=...
+     SP_API_CLIENT_SECRET=...
+     SP_API_REFRESH_TOKEN=...
+     SP_API_MARKETPLACE_ID=A1VC38T7YXB528（日本）
+     ```
 
 #### ステップ2：商品検索APIで価格・ランキング取得
 
@@ -582,6 +595,7 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] `services/export.py` 作成（HTML/PDF/Excel/CSV生成ロジック分離・app.py 456行削減）（2026-05-30）
 - [x] `services/session.py` 作成（セッション管理純粋関数・パラメーター注入方式）（2026-05-30）
 - [x] `services/scraping.py` 作成（`run_keyword_scraping()` スレッドターゲット分離）（2026-05-30）
+- [x] SP-API デベロッパー登録申請完了（2026-05-30）審査中・ケースID: 20424413801
 - [x] フェーズ1.6 品質改善タスク Q-1〜Q-8 全完了（2026-05-30）
   - [x] Q-8: `research_tool.py` 削除（旧スタンドアロン版。`excel_exporter.py` コメントも更新）
 - [x] グローバル状態クラス化 完了（2026-05-30）
