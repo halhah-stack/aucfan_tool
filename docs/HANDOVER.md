@@ -536,21 +536,22 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 #### ステップ1：SP-API申請（出品者として資格あり）
 
 - ✅ **申請完了（2026-05-30）**
+- ✅ **承認済み（2026-05-30）**
 - ポータル: solutionproviderportal.amazon.com / アカウント: EKIYOU
 - ケースID: 20424413801
-- 現在のステータス: **審査中**（承認まで数日〜1週間）
-- 承認メール（shinozakistore@gmail.com）待ち
-- 承認後の手順：
-  1. solutionproviderportal.amazon.com → 「新しいアプリクライアントを追加」
-  2. Client ID / Client Secret を発行・コピー
-  3. 「アプリの認可」でRefresh Tokenを取得
-  4. `.env` に以下を追加：
+- **⚡ 次回セッションでやること（最優先）：**
+  1. `https://sellercentral-japan.amazon.com/sellingpartner/developerconsole` を開く
+  2. 「新しいアプリクライアントを追加」をクリック
+  3. Client ID / Client Secret を発行・コピー
+  4. 「アプリの認可」でRefresh Tokenを取得
+  5. `.env` に以下を追加：
      ```
      SP_API_CLIENT_ID=...
      SP_API_CLIENT_SECRET=...
      SP_API_REFRESH_TOKEN=...
      SP_API_MARKETPLACE_ID=A1VC38T7YXB528（日本）
      ```
+  6. Catalog Items API・Products Fees APIの実装開始
 
 #### ステップ2：商品検索APIで価格・ランキング取得
 
