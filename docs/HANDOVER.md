@@ -1,6 +1,6 @@
 # 引き継ぎメモ
 
-> 最終更新：2026-05-30（7回目）  
+> 最終更新：2026-05-30（8回目）  
 > 次のClaudeセッションはここから読んで作業を再開すること。
 
 ---
@@ -525,7 +525,7 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 | # | タスク | 対象ファイル | 内容 |
 |---|---|---|---|
 | Q-7 | magic number 定数化 | `excel_append.py` 等 | `height = 90` 等を定数 `ROW_HEIGHT_IMAGE = 90` に変更 |
-| Q-8 | `research_tool.py` 削除検討 | `research_tool.py` | 旧スタンドアロン版。`/research` に統合済みなら削除 |
+| Q-8 | `research_tool.py` 削除 | `research_tool.py` | ✅ 完了（2026-05-30）旧スタンドアロン版を削除。`excel_exporter.py` のコメントも更新済み |
 
 ---
 
@@ -582,6 +582,8 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] `services/export.py` 作成（HTML/PDF/Excel/CSV生成ロジック分離・app.py 456行削減）（2026-05-30）
 - [x] `services/session.py` 作成（セッション管理純粋関数・パラメーター注入方式）（2026-05-30）
 - [x] `services/scraping.py` 作成（`run_keyword_scraping()` スレッドターゲット分離）（2026-05-30）
+- [x] フェーズ1.6 品質改善タスク Q-1〜Q-8 全完了（2026-05-30）
+  - [x] Q-8: `research_tool.py` 削除（旧スタンドアロン版。`excel_exporter.py` コメントも更新）
 - [x] グローバル状態クラス化 完了（2026-05-30）
   - [x] STEP2: SellerState クラス（辞書互換・後方互換エイリアス付き）
   - [x] STEP3: MasterState クラス（同上）

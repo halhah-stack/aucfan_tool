@@ -11,7 +11,7 @@ excel_exporter.py — Aucfan リサーチシート Excel エクスポーター
   Sheet4: ④1688仕入れ   — 利益計算メイン（空）
   Sheet5: ⑤1688テキスト  — 仕入れ詳細（空）
 
-  Sheet2〜5 への追記は research_tool.py（スタンドアロン）で行う。
+  Sheet2〜5 への追記は /research ページ（routes/research.py）で行う。
 """
 from __future__ import annotations
 
@@ -238,7 +238,7 @@ def _build_sheet1(ws, group: dict):
 
 # ── Sheet2: ②Amazonライバル ──────────────────────────────────────────
 def _build_sheet2(ws):
-    """Sheet2（②Amazonライバル）のヘッダーを作成する。データは research_tool.py で追記。"""
+    """Sheet2（②Amazonライバル）のヘッダーを作成する。データは /research ページで追記。"""
     # 列幅
     col_widths = [12, 45, 10, 8, 12, 8, 40, 25, 18]
     headers    = ["ASIN", "タイトル", "価格", "評価", "レビュー数", "A+", "URL（実）", "入力URL", "画像"]
@@ -266,7 +266,7 @@ def _build_sheet2(ws):
     # 補足メモ
     ws.row_dimensions[3].height = 16
     ws.merge_cells("A3:H3")
-    ws["A3"].value = "← research_tool.py の「Amazon取得」ボタンで追記されます"
+    ws["A3"].value = "← /research ページの「取得→追記」ボタンで追記されます"
     ws["A3"].font = Font(name="BIZ UDGothic", italic=True, color="999999")
 
 
@@ -284,7 +284,7 @@ def _build_sheet3(ws):
 
     ws.row_dimensions[2].height = 16
     ws.merge_cells("A2:B2")
-    ws["A2"].value = "← research_tool.py の「Amazon取得」ボタンで追記されます"
+    ws["A2"].value = "← /research ページの「取得→追記」ボタンで追記されます"
     ws["A2"].font = Font(name="BIZ UDGothic", italic=True, color="999999")
 
 
@@ -342,7 +342,7 @@ def _build_sheet5(ws):
 
     ws.row_dimensions[2].height = 16
     ws.merge_cells("A2:B2")
-    ws["A2"].value = "← research_tool.py の「1688取得」ボタンで追記されます"
+    ws["A2"].value = "← /research ページの「1688取得→追記」ボタンで追記されます"
     ws["A2"].font = Font(name="BIZ UDGothic", italic=True, color="999999")
 
 
