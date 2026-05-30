@@ -189,7 +189,7 @@ def api_research_excel_load():
     """Excel ファイルの情報を返す。"""
     from excel_append import get_excel_info
     body = request.get_json(silent=True) or {}
-    path = body.get("path", "").strip()
+    path = (body.get("excel_path") or body.get("path") or "").strip()
     if not path:
         return jsonify({"success": False, "error": "パスが指定されていません"})
     return jsonify(get_excel_info(path))
@@ -675,5 +675,150 @@ def api_research_1688_fetch_url_append():
     finally:
         _research_1688_fetch_status = {"running": False, "step": ""}
         _research_1688_fetch_lock.release()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SP-API: ASIN → 商品情報 + FBA手数料取得 → Excel 転記
+# ─────────────────────────────────────────────────────────────────────────────
+
+@research_bp.route("/api/research/amazon/sp-fetch", methods=["POST"])
+def api_sp_fetch():
+    """
+    SP-API (Catalog Items + Products Fees) でAmazon商品情報を取得し、
+    Excelの Sheet1 B12（販売価格）・B13（FBA手数料）に転記する。
+
+    Request JSON:
+      {
+        "excel_path": "/path/to/xxx_リサーチ.xlsx",
+        "asin":       "B0XXXXXXXX",
+        "price":      3000          # 省略可。省略時はAmazon参考価格を使用。
+      }
+
+    Response JSON:
+      {
+        "success": true/false,
+        "asin":         str,
+        "title":        str,
+        "rank":         int | null,
+        "category":     str,
+        "list_price":   int | null,
+        "price":        int | null,
+        "fba_fee":      int | null,
+        "referral_fee": int | null,
+        "total_fee":    int | null,
+        "profit_ok":    bool,        # ◎ GO 条件を満たすかどうか
+        "message":      str,
+        "error":        str | null
+      }
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    excel_path = body.get("excel_path", "")
+    asin       = (body.get("asin") or "").strip().upper()
+    price      = body.get("price")   # int | None
+
+    if not asin:
+        return jsonify({"success": False, "error": "asin が指定されていません"}), 400
+
+    # price を int に変換
+    if price is not None:
+        try:
+            price = int(price)
+        except (ValueError, TypeError):
+            price = None
+
+    try:
+        from sp_api_client import get_client
+        client = get_client()
+        info = client.fetch_product_info(asin, price)
+    except Exception as e:
+        logger.error(f"[SP-API] 取得エラー: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    if info.get("error"):
+        return jsonify({"success": False, **info}), 500
+
+    # ── Excel 転記（パスが指定されている場合のみ） ──────────────────────
+    if excel_path:
+        excel_path = _validate_excel_path(excel_path)
+        if not excel_path:
+            return jsonify({"success": False, "error": "不正なExcelパスです"}), 400
+        try:
+            wb = load_workbook(excel_path)
+            ws = wb["①概要"]
+            effective_price = info.get("price")
+            fba_fee         = info.get("fba_fee")
+
+            if effective_price and ws["B12"].value is None:
+                ws["B12"] = effective_price
+            if fba_fee:
+                ws["B13"] = fba_fee
+
+            wb.save(excel_path)
+            logger.info(f"[SP-API] Excel転記完了: {excel_path} B12={effective_price} B13={fba_fee}")
+        except Exception as e:
+            logger.error(f"[SP-API] Excel転記エラー: {e}")
+            return jsonify({"success": False, "error": f"Excel転記失敗: {e}"}), 500
+
+    # ── 利益判定 ─────────────────────────────────────────────────────────
+    profit_ok = False
+    try:
+        if excel_path:
+            wb2 = load_workbook(excel_path, data_only=True)
+            ws4 = wb2["④1688仕入れ"]
+            for row in ws4.iter_rows(min_row=4):
+                profit      = row[16].value  # Q列 (0-indexed: 16)
+                profit_rate = row[17].value  # R列
+                if profit is not None:
+                    rate_val = 0.0
+                    if isinstance(profit_rate, str):
+                        try:
+                            rate_val = float(profit_rate.replace("%", ""))
+                        except ValueError:
+                            pass
+                    elif isinstance(profit_rate, (int, float)):
+                        rate_val = float(profit_rate) * 100
+                    if (rate_val >= config.PROFIT_RATE_THRESHOLD or
+                            profit >= config.PROFIT_YEN_THRESHOLD):
+                        profit_ok = True
+                        break
+    except Exception:
+        pass  # 利益判定はおまけ。失敗してもレスポンスは返す
+
+    return jsonify({
+        "success":      True,
+        "asin":         info["asin"],
+        "title":        info["title"],
+        "brand":        info.get("brand", ""),
+        "rank":         info["rank"],
+        "category":     info["category"],
+        "list_price":   info["list_price"],
+        "price":        info["price"],
+        "fba_fee":      info["fba_fee"],
+        "referral_fee": info.get("referral_fee"),
+        "total_fee":    info.get("total_fee"),
+        "profit_ok":    profit_ok,
+        "fee_error":    info.get("fee_error"),   # FBA手数料取得失敗時のメッセージ（非対応カテゴリ等）
+        "message":      "SP-API 取得・転記完了",
+        "error":        None,
+    })
+
+
+def _validate_excel_path(path: str) -> str | None:
+    """パスが許可ディレクトリ内にあるかチェックして正規化して返す。不正なら None。"""
+    try:
+        p = Path(path).resolve()
+        allowed = [
+            Path(config.EXCEL_BASE_DIR).resolve(),
+            Path(config.OUTPUT_BASE_DIR).resolve(),
+        ]
+        for a in allowed:
+            try:
+                p.relative_to(a)
+                return str(p)
+            except ValueError:
+                continue
+        return None
+    except Exception:
+        return None
 
 

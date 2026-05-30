@@ -1,6 +1,6 @@
 # 引き継ぎメモ
 
-> 最終更新：2026-05-30（10回目）  
+> 最終更新：2026-05-30（11回目）  
 > 次のClaudeセッションはここから読んで作業を再開すること。
 
 ---
@@ -27,6 +27,11 @@
 | /researchページ（Excelダウンロード） | `routes/research.py` `/api/research/excel/download` | 完成 |
 | FBA料金シミュレータ自動入力（新タブで開く） | `routes/research.py` `/api/research/amazon/open-calculator` | 完成 |
 | FBA利益計算結果をExcelに転記 | `routes/research.py` `/api/research/amazon/read-calc` | 完成 |
+| SP-API 商品情報取得（Catalog Items API） | `sp_api_client.py` `get_catalog_item()` | 完成 |
+| SP-API FBA手数料取得（Products Fees API） | `sp_api_client.py` `get_fees_estimate()` | 完成（自動車カテゴリ等は非対応、スキップして継続） |
+| SP-API 現在価格取得（Product Pricing API） | `sp_api_client.py` `get_listing_price()` | 完成（価格未入力時のフォールバック） |
+| SP-API 一括取得→Excel転記 | `routes/research.py` `/api/research/amazon/sp-fetch` | 完成 |
+| /researchページ（SP-API フェッチボタン） | `templates/research.html` | 完成 |
 | Amazon取得中の進捗表示 | `routes/research.py` `_research_fetch_status` + `/api/research/amazon/status` | 完成 |
 | メインアプリからリサーチツールを開くボタン | `templates/index.html` | 完成 |
 | 1688商品ページ取得（URL指定） | `scraper_1688.py` `fetch_1688_from_url()` | 完成 |
@@ -38,7 +43,6 @@
 
 | 機能 | 備考 |
 |---|---|
-| UI「1688調査」タブ（メインアプリ） | メインアプリ側への統合（後回し） |
 | Claude Excel アドイン連携 | 後回し |
 
 ---
@@ -52,8 +56,13 @@
    → Excelファイルをクリックして選択
    → ChromeでAmazonライバルページを開く
    → URLを貼り付けて「取得→追記」（複数ライバルを1件ずつ）
-   → 「💴 FBA料金シミュレータで開く」ボタン → 新タブでrevcalページを開きASINを自動入力
-   → revcalで原価を手入力し利益計算後、「📥 計算結果をExcelに転記」ボタンで転記
+   → 【SP-API版（推奨）】「🚀 SP-API で取得・転記」ボタン
+      → 販売価格を入力（省略時はAmazon参考価格 or 現在価格を自動取得）
+      → ①概要シート B12（販売価格）・B13（FBA手数料）を自動転記
+      → ※自動車カテゴリ等はFBA手数料が取得できない場合あり（B13未転記）
+   → 【手動版（フォールバック）】「💴 FBA料金シミュレータで開く」ボタン
+      → 新タブでrevcalページを開きASINを自動入力
+      → revcalで原価を手入力し利益計算後、「📥 計算結果をExcelに転記」ボタンで転記
 ④ 1688調査 → 1688商品ページのURLを貼り付けて「取得→追記」→ Sheet4/5に追記
 ```
 
@@ -170,6 +179,13 @@ aucfan_tool/
 │   ├── fetch_amazon_product()  現在タブから取得
 │   ├── fetch_amazon_from_url() URL指定取得（短縮URL対応）
 │   └── resolve_short_url()   amzn.asia等の短縮URL解決
+├── sp_api_client.py          Amazon SP-API クライアント（2026-05-30追加）
+│   ├── SpApiClient           クラス（アクセストークンキャッシュ付き）
+│   ├── get_catalog_item()    Catalog Items API → タイトル・ランク・カテゴリ・参考価格
+│   ├── get_listing_price()   Product Pricing API → 現在の最安値出品価格
+│   ├── get_fees_estimate()   Products Fees API → FBA手数料・販売手数料
+│   ├── fetch_product_info()  上記3つを統合して一括返却
+│   └── get_client()          シングルトンインスタンス取得
 ├── scraper_1688.py           1688商品ページスクレイパー（旧: 1688_scraper.py→リネーム）
 │   ├── _connect_chrome()     ポート9222の既存Chromeに接続（同方式）
 │   ├── _parse_price_from_text()  "预估到手单价" 優先で価格抽出
@@ -220,6 +236,7 @@ aucfan_tool/
 | `/api/research/amazon/status` | GET | Amazon取得中ステータスのポーリング用 |
 | `/api/research/amazon/open-calculator` | POST | FBA料金シミュレータを新タブで開きASIN自動入力 |
 | `/api/research/amazon/read-calc` | POST | revcal利益計算結果をExcel Sheet1（B12/B13）に転記 |
+| `/api/research/amazon/sp-fetch` | POST | SP-API で商品情報・FBA手数料取得→Excel転記 |
 | `/api/research/1688/fetch-url-append` | POST | 1688 URL指定取得→Excel追記（Sheet4/5） |
 | `/api/research/1688/status` | GET | 1688取得中ステータスのポーリング用 |
 
@@ -372,6 +389,14 @@ git pull
 # → Chrome（ポート9222）とFlask（ポート5001）が起動する
 # → ブラウザで http://localhost:5001 が開く
 ```
+
+### 🔜 次回以降の作業候補
+
+| 優先 | タスク | 内容 |
+|---|---|---|
+| 高 | SP-API をメインアプリの Amazon 調査タブに統合 | 現在は /research ページのみ対応。メインアプリの「Amazon調査」タブからも SP-API で直接取得できるようにする |
+| 中 | SP-API で取得した価格を Sheet2 に自動反映 | ライバル ASIN の現在価格を SP-API 経由で取得して Sheet2 に書き込む（Selenium 不要化） |
+| 低 | 非対応カテゴリの FBA 手数料を revcal から自動転記 | 自動車カテゴリ等で SP-API が失敗した場合に revcal を自動で開くフォールバックフロー |
 
 ---
 
@@ -533,65 +558,37 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 
 **目的**: Seleniumスクレイピングに依存せず、Amazon公式APIから価格・手数料を取得して差益計算を自動化する。
 
-#### ステップ1：SP-API申請（出品者として資格あり）
+#### ステップ1：SP-API申請・承認・Refresh Token取得
 
 - ✅ **申請完了（2026-05-30）**
 - ✅ **承認済み（2026-05-30）**
+- ✅ **Refresh Token取得済み（2026-05-30）** → `.env` の `SP_API_REFRESH_TOKEN` に設定済み
 - ポータル: solutionproviderportal.amazon.com / アカウント: EKIYOU
 - ケースID: 20424413801
-- **⚡ 次回セッションでやること（最優先）：Refresh Token取得**
+- Client ID: amzn1.application-oa2-client.c8d50cb79dd34f728124a9fcf484f3b1
+- Client Secret / Refresh Token: `.env` に設定済み
+- App ID: amzn1.sp.solution.4341a5d5-fc50-42b5-b0b3-ff3414de98d0
+- Marketplace ID: A1VC38T7YXB528（日本）
 
-  **正しい方法（公式ドキュメント確認済み）：**
-  リダイレクトURIもOAuthフローも不要。Seller Central直接から取得できる。
+#### ステップ2〜4：✅ 実装完了（2026-05-30）
 
-  1. `https://sellercentral-japan.amazon.com/sellingpartner/developerconsole` を開く
-  2. EKIYOU Research Toolの「アプリの編集」ボタン右の **▼** をクリック
-  3. **「Authorize」または「承認」** の選択肢をクリック
-  4. 「Authorize app」ボタンを押す → **Refresh Tokenが画面に表示される**
-  5. 表示されたRefresh Tokenを `.env` に追加：
-     ```
-     SP_API_REFRESH_TOKEN=（表示された値）
-     ```
-  6. `app.py` の `/callback` エンドポイントを削除（不要になった）
-  7. `get_refresh_token.py` も削除
-  8. Catalog Items API・Products Fees APIの実装開始
+`sp_api_client.py` に以下を実装済み：
 
-  **参考：** https://developer-docs.amazon.com/sp-api/docs/self-authorization
+| API | クラスメソッド | 内容 |
+|---|---|---|
+| Catalog Items API v2022-04-01 | `get_catalog_item(asin)` | タイトル・ブランド・ランキング・カテゴリ・参考価格 |
+| Product Pricing API v0 | `get_listing_price(asin)` | 現在の最安値出品価格（価格未入力時のフォールバック） |
+| Products Fees API v0 | `get_fees_estimate(asin, price)` | FBA手数料・販売手数料（自動車カテゴリ等は非対応） |
+| 統合 | `fetch_product_info(asin, price)` | 上記3つを一括実行して dict で返す |
 
-  **取得済み情報（.envに設定済み）：**
-  - Client ID: amzn1.application-oa2-client.c8d50cb79dd34f728124a9fcf484f3b1
-  - Client Secret: .envに設定済み
-  - App ID: amzn1.sp.solution.4341a5d5-fc50-42b5-b0b3-ff3414de98d0
-  - Marketplace ID: A1VC38T7YXB528（日本）
+**エンドポイント**: `/api/research/amazon/sp-fetch` (POST)  
+**UIボタン**: `/research` ページの「🚀 SP-API で取得・転記」
 
-- **app.pyに一時コールバックエンドポイント追加済み**（`/callback`）→ Refresh Token取得後に削除すること
-
-#### ステップ2：商品検索APIで価格・ランキング取得
-
-```
-使用API: Catalog Items API
-入力: ASIN
-出力: 価格・ランキング・カテゴリ・タイトル
-ライブラリ: python-amazon-sp-api（pip install python-amazon-sp-api）
-```
-
-今のSeleniumスクレイピング部分と置き換える。安定性が大幅に向上する。
-
-#### ステップ3：手数料計算APIでFBA手数料取得
-
-```
-使用API: Products Fees API（get_my_fees_estimate）
-入力: ASIN + 想定販売価格
-出力: FBA手数料（カテゴリ別・サイズ別）
-```
-
-今 revcal で手動確認している部分が自動化される。
-
-#### ステップ4：差益自動計算をツールに組み込む
-
-- ステップ2＋3が揃えば「ASIN入力 → 価格・手数料・利益率」まで全自動
-- Excelへの自動転記も対応（Sheet1 B12/B13 に自動入力）
-- revcal（SellerCentral）を開く必要がなくなる
+**注意事項**:
+- 自動車・一部カテゴリのASINは Products Fees API が `InvalidParameterValue` を返す（非対応）
+  → その場合はタイトル・ランク・価格のみ転記、B13（FBA手数料）は空欄、UIに警告表示
+- revcal（FBAシミュレータ手動版）も引き続き `/research` ページで使用可能（フォールバック）
+- ライブラリ追加不要（`requests` のみ使用）
 
 ---
 
@@ -612,6 +609,12 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - [x] 商品カードに「🔍 1688」ボタン追加（2026-05-30）→ 1688トップページを開くシンプルリンク
 - [x] 1688画像検索自動化を調査・断念（2026-05-30）→ 詳細は「1688画像検索自動化について」参照
 - [x] SP-API デベロッパー登録申請完了（2026-05-30）審査中・ケースID: 20424413801
+- [x] SP-API 承認・Refresh Token取得（2026-05-30）
+- [x] `sp_api_client.py` 作成（Catalog Items / Product Pricing / Products Fees API）（2026-05-30）
+- [x] `/api/research/amazon/sp-fetch` エンドポイント実装（2026-05-30）
+- [x] `/research` ページに「🚀 SP-API で取得・転記」ボタン追加（2026-05-30）
+- [x] `app.py` の `/callback` 一時エンドポイント削除（2026-05-30）
+- [x] `get_refresh_token.py` 削除（2026-05-30）
 - [x] フェーズ1.6 品質改善タスク Q-1〜Q-8 全完了（2026-05-30）
   - [x] Q-8: `research_tool.py` 削除（旧スタンドアロン版。`excel_exporter.py` コメントも更新）
 - [x] グローバル状態クラス化 完了（2026-05-30）

@@ -2083,57 +2083,6 @@ def _auto_load_latest_session():
         # ロード失敗してもFlaskは起動する
 
 
-# ── SP-API 一時コールバック（Refresh Token取得後に削除） ──────────────
-@app.route("/callback")
-def sp_api_callback():
-    """SP-API OAuth コールバック（一時エンドポイント）"""
-    import urllib.parse, urllib.request, json as _json
-    code  = request.args.get("spapi_oauth_code", "")
-    error = request.args.get("error", "")
-    if error:
-        return f"<h2>エラー: {error}</h2>"
-    if not code:
-        return "<h2>コードが取得できませんでした</h2>"
-
-    # Refresh Tokenと交換（.envから読み込む）
-    import os as _os
-    CLIENT_ID     = _os.getenv("SP_API_CLIENT_ID", "")
-    CLIENT_SECRET = _os.getenv("SP_API_CLIENT_SECRET", "")
-    REDIRECT_URI  = "http://localhost:5001/callback"
-    if not CLIENT_ID or not CLIENT_SECRET:
-        return "<h2>エラー: .envにSP_API_CLIENT_IDとSP_API_CLIENT_SECRETを設定してください</h2>"
-
-    data = urllib.parse.urlencode({
-        "grant_type":    "authorization_code",
-        "code":          code,
-        "redirect_uri":  REDIRECT_URI,
-        "client_id":     CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-    }).encode()
-    req = urllib.request.Request(
-        "https://api.amazon.com/auth/o2/token", data=data, method="POST"
-    )
-    req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    try:
-        with urllib.request.urlopen(req) as res:
-            result = _json.loads(res.read())
-    except urllib.error.HTTPError as e:
-        return f"<h2>トークン交換エラー: {e.read().decode()}</h2>"
-
-    rt = result.get("refresh_token", "取得失敗")
-    return f"""
-    <h2>✅ Refresh Token 取得成功！</h2>
-    <p>以下を <code>.env</code> に追加してください：</p>
-    <pre style="background:#f0f0f0;padding:16px;font-size:14px">
-SP_API_REFRESH_TOKEN={rt}
-SP_API_MARKETPLACE_ID=A1VC38T7YXB528
-    </pre>
-    <p style="color:red">⚠️ この画面を閉じる前に必ずコピーしてください。</p>
-    <p>完了後、app.pyの /callback エンドポイントを削除してください。</p>
-    """
-# ── SP-API 一時コールバック ここまで ─────────────────────────────────
-
-
 if __name__ == "__main__":
     check_env()
 

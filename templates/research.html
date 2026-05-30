@@ -170,6 +170,27 @@
         判断基準: 利益率 25% 以上 または 利益 450円 以上 → ◎ GO
       </p>
     </div>
+
+    <!-- SP-API フェッチ（FBAシミュレータ不要版） -->
+    <div style="margin-top:12px; padding:10px 12px; background:#E8F5E9; border-radius:6px; border:1px solid #A5D6A7;">
+      <div style="font-size:12px; font-weight:bold; color:#2E7D32; margin-bottom:6px;">
+        🚀 SP-API で自動取得（シミュレータ不要）
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input id="spApiPrice" type="number" placeholder="販売価格（円）省略可"
+               style="width:160px; padding:7px 9px; font-size:13px; border:1px solid #ccc; border-radius:4px;">
+        <button id="btnSpFetch" class="btn btn-calc"
+                onclick="spApiFetch()"
+                style="font-size:13px; padding:8px 16px; background:#1565C0; flex-shrink:0;">
+          🚀 SP-API で取得・転記
+        </button>
+      </div>
+      <p class="hint" style="margin-top:5px; font-size:11px; color:#555;">
+        Amazonから価格・FBA手数料を自動取得してExcel B12/B13 に転記します。価格省略時はAmazon参考価格を使用。
+      </p>
+      <div id="spApiResult" class="hidden result" style="margin-top:6px; font-size:12px;"></div>
+    </div>
+
     <div id="calcResult" class="hidden result" style="margin-top:6px; font-size:12px;"></div>
   </div>
 
@@ -417,6 +438,75 @@ async function fetchAmazonUrl() {
     _stopProgressPolling();
     btn.innerHTML = "🔍 取得 → 追記";
     btn.disabled  = false;
+  }
+}
+
+// ── SP-API フェッチ ────────────────────────────────────────────
+async function spApiFetch() {
+  const btn    = document.getElementById("btnSpFetch");
+  const area   = document.getElementById("spApiResult");
+  const price  = document.getElementById("spApiPrice").value;
+
+  if (!loadedPath) {
+    area.className = "result error";
+    area.textContent = "Excelファイルを選択してください";
+    area.classList.remove("hidden");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "⏳ 取得中...";
+  area.className = "result";
+  area.innerHTML = '<span class="spinner"></span> SP-API から取得中...';
+  area.classList.remove("hidden");
+
+  // 選択中Excelから最後のASINを取得してみる
+  let asin = null;
+  try {
+    const infoRes = await fetch("/api/research/excel/load", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({excel_path: loadedPath})
+    });
+    const infoData = await infoRes.json();
+    asin = infoData.last_asin || null;
+  } catch(e) {}
+
+  const payload = { excel_path: loadedPath };
+  if (asin)  payload.asin  = asin;
+  if (price) payload.price = parseInt(price);
+
+  try {
+    const res  = await fetch("/api/research/amazon/sp-fetch", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      const go = data.profit_ok ? "🟢 ◎ GO" : "🔴 要検討";
+      area.className = "result success";
+      area.innerHTML =
+        `✅ <strong>${data.asin}</strong><br>` +
+        `<span style="color:#555;">${data.title}</span><br>` +
+        `<strong>価格:</strong> ¥${(data.price||0).toLocaleString()} &nbsp; ` +
+        `<strong>FBA手数料:</strong> ¥${(data.fba_fee||0).toLocaleString()} &nbsp; ` +
+        `<strong>販売手数料:</strong> ¥${(data.referral_fee||0).toLocaleString()}<br>` +
+        `<strong>カテゴリ:</strong> ${data.category} &nbsp; ` +
+        `<strong>ランク:</strong> ${data.rank ? data.rank.toLocaleString() : "-"}<br>` +
+        `<strong>判定:</strong> ${go}` +
+        (data.fee_error ? `<br><span style="color:#e65100;font-size:11px;">⚠️ FBA手数料取得不可（非対応カテゴリ）: B13未転記</span>` : "");
+    } else {
+      area.className = "result error";
+      area.innerHTML = `❌ エラー: ${data.error || "取得失敗"}`;
+    }
+  } catch(e) {
+    area.className = "result error";
+    area.innerHTML = `❌ 通信エラー: ${e}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🚀 SP-API で取得・転記";
   }
 }
 

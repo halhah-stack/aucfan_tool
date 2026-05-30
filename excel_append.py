@@ -132,13 +132,16 @@ def get_excel_info(excel_path: str) -> dict:
             val = ws["A1"].value or ""
             title = str(val).replace("リサーチシート　", "").strip()
 
-        # Sheet2の追記件数
+        # Sheet2の追記件数・最終ASIN
         amazon_count = 0
+        last_asin = None
         if SHEET_AMAZON_LIST in sheets:
             ws2 = wb[SHEET_AMAZON_LIST]
             for r in range(4, (ws2.max_row or 3) + 1):
-                if ws2.cell(r, 1).value:
+                asin_val = ws2.cell(r, 1).value
+                if asin_val:
                     amazon_count += 1
+                    last_asin = str(asin_val).strip()
 
         wb.close()
         return {
@@ -147,6 +150,7 @@ def get_excel_info(excel_path: str) -> dict:
             "title":        title,
             "sheets":       sheets,
             "amazon_count": amazon_count,
+            "last_asin":    last_asin,   # SP-API ボタン用: Sheet2 の最終行 ASIN
             "is_research":  SHEET_AMAZON_LIST in sheets,
         }
     except Exception as e:

@@ -243,6 +243,14 @@ REVCAL_URL = os.getenv(
 PROFIT_RATE_THRESHOLD = float(os.getenv("PROFIT_RATE_THRESHOLD", "25"))   # %
 PROFIT_YEN_THRESHOLD  = int(os.getenv("PROFIT_YEN_THRESHOLD",   "450"))   # 円
 
+# ─────────────────────────────────────────────
+# Amazon SP-API 設定
+# ─────────────────────────────────────────────
+SP_API_CLIENT_ID      = os.getenv("SP_API_CLIENT_ID", "")
+SP_API_CLIENT_SECRET  = os.getenv("SP_API_CLIENT_SECRET", "")
+SP_API_REFRESH_TOKEN  = os.getenv("SP_API_REFRESH_TOKEN", "")
+SP_API_MARKETPLACE_ID = os.getenv("SP_API_MARKETPLACE_ID", "A1VC38T7YXB528")  # 日本
+
 # Flask 設定
 # ─────────────────────────────────────────────
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5001"))
