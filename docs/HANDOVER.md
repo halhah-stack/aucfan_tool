@@ -539,21 +539,30 @@ find ~/マイドライブ\ \(shinozakistore@gmail.com\)/AucFanToolData/リサー
 - ✅ **承認済み（2026-05-30）**
 - ポータル: solutionproviderportal.amazon.com / アカウント: EKIYOU
 - ケースID: 20424413801
-- **⚡ 次回セッションでやること（最優先）：**
-  - ソリューションプロバイダーポータル（新システム）の再申請完了（2026-05-30）→ 承認メール待ち
-  - Client ID・Client Secretは取得済み（.envに手動記載が必要）
-  - 承認後の手順：
-    1. `https://solutionproviderportal.amazon.com` でリダイレクトURI `http://localhost:5001/callback` を登録
-    2. `http://localhost:5001` でアプリを起動
-    3. 承認URLにアクセス → 「許可」→ localhost:5001/callbackにRefresh Tokenが表示される
-    4. `.env` に以下を追加：
-       ```
-       SP_API_CLIENT_ID=amzn1.application-oa2-client.c8d50cb79dd34f728124a9fcf484f3b1
-       SP_API_CLIENT_SECRET=（メモした値）
-       SP_API_REFRESH_TOKEN=（取得した値）
-       SP_API_MARKETPLACE_ID=A1VC38T7YXB528
-       ```
-    5. Catalog Items API・Products Fees APIの実装開始
+- **⚡ 次回セッションでやること（最優先）：Refresh Token取得**
+
+  **正しい方法（公式ドキュメント確認済み）：**
+  リダイレクトURIもOAuthフローも不要。Seller Central直接から取得できる。
+
+  1. `https://sellercentral-japan.amazon.com/sellingpartner/developerconsole` を開く
+  2. EKIYOU Research Toolの「アプリの編集」ボタン右の **▼** をクリック
+  3. **「Authorize」または「承認」** の選択肢をクリック
+  4. 「Authorize app」ボタンを押す → **Refresh Tokenが画面に表示される**
+  5. 表示されたRefresh Tokenを `.env` に追加：
+     ```
+     SP_API_REFRESH_TOKEN=（表示された値）
+     ```
+  6. `app.py` の `/callback` エンドポイントを削除（不要になった）
+  7. `get_refresh_token.py` も削除
+  8. Catalog Items API・Products Fees APIの実装開始
+
+  **参考：** https://developer-docs.amazon.com/sp-api/docs/self-authorization
+
+  **取得済み情報（.envに設定済み）：**
+  - Client ID: amzn1.application-oa2-client.c8d50cb79dd34f728124a9fcf484f3b1
+  - Client Secret: .envに設定済み
+  - App ID: amzn1.sp.solution.4341a5d5-fc50-42b5-b0b3-ff3414de98d0
+  - Marketplace ID: A1VC38T7YXB528（日本）
 
 - **app.pyに一時コールバックエンドポイント追加済み**（`/callback`）→ Refresh Token取得後に削除すること
 
