@@ -706,6 +706,78 @@ def api_research_1688_append():
     return jsonify(result), 200
 
 
+@research_bp.route("/api/research/1688/variants", methods=["POST"])
+def api_research_1688_variants():
+    """
+    Excelの④1688仕入れシートから現在のバリアント一覧とA列フラグを読み込んで返す。
+    """
+    body       = request.get_json(silent=True) or {}
+    excel_path = body.get("path", "").strip()
+    if not excel_path:
+        return jsonify({"success": False, "error": "Excelパスが指定されていません"})
+    excel_path = _validate_excel_path(excel_path)
+    if not excel_path:
+        return jsonify({"success": False, "error": "不正なパスです"}), 400
+
+    try:
+        wb = load_workbook(excel_path, data_only=True)
+        if "④1688仕入れ" not in wb.sheetnames:
+            return jsonify({"success": False, "error": "④1688仕入れシートがありません"})
+
+        ws = wb["④1688仕入れ"]
+        variants = []
+        for row in ws.iter_rows(min_row=4, values_only=True):
+            flag      = row[0]   # A列
+            shop      = row[1]   # B列
+            variant   = row[8] or row[7] or ""  # I列 or H列
+            price     = row[10]  # K列
+            if price is None:
+                continue
+            variants.append({
+                "flag":    1 if flag == 1 else 0,
+                "shop":    str(shop or ""),
+                "variant": str(variant),
+                "price":   price,
+            })
+
+        return jsonify({"success": True, "variants": variants})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@research_bp.route("/api/research/1688/update-flags", methods=["POST"])
+def api_research_1688_update_flags():
+    """
+    Excelの④1688仕入れシートのA列フラグをUIからの選択内容で更新する。
+    rows: [{row_index: N, flag: 1 or 0}, ...] (4行目=0ベースのインデックス)
+    """
+    body       = request.get_json(silent=True) or {}
+    excel_path = body.get("path", "").strip()
+    rows       = body.get("rows", [])  # [{row_index: N, flag: 1 or 0}]
+
+    if not excel_path:
+        return jsonify({"success": False, "error": "Excelパスが指定されていません"})
+    excel_path = _validate_excel_path(excel_path)
+    if not excel_path:
+        return jsonify({"success": False, "error": "不正なパスです"}), 400
+
+    try:
+        wb = load_workbook(excel_path)
+        if "④1688仕入れ" not in wb.sheetnames:
+            return jsonify({"success": False, "error": "④1688仕入れシートがありません"})
+
+        ws = wb["④1688仕入れ"]
+        for r in rows:
+            excel_row = int(r["row_index"]) + 4  # 0ベース → 4行目スタート
+            ws.cell(excel_row, 1).value = int(r["flag"])
+
+        wb.save(excel_path)
+        profit_result = _calc_profit_from_excel(excel_path)
+        return jsonify({"success": True, **profit_result})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @research_bp.route("/api/research/1688/fetch-url-append", methods=["POST"])
 def api_research_1688_fetch_url_append():
     """URLを指定して1688データを取得し、Excelに追記する（旧API・後方互換用）。"""

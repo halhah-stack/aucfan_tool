@@ -235,6 +235,31 @@
     </div>
   </div>
 
+  <!-- ④ 追記済みバリアント選択変更 -->
+  <div class="card">
+    <div class="card-title">④ 追記済みバリアントの対象変更</div>
+    <p class="hint" style="margin-bottom:10px;">
+      すでにExcelに追記したバリアントの仕入れ対象(1/0)をUIから変更できます。
+    </p>
+    <button class="btn" onclick="loadVariants1688()" id="btnLoadVariants"
+            style="background:#1F4E79; color:white; margin-bottom:10px;">
+      📋 現在のバリアント一覧を読み込む
+    </button>
+    <div id="editVariantPanel" class="hidden">
+      <div id="editVariantTable" style="margin-bottom:10px;"></div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-orange" onclick="saveVariantFlags()" id="btnSaveFlags">
+          💾 変更を保存
+        </button>
+        <button class="btn" onclick="document.getElementById('editVariantPanel').classList.add('hidden')"
+                style="background:#eee; color:#555;">
+          キャンセル
+        </button>
+      </div>
+      <div id="editVariantResult" class="hidden result" style="margin-top:8px;"></div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -868,6 +893,130 @@ async function append1688() {
     alert("❌ 通信エラー: " + e.message);
   } finally {
     btn.innerHTML = "✅ 選択内容でExcelに追記";
+    btn.disabled = false;
+  }
+}
+
+// ── 追記済みバリアント一覧を読み込む ──
+async function loadVariants1688() {
+  if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
+
+  const btn = document.getElementById("btnLoadVariants");
+  btn.innerHTML = '<span class="spinner"></span>読み込み中...';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch("/api/research/1688/variants", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: loadedPath})
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      _renderEditVariantTable(data.variants);
+      document.getElementById("editVariantPanel").classList.remove("hidden");
+      document.getElementById("editVariantResult").classList.add("hidden");
+    } else {
+      alert("❌ " + data.error);
+    }
+  } catch(e) {
+    alert("❌ 通信エラー: " + e.message);
+  } finally {
+    btn.innerHTML = "📋 現在のバリアント一覧を読み込む";
+    btn.disabled = false;
+  }
+}
+
+function _renderEditVariantTable(variants) {
+  const table = document.getElementById("editVariantTable");
+  if (!variants.length) {
+    table.innerHTML = "<p style='color:#888;font-size:13px;'>バリアントがありません</p>";
+    return;
+  }
+
+  let html = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tr style="background:#f5f5f5;">
+      <th style="padding:6px 10px;text-align:left;border-bottom:1px solid #ddd;">ショップ</th>
+      <th style="padding:6px 10px;text-align:left;border-bottom:1px solid #ddd;">バリアント</th>
+      <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd;">単価(元)</th>
+      <th style="padding:6px 10px;text-align:center;border-bottom:1px solid #ddd;">仕入れ対象</th>
+    </tr>`;
+
+  variants.forEach((v, i) => {
+    const isSelected = v.flag === 1;
+    html += `<tr style="border-bottom:1px solid #f0f0f0;">
+      <td style="padding:7px 10px;font-size:12px;color:#555;">${v.shop || "—"}</td>
+      <td style="padding:7px 10px;">${v.variant || "—"}</td>
+      <td style="padding:7px 10px;text-align:right;">${v.price}</td>
+      <td style="padding:7px 10px;text-align:center;">
+        <button onclick="toggleEditVariant(${i}, this)"
+          data-idx="${i}" data-selected="${isSelected ? 1 : 0}"
+          style="padding:4px 14px;border-radius:4px;border:1px solid ${isSelected ? '#1F4E79' : '#ccc'};
+                 background:${isSelected ? '#1F4E79' : '#f0f0f0'};
+                 color:${isSelected ? 'white' : '#888'};font-size:12px;cursor:pointer;">
+          ${isSelected ? '1 対象' : '0 除外'}
+        </button>
+      </td>
+    </tr>`;
+  });
+  html += "</table>";
+  table.innerHTML = html;
+}
+
+function toggleEditVariant(idx, btn) {
+  const current = parseInt(btn.dataset.selected);
+  const next = current === 1 ? 0 : 1;
+  btn.dataset.selected = next;
+  if (next === 1) {
+    btn.style.background = "#1F4E79";
+    btn.style.color = "white";
+    btn.style.borderColor = "#1F4E79";
+    btn.textContent = "1 対象";
+  } else {
+    btn.style.background = "#f0f0f0";
+    btn.style.color = "#888";
+    btn.style.borderColor = "#ccc";
+    btn.textContent = "0 除外";
+  }
+}
+
+async function saveVariantFlags() {
+  if (!loadedPath) return;
+
+  const buttons = document.querySelectorAll("#editVariantTable button[data-idx]");
+  const rows = [];
+  buttons.forEach(btn => {
+    rows.push({row_index: parseInt(btn.dataset.idx), flag: parseInt(btn.dataset.selected)});
+  });
+
+  const btn = document.getElementById("btnSaveFlags");
+  btn.innerHTML = '<span class="spinner"></span>保存中...';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch("/api/research/1688/update-flags", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: loadedPath, rows: rows})
+    });
+    const data = await res.json();
+    const div = document.getElementById("editVariantResult");
+    div.classList.remove("hidden");
+    if (data.success) {
+      div.className = "result success";
+      div.innerHTML = "✅ 保存しました";
+      if ((data.variants_profit || []).length > 0) {
+        _showProfitResult(data, document.getElementById("spApiResult"));
+      }
+    } else {
+      div.className = "result error";
+      div.textContent = "❌ " + data.error;
+    }
+  } catch(e) {
+    alert("❌ 通信エラー: " + e.message);
+  } finally {
+    btn.innerHTML = "💾 変更を保存";
     btn.disabled = false;
   }
 }
