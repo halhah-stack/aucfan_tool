@@ -829,10 +829,14 @@ def _calc_profit_from_excel(excel_path: str) -> dict:
         ws4 = wb["④1688仕入れ"]
         variants_profit = []
         for row in ws4.iter_rows(min_row=4, values_only=True):
+            flag       = row[0]    # A列: 1=仕入れ対象 / 0or空=除外
             cny_price  = row[10]   # K列
             rate_val   = row[11]   # L列
             variant_ja = row[8] or row[7] or ""   # I列 or H列
 
+            # A列が 1 の行だけ利益計算対象にする（0・空白は無視）
+            if flag != 1:
+                continue
             if not isinstance(cny_price, (int, float)) or cny_price <= 0:
                 continue
 
