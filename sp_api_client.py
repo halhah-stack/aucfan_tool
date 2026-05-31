@@ -251,20 +251,24 @@ class SpApiClient:
         except (KeyError, TypeError):
             raise RuntimeError(f"Products Fees API: 予期しないレスポンス構造 {data}")
 
-        fba_fee = 0
+        fba_fee      = 0
         referral_fee = 0
+        closing_fee  = 0  # カテゴリー別成約料（書籍・音楽等。一般商品は通常¥0）
         for item in fee_detail:
-            name = item.get("FeeType", "")
+            name   = item.get("FeeType", "")
             amount = int(item.get("FeeAmount", {}).get("Amount", 0))
             if "FBAFees" in name or "FulfillmentFee" in name:
                 fba_fee += amount
             elif "ReferralFee" in name or "Commission" in name:
                 referral_fee += amount
+            elif "ClosingFee" in name or "VariableClosingFee" in name:
+                closing_fee += amount
 
         return {
             "fba_fee":      fba_fee,
             "referral_fee": referral_fee,
-            "total_fee":    fba_fee + referral_fee,
+            "closing_fee":  closing_fee,
+            "total_fee":    fba_fee + referral_fee + closing_fee,
         }
 
     # ─────────────────────────────────────────────

@@ -920,13 +920,16 @@ def api_sp_fetch():
             wb = load_workbook(excel_path)
             ws = wb["①概要"]
             effective_price = info.get("price")
-            fba_fee         = info.get("fba_fee")
+            fba_fee      = info.get("fba_fee") or 0
+            referral_fee = info.get("referral_fee") or 0
+            # B13 = 出荷費用 + 販売手数料（両方をまとめてAmazon手数料合計として書き込む）
+            total_fee    = info.get("total_fee") or (fba_fee + referral_fee) or fba_fee
 
             if effective_price and ws["B12"].value is None:
                 ws["B12"] = effective_price
                 ws["B12"].fill = sp_fill
-            if fba_fee:
-                ws["B13"] = fba_fee
+            if total_fee:
+                ws["B13"] = total_fee
                 ws["B13"].fill = sp_fill
 
             wb.save(excel_path)
