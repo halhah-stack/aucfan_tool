@@ -745,20 +745,34 @@ async function fetch1688Url() {
     const res  = await fetch("/api/research/1688/fetch-url", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({url: url})
+      body: JSON.stringify({url: url, path: loadedPath})
     });
     const data = await res.json();
     _stop1688ProgressPolling();
 
     if (data.success) {
       _fetched1688Data = data.data;
-      div.className = "result success";
-      div.innerHTML =
-        `✅ 取得完了: <strong>${_fetched1688Data.shop_name || "不明"}</strong> &nbsp;` +
-        `最低単価: ${_fetched1688Data.min_price} 元<br>` +
-        `<span style="color:#555;">${_fetched1688Data.title || ""}</span><br>` +
-        `<small>↓ 下のバリアント一覧から仕入れ対象を選んで「追記」してください</small>`;
-      _showVariantSelector(_fetched1688Data);
+
+      if (data.duplicate) {
+        // 重複検出：警告を表示してスキップ or 強制追記を選ばせる
+        div.className = "result info";
+        div.innerHTML =
+          `⚠️ <strong>この商品はすでにExcelに追記されています。</strong><br>` +
+          `ショップ: ${_fetched1688Data.shop_name || "不明"} ／ ${_fetched1688Data.title || ""}<br>` +
+          `<div style="margin-top:8px;display:flex;gap:8px;">` +
+          `<button class="btn" onclick="cancelVariantSelect();document.getElementById('result1688').classList.add('hidden');"
+             style="background:#eee;color:#555;">スキップ</button>` +
+          `<button class="btn btn-orange" onclick="_forceShowVariantSelector()">それでも追記する</button>` +
+          `</div>`;
+      } else {
+        div.className = "result success";
+        div.innerHTML =
+          `✅ 取得完了: <strong>${_fetched1688Data.shop_name || "不明"}</strong> &nbsp;` +
+          `最低単価: ${_fetched1688Data.min_price} 元<br>` +
+          `<span style="color:#555;">${_fetched1688Data.title || ""}</span><br>` +
+          `<small>↓ 下のバリアント一覧から仕入れ対象を選んで「追記」してください</small>`;
+        _showVariantSelector(_fetched1688Data);
+      }
     } else if (res.status === 429) {
       div.className = "result info";
       div.innerHTML = `⏳ <strong>取得処理が実行中です。</strong><br><small>完了後に再度お試しください。</small>`;
@@ -838,6 +852,16 @@ function toggleVariant(idx, btn) {
 function cancelVariantSelect() {
   document.getElementById("variant1688Panel").classList.add("hidden");
   _fetched1688Data = null;
+}
+
+function _forceShowVariantSelector() {
+  if (!_fetched1688Data) return;
+  const div = document.getElementById("result1688");
+  div.className = "result success";
+  div.innerHTML =
+    `✅ 取得完了（重複あり・強制追記モード）: <strong>${_fetched1688Data.shop_name || "不明"}</strong><br>` +
+    `<small>↓ バリアントを選択して「追記」してください</small>`;
+  _showVariantSelector(_fetched1688Data);
 }
 
 // ── STEP2: 選択内容でExcelに追記 ──

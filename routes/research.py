@@ -658,6 +658,10 @@ def api_research_1688_fetch_url():
             "error": "取得処理が実行中です。完了をお待ちください。"
         }), 429
 
+    excel_path = body.get("path", "").strip()
+    if excel_path:
+        excel_path = _validate_excel_path(excel_path) or ""
+
     _research_1688_fetch_status = {"running": True, "step": "① URLを解析中..."}
     try:
         from scraper_1688 import fetch_1688_from_url
@@ -665,7 +669,31 @@ def api_research_1688_fetch_url():
         data_1688 = fetch_1688_from_url(url)
         if not data_1688.get("success"):
             return jsonify(data_1688), 400
-        return jsonify({"success": True, "data": data_1688}), 200
+
+        # ── 重複チェック ──────────────────────────────────────
+        duplicate = False
+        if excel_path:
+            try:
+                wb = load_workbook(excel_path, read_only=True, data_only=True)
+                if "④1688仕入れ" in wb.sheetnames:
+                    ws = wb["④1688仕入れ"]
+                    new_shop  = (data_1688.get("shop_name") or "").strip()
+                    new_title = (data_1688.get("title") or "").strip()
+                    for row in ws.iter_rows(min_row=4, values_only=True):
+                        ex_shop  = str(row[1] or "").strip()   # B列: ショップ名
+                        ex_title = str(row[5] or "").strip()   # F列: 商品名（中）
+                        if ex_shop == new_shop and ex_title == new_title:
+                            duplicate = True
+                            break
+                wb.close()
+            except Exception:
+                pass  # チェック失敗時はスルーして通常処理
+
+        return jsonify({
+            "success":   True,
+            "data":      data_1688,
+            "duplicate": duplicate,
+        }), 200
     finally:
         _research_1688_fetch_status = {"running": False, "step": ""}
         _research_1688_fetch_lock.release()
