@@ -222,6 +222,16 @@ def _build_sheet1(ws, group: dict):
         if r == 18:
             ws[f"B{r}"].alignment = _center()
 
+    # 在庫保管手数料注記
+    ws.row_dimensions[20].height = 28
+    ws.merge_cells("A20:E20")
+    note = ws["A20"]
+    note.value = "⚠ 利益は在庫保管手数料を含みません。FBAシミュレータ( https://sellercentral.amazon.co.jp/revcal )で確認してください。"
+    note.font = Font(name="BIZ UDGothic", size=9, color="7B4F00")
+    note.fill = _fill("FFF8E1")
+    note.alignment = Alignment(wrap_text=True, vertical="center")
+    note.border = _thin_border()
+
     # メモ欄
     ws.row_dimensions[20].height = 20
     ws.merge_cells("A20:E20")

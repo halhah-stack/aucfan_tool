@@ -520,8 +520,16 @@ function _showProfitResult(data, area) {
     `<th style="padding:3px 6px;text-align:right;">利益率</th>` +
     `</tr></thead><tbody>${rows}</tbody></table>`;
 
+  const storageNote =
+    `<div style="margin-top:8px;padding:7px 10px;background:#FFF8E1;border-left:3px solid #F9A825;border-radius:4px;font-size:11px;color:#555;">` +
+    `⚠️ <strong>在庫保管手数料は含まれていません。</strong>` +
+    `商品サイズ・月により異なります（例: 小型¥14〜¥25/月）。` +
+    `<a href="https://sellercentral.amazon.co.jp/revcal" target="_blank" rel="noopener"` +
+    ` style="color:#1F4E79;font-weight:bold;margin-left:6px;">FBAシミュレータで確認 →</a>` +
+    `</div>`;
+
   area.className = "result success";
-  area.innerHTML = banner + basicInfo + table;
+  area.innerHTML = banner + basicInfo + table + storageNote;
   area.classList.remove("hidden");
 }
 
