@@ -431,8 +431,9 @@ def append_1688(excel_path: str, data: dict) -> dict:
             moq   = int(data.get("moq") or 1)
             stock = int(v.get("stock") or 0)
 
-            # A=仕入れ選択（空欄・手入力）
-            ws4.cell(next_row,  1).value = ""
+            # A=仕入れ対象フラグ（1=対象/0=除外）
+            # selected キーがあればそれを使い、なければ 0（未選択）
+            ws4.cell(next_row,  1).value = 1 if v.get("selected") == 1 else 0
             # B=ショップ名
             ws4.cell(next_row,  2).value = shop_name
             # C=ショップURL

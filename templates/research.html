@@ -208,15 +208,31 @@
                placeholder="1688 商品URL を貼り付け　例: https://detail.1688.com/offer/XXXXXXXXXX.html"
                style="width:100%; padding:9px 11px; font-size:13px;">
         <p class="hint" style="margin-top:5px;">
-          1688の商品ページURLを貼り付けて「取得→追記」を押してください。Sheet4/5 に追記されます。
+          URLを貼り付けて「取得」→ バリアントを選択して「追記」してください。
         </p>
       </div>
       <button id="btn1688Url" class="btn btn-orange" onclick="fetch1688Url()" style="margin-top:1px;">
-        🔍 取得 → 追記
+        🔍 取得
       </button>
     </div>
 
     <div id="result1688" class="hidden result"></div>
+
+    <!-- バリアント選択エリア（取得後に表示） -->
+    <div id="variant1688Panel" class="hidden" style="margin-top:12px; border:1px solid #e0e0e0; border-radius:8px; overflow:hidden;">
+      <div style="background:#1F4E79; color:white; padding:8px 14px; font-size:13px; font-weight:bold;">
+        バリアント選択 — 仕入れ対象にするものを「対象」にしてください
+      </div>
+      <div id="variantTable" style="padding:10px;"></div>
+      <div style="padding:10px; border-top:1px solid #eee; display:flex; gap:8px; align-items:center;">
+        <button class="btn btn-orange" onclick="append1688()" id="btnAppend1688">
+          ✅ 選択内容でExcelに追記
+        </button>
+        <button class="btn" onclick="cancelVariantSelect()" style="background:#eee; color:#555;">
+          キャンセル
+        </button>
+      </div>
+    </div>
   </div>
 
 </div>
@@ -659,6 +675,7 @@ async function readCalcResult() {
 let _1688FetchStartTime = null;
 let _1688FetchPollTimer = null;
 let fetch1688Count = 0;
+let _fetched1688Data = null;  // 取得済み1688データを保持
 
 function _start1688ProgressPolling(div) {
   _1688FetchStartTime = Date.now();
@@ -680,6 +697,7 @@ function _stop1688ProgressPolling() {
   if (_1688FetchPollTimer) { clearInterval(_1688FetchPollTimer); _1688FetchPollTimer = null; }
 }
 
+// ── STEP1: URLから1688データを取得（追記しない） ──
 async function fetch1688Url() {
   if (!loadedPath) { alert("先に Excel ファイルを選択してください"); return; }
 
@@ -695,36 +713,27 @@ async function fetch1688Url() {
     `<span class="spinner"></span><strong>① URLを解析中...</strong><br>` +
     `<small style="color:#555;">しばらくお待ちください（10〜30秒）</small>`;
   div.classList.remove("hidden");
+  document.getElementById("variant1688Panel").classList.add("hidden");
   _start1688ProgressPolling(div);
 
   try {
-    const res  = await fetch("/api/research/1688/fetch-url-append", {
+    const res  = await fetch("/api/research/1688/fetch-url", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({path: loadedPath, url: url})
+      body: JSON.stringify({url: url})
     });
     const data = await res.json();
     _stop1688ProgressPolling();
 
     if (data.success) {
-      fetch1688Count++;
-      document.getElementById("url1688").value = "";
-      const badge = document.getElementById("1688Badge");
-      badge.textContent = fetch1688Count + "件";
-      badge.classList.remove("hidden");
+      _fetched1688Data = data.data;
       div.className = "result success";
-      const imgInfo = data.image_count > 0
-        ? `🖼 画像 ${data.image_count}枚保存 (1688/)` : "";
       div.innerHTML =
-        `✅ Sheet4 の ${data.row} 行目から追記（${data.variant_count}バリアント）${imgInfo}<br>` +
-        `<strong>ショップ:</strong> ${data.shop_name || "不明"} &nbsp;` +
-        `<strong>最低単価:</strong> ${data.min_price} 元<br>` +
-        `<span style="color:#555;">${data.title}</span>`;
-
-      // SP-API取得済みなら利益計算結果も表示
-      if ((data.variants_profit || []).length > 0) {
-        _showProfitResult(data, document.getElementById("spApiResult"));
-      }
+        `✅ 取得完了: <strong>${_fetched1688Data.shop_name || "不明"}</strong> &nbsp;` +
+        `最低単価: ${_fetched1688Data.min_price} 元<br>` +
+        `<span style="color:#555;">${_fetched1688Data.title || ""}</span><br>` +
+        `<small>↓ 下のバリアント一覧から仕入れ対象を選んで「追記」してください</small>`;
+      _showVariantSelector(_fetched1688Data);
     } else if (res.status === 429) {
       div.className = "result info";
       div.innerHTML = `⏳ <strong>取得処理が実行中です。</strong><br><small>完了後に再度お試しください。</small>`;
@@ -738,8 +747,128 @@ async function fetch1688Url() {
     div.textContent = "❌ 通信エラー: " + e.message;
   } finally {
     _stop1688ProgressPolling();
-    btn.innerHTML = "🔍 取得 → 追記";
+    btn.innerHTML = "🔍 取得";
     btn.disabled  = false;
+  }
+}
+
+// ── バリアント選択UIを表示 ──
+function _showVariantSelector(data) {
+  const variants = data.variants || [];
+  const panel = document.getElementById("variant1688Panel");
+  const table = document.getElementById("variantTable");
+
+  if (variants.length === 0) {
+    table.innerHTML = "<p style='color:#888;font-size:13px;'>バリアントが見つかりません</p>";
+    panel.classList.remove("hidden");
+    return;
+  }
+
+  let html = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tr style="background:#f5f5f5;">
+      <th style="padding:6px 10px;text-align:left;border-bottom:1px solid #ddd;">バリアント名</th>
+      <th style="padding:6px 10px;text-align:right;border-bottom:1px solid #ddd;">単価(元)</th>
+      <th style="padding:6px 10px;text-align:center;border-bottom:1px solid #ddd;">仕入れ対象</th>
+    </tr>`;
+
+  variants.forEach((v, i) => {
+    const name = v.name || `バリアント${i+1}`;
+    const price = v.price || "—";
+    html += `<tr style="border-bottom:1px solid #f0f0f0;">
+      <td style="padding:7px 10px;">${name}</td>
+      <td style="padding:7px 10px;text-align:right;">${price}</td>
+      <td style="padding:7px 10px;text-align:center;">
+        <button onclick="toggleVariant(${i}, this)"
+          data-idx="${i}" data-selected="0"
+          style="padding:4px 14px;border-radius:4px;border:1px solid #ccc;
+                 background:#f0f0f0;color:#888;font-size:12px;cursor:pointer;">
+          0 除外
+        </button>
+      </td>
+    </tr>`;
+  });
+  html += "</table>";
+  table.innerHTML = html;
+  panel.classList.remove("hidden");
+}
+
+// ── バリアントの対象/除外を切り替え ──
+function toggleVariant(idx, btn) {
+  const current = parseInt(btn.dataset.selected);
+  const next = current === 1 ? 0 : 1;
+  btn.dataset.selected = next;
+  if (next === 1) {
+    btn.style.background = "#1F4E79";
+    btn.style.color = "white";
+    btn.style.borderColor = "#1F4E79";
+    btn.textContent = "1 対象";
+  } else {
+    btn.style.background = "#f0f0f0";
+    btn.style.color = "#888";
+    btn.style.borderColor = "#ccc";
+    btn.textContent = "0 除外";
+  }
+}
+
+function cancelVariantSelect() {
+  document.getElementById("variant1688Panel").classList.add("hidden");
+  _fetched1688Data = null;
+}
+
+// ── STEP2: 選択内容でExcelに追記 ──
+async function append1688() {
+  if (!loadedPath) { alert("Excelファイルが選択されていません"); return; }
+  if (!_fetched1688Data) { alert("先に1688データを取得してください"); return; }
+
+  // 各バリアントのフラグを収集
+  const buttons = document.querySelectorAll("#variantTable button[data-idx]");
+  const flags = {};
+  const variants = _fetched1688Data.variants || [];
+  buttons.forEach(btn => {
+    const idx = parseInt(btn.dataset.idx);
+    const name = variants[idx]?.name || `バリアント${idx+1}`;
+    flags[name] = parseInt(btn.dataset.selected);
+  });
+
+  const selectedCount = Object.values(flags).filter(v => v === 1).length;
+
+  const btn = document.getElementById("btnAppend1688");
+  btn.innerHTML = '<span class="spinner"></span>追記中...';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch("/api/research/1688/append", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({path: loadedPath, data: _fetched1688Data, selected_flags: flags})
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      fetch1688Count++;
+      document.getElementById("url1688").value = "";
+      document.getElementById("variant1688Panel").classList.add("hidden");
+      _fetched1688Data = null;
+      const badge = document.getElementById("1688Badge");
+      badge.textContent = fetch1688Count + "件";
+      badge.classList.remove("hidden");
+      const div = document.getElementById("result1688");
+      div.className = "result success";
+      div.innerHTML =
+        `✅ Sheet4 の ${data.row} 行目から追記（${data.variant_count}バリアント、対象: ${selectedCount}件）<br>` +
+        `<strong>ショップ:</strong> ${data.shop_name || "不明"} &nbsp;` +
+        `<strong>最低単価:</strong> ${data.min_price} 元`;
+      if ((data.variants_profit || []).length > 0) {
+        _showProfitResult(data, document.getElementById("spApiResult"));
+      }
+    } else {
+      alert("❌ 追記エラー: " + data.error);
+    }
+  } catch(e) {
+    alert("❌ 通信エラー: " + e.message);
+  } finally {
+    btn.innerHTML = "✅ 選択内容でExcelに追記";
+    btn.disabled = false;
   }
 }
 

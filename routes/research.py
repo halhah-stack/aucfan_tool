@@ -638,9 +638,77 @@ def api_research_1688_status():
     return jsonify(_research_1688_fetch_status)
 
 
+@research_bp.route("/api/research/1688/fetch-url", methods=["POST"])
+def api_research_1688_fetch_url():
+    """
+    URLを指定して1688データを取得する（Excelへの追記はしない）。
+    取得したバリアント一覧をUIに返して、ユーザーが選択後に /append を呼ぶ。
+    """
+    global _research_1688_fetch_status
+
+    body = request.get_json(silent=True) or {}
+    url  = body.get("url", "").strip()
+
+    if not url:
+        return jsonify({"success": False, "error": "URLが指定されていません"})
+
+    if not _research_1688_fetch_lock.acquire(blocking=False):
+        return jsonify({
+            "success": False,
+            "error": "取得処理が実行中です。完了をお待ちください。"
+        }), 429
+
+    _research_1688_fetch_status = {"running": True, "step": "① URLを解析中..."}
+    try:
+        from scraper_1688 import fetch_1688_from_url
+        _research_1688_fetch_status["step"] = "② Chromeで1688ページを開いています..."
+        data_1688 = fetch_1688_from_url(url)
+        if not data_1688.get("success"):
+            return jsonify(data_1688), 400
+        return jsonify({"success": True, "data": data_1688}), 200
+    finally:
+        _research_1688_fetch_status = {"running": False, "step": ""}
+        _research_1688_fetch_lock.release()
+
+
+@research_bp.route("/api/research/1688/append", methods=["POST"])
+def api_research_1688_append():
+    """
+    取得済みの1688データをExcelに追記する。
+    selected_flags: {バリアントname: 1 or 0} を受け取りA列に反映する。
+    """
+    from excel_append import append_1688
+
+    body        = request.get_json(silent=True) or {}
+    excel_path  = body.get("path", "").strip()
+    data_1688   = body.get("data", {})
+    flags       = body.get("selected_flags", {})  # {variant_name: 1 or 0}
+
+    if not excel_path:
+        return jsonify({"success": False, "error": "Excelパスが指定されていません"})
+    if not data_1688:
+        return jsonify({"success": False, "error": "1688データがありません"})
+
+    excel_path = _validate_excel_path(excel_path)
+    if not excel_path:
+        return jsonify({"success": False, "error": "不正なパスです"}), 400
+
+    # flagsをdata_1688のvariantsに反映
+    for v in data_1688.get("variants", []):
+        v["selected"] = flags.get(v.get("name", ""), 0)
+
+    result = append_1688(excel_path, data_1688)
+    if not result.get("success"):
+        return jsonify(result), 500
+
+    profit_result = _calc_profit_from_excel(excel_path)
+    result.update(profit_result)
+    return jsonify(result), 200
+
+
 @research_bp.route("/api/research/1688/fetch-url-append", methods=["POST"])
 def api_research_1688_fetch_url_append():
-    """URLを指定して1688データを取得し、Excelに追記する。"""
+    """URLを指定して1688データを取得し、Excelに追記する（旧API・後方互換用）。"""
     global _research_1688_fetch_status
     from excel_append import append_1688
 
@@ -653,7 +721,6 @@ def api_research_1688_fetch_url_append():
     if not url:
         return jsonify({"success": False, "error": "URLが指定されていません"})
 
-    # 2重実行防止：前の取得がまだ実行中なら即座に拒否
     if not _research_1688_fetch_lock.acquire(blocking=False):
         return jsonify({
             "success": False,
@@ -673,7 +740,6 @@ def api_research_1688_fetch_url_append():
         if not result.get("success"):
             return jsonify(result), 500
 
-        # ── SP-API転記済みなら利益計算も返す ─────────────────────
         profit_result = _calc_profit_from_excel(excel_path)
         result.update(profit_result)
         return jsonify(result), 200
