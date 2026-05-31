@@ -622,13 +622,20 @@ class AucFanScraper:
         try:
             # ページ読み込み完了を待つ
             WebDriverWait(self.driver, config.PAGE_LOAD_TIMEOUT).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
+                lambda d: d.execute_script("return document.readyState") in ("complete", "interactive")
             )
+        except Exception:
+            pass  # タイムアウトでも取得試行する
+
+        try:
             # 遅延読み込み画像を全て発火させるためスクロール
             self._scroll_to_load_images()
-            html = self.driver.page_source
-        except Exception as e:
-            logger.warning(f"ページソース取得エラー (条件C): {e}")
+        except Exception:
+            pass
+
+        html = self._safe_page_source(timeout=45)
+        if not html:
+            logger.warning("ページソース取得タイムアウト (条件C) → 空リストを返す")
             return []
 
         soup = BeautifulSoup(html, "lxml")
@@ -1063,11 +1070,14 @@ class AucFanScraper:
 
         try:
             WebDriverWait(self.driver, config.PAGE_LOAD_TIMEOUT).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
+                lambda d: d.execute_script("return document.readyState") in ("complete", "interactive")
             )
-            html = self.driver.page_source
-        except Exception as e:
-            logger.warning(f"詳細ページ読み込みエラー: {e}")
+        except Exception:
+            pass  # タイムアウトでも取得試行する
+
+        html = self._safe_page_source(timeout=45)
+        if not html:
+            logger.warning(f"詳細ページ取得タイムアウト → スキップ: {url}")
             return None
 
         soup = BeautifulSoup(html, "lxml")
@@ -1220,6 +1230,40 @@ class AucFanScraper:
                                 "gemini_reason": gemini_reason or reason,
                             },
                         )
+
+    # ─────────────────────────────────────────────
+    # ページソース安全取得
+    # ─────────────────────────────────────────────
+
+    def _safe_page_source(self, timeout: int = 45) -> Optional[str]:
+        """
+        driver.page_source をスレッドでラップしてタイムアウトを強制する。
+
+        【問題】driver.page_source は ChromeDriver への HTTP リクエストで、
+        Chromeがレンダリング中にフリーズするとurllib3のread timeout(120秒)まで
+        応答なしになる。これがスクレイパーが詰まる原因。
+
+        【解決】別スレッドで page_source を取得し、timeout 秒以内に取れなければ
+        None を返す。呼び出し元でスキップ処理できる。
+
+        Args:
+            timeout: page_source の最大待機秒数（デフォルト45秒）
+        """
+        import concurrent.futures
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(lambda: self.driver.page_source)
+                return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            logger.warning(f"page_source タイムアウト（{timeout}秒）→ このページをスキップ")
+            try:
+                self.driver.execute_script("window.stop();")
+            except Exception:
+                pass
+            return None
+        except Exception as e:
+            logger.warning(f"page_source 取得エラー: {e}")
+            return None
 
     # ─────────────────────────────────────────────
     # ナビゲーション・待機
