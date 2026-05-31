@@ -496,6 +496,20 @@ function _showProfitResult(data, area) {
 
   const price   = data.selling_price || data.price || 0;
   const fba     = data.fba_fee || 0;
+  const asin    = data.asin || "";
+  const simUrl  = asin
+    ? `https://sellercentral.amazon.co.jp/revcal?ref=RC2nonlogin#nogo`
+    : "https://sellercentral.amazon.co.jp/revcal";
+
+  const asinBlock = asin
+    ? `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;padding:6px 10px;background:#E3F2FD;border-radius:6px;">` +
+      `<span style="font-size:12px;font-weight:bold;color:#1F4E79;">ASIN: ${asin}</span>` +
+      `<a href="${simUrl}" target="_blank" rel="noopener"` +
+      ` style="padding:4px 10px;background:#1F4E79;color:white;border-radius:4px;font-size:11px;font-weight:bold;text-decoration:none;">` +
+      `💴 FBAシミュレータで確認</a>` +
+      `</div>`
+    : "";
+
   const basicInfo = price
     ? `<div style="font-size:11px;color:#555;margin-bottom:4px;">販売価格: ¥${price.toLocaleString()} &nbsp; FBA手数料: ¥${fba.toLocaleString()}</div>`
     : "";
@@ -524,12 +538,10 @@ function _showProfitResult(data, area) {
     `<div style="margin-top:8px;padding:7px 10px;background:#FFF8E1;border-left:3px solid #F9A825;border-radius:4px;font-size:11px;color:#555;">` +
     `⚠️ <strong>在庫保管手数料は含まれていません。</strong>` +
     `商品サイズ・月により異なります（例: 小型¥14〜¥25/月）。` +
-    `<a href="https://sellercentral.amazon.co.jp/revcal" target="_blank" rel="noopener"` +
-    ` style="color:#1F4E79;font-weight:bold;margin-left:6px;">FBAシミュレータで確認 →</a>` +
     `</div>`;
 
   area.className = "result success";
-  area.innerHTML = banner + basicInfo + table + storageNote;
+  area.innerHTML = banner + asinBlock + basicInfo + table + storageNote;
   area.classList.remove("hidden");
 }
 
@@ -577,15 +589,21 @@ async function spApiFetch() {
     const data = await res.json();
 
     if (data.success) {
-      // 商品基本情報
+      // 商品基本情報（折りたたみ）
+      const detailId = "spDetailBlock";
       const basicInfo =
-        `<div style="font-size:12px;margin-bottom:6px;">` +
-        `<strong>${data.asin}</strong> &nbsp; <span style="color:#555;">${data.title}</span><br>` +
+        `<div style="font-size:12px;margin-bottom:4px;cursor:pointer;display:flex;align-items:center;gap:6px;"` +
+        ` onclick="const d=document.getElementById('${detailId}');d.style.display=d.style.display==='none'?'block':'none';">` +
+        `<span id="${detailId}Toggle">▼</span>` +
+        `<strong>${data.asin}</strong>` +
+        `<span style="color:#555;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px;">${data.title}</span>` +
+        `</div>` +
+        `<div id="${detailId}" style="display:none;font-size:11px;color:#555;padding:6px 10px;background:#f9f9f9;border-radius:4px;margin-bottom:6px;">` +
         `カテゴリ: ${data.category} &nbsp; ランク: ${data.rank ? data.rank.toLocaleString() : "—"}<br>` +
         `販売価格: <strong>¥${(data.price||0).toLocaleString()}</strong> &nbsp; ` +
         `FBA手数料: <strong>¥${(data.fba_fee||0).toLocaleString()}</strong> &nbsp; ` +
         `販売手数料: ¥${(data.referral_fee||0).toLocaleString()}` +
-        (data.fee_error ? `<br><span style="color:#e65100;font-size:11px;">⚠️ FBA手数料取得不可: B13未転記。Amazon検索で「配送料無料」にチェックしてFBA出品のASINを使用してください。</span>` : "") +
+        (data.fee_error ? `<br><span style="color:#e65100;">⚠️ FBA手数料取得不可: FBA出品のASINを使用してください。</span>` : "") +
         `</div>`;
 
       const noProfit = `<div style="font-size:11px;color:#888;">1688データ未取得のため利益計算なし</div>`;
